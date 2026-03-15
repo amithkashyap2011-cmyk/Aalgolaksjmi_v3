@@ -1,0 +1,24 @@
+{
+  "name": "aalgolakshmi-v2",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n client,server -c cyan,green \"npm run dev:client\" \"npm run dev:server\"",
+    "dev:client": "cd client && npm run dev",
+    "dev:server": "cd server && npm run dev",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "cd client && npm run build",
+    "build:server": "cd server && npm run build",
+    "install:all": "cd client && npm install && cd ../server && npm install",
+    "typecheck": "cd client && npx tsc --noEmit && cd ../server && npx tsc --noEmit",
+    "test": "npm run test:server && npm run test:client",
+    "test:server": "cd server && npm test",
+    "test:client": "cd client && npm test",
+    "test:all": "npm run test:server && npm run test:client",
+    "start": "cd server && npm start",
+    "cap:init": "npx cap init AALGOLAKSHMI com.aalgo.v2 --web-dir client/dist"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
