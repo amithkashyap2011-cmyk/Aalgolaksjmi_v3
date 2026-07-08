@@ -19,10 +19,12 @@ import { authGuard, adminGuard } from "../middleware/auth.js";
 import { ModelAccuracyMetrics } from "../models/AIPredictionTelemetry.js";
 
 // registry id → model_name in the modelaccuracymetrics collection (written
-// by aiTelemetryService as live predictions resolve).
+// by aiTelemetryService as live predictions resolve). PPO is deliberately
+// absent: it is an execution/sizing agent whose "direction" is always HOLD,
+// so a directional-accuracy number for it only measures how often the
+// market stays flat — a category error, not a metric.
 const LIVE_METRIC_NAMES: Record<string, string> = {
   "cnn": "CNN_1D_V1",
-  "ppo-agent": "PPO_EXECUTION_V1",
   "transformer": "TRANSFORMER_MICRO_V1",
   "mamba-hybrid": "MAMBA_V1",
 };
@@ -92,6 +94,10 @@ router.get("/", async (_req, res) => {
     // "92.4%" while the measured number is ~30%. Models without live
     // measurement keep their estimate, explicitly labelled.
     await Promise.all(models.map(async (m: any) => {
+      if (m.id === "ppo-agent") {
+        m.metrics.directionalAccuracy = "n/a — execution agent";
+        return;
+      }
       const metricName = LIVE_METRIC_NAMES[m.id];
       if (metricName) {
         try {
