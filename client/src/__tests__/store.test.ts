@@ -15,7 +15,8 @@ beforeEach(() => {
     ready: false,
     mode: "PAPER",
     execMode: "AUTO",
-    selectedSymbol: "DOGEUSDT",
+    selectedSymbol: "BTCUSDT",
+    selectedSymbols: ["BTCUSDT"],
     timeframe: "5m",
     wallet: { balance: 5000 },
     positions: [],
@@ -141,7 +142,7 @@ describe("Store – Multi-Symbol Selection", () => {
     useAppStore.getState().toggleSymbol("ETHUSDT");
     const syms = useAppStore.getState().selectedSymbols;
     expect(syms).toContain("ETHUSDT");
-    expect(syms).toContain("DOGEUSDT");
+    expect(syms).toContain("BTCUSDT");
   });
 
   test("P2-MS2: toggleSymbol removes a symbol if already selected (unless last)", () => {
@@ -167,8 +168,8 @@ describe("Store – Multi-Symbol Selection", () => {
   });
 
   test("P2-MS5: selectedSymbol stays in sync as first of selectedSymbols", () => {
-    useAppStore.setState({ selectedSymbols: ["DOGEUSDT"], selectedSymbol: "DOGEUSDT" });
+    useAppStore.setState({ selectedSymbols: ["BTCUSDT"], selectedSymbol: "BTCUSDT" });
     useAppStore.getState().toggleSymbol("ETHUSDT");
-    expect(useAppStore.getState().selectedSymbol).toBe("DOGEUSDT");
+    expect(useAppStore.getState().selectedSymbol).toBe("BTCUSDT");
   });
 });

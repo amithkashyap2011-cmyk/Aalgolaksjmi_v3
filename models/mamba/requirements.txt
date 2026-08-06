@@ -1,0 +1,19 @@
+torch==2.2.0
+torchvision==0.17.0
+torchaudio==0.17.0
+torch-cuda-runtime  # For CUDA support; adjust to your GPU (cu118 for CUDA 11.8, cu121 for 12.1)
+numpy==1.24.3
+pandas==2.0.3
+scikit-learn==1.3.0
+scipy==1.11.1
+pyyaml==6.0
+tensorboard==2.13.0
+wandb==0.15.4
+tqdm==4.65.0
+
+# Optional: for AMP and optimization
+apex  # For mixed precision (may require building from source)
+
+# Optional: for advanced attention (if using external libraries)
+# xformers==0.0.20
+# flash-attn==2.3.2

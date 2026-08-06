@@ -1,0 +1,27 @@
+# Scrape config for AALGOLAKSHMI's /metrics endpoint.
+#
+# The endpoint restricts access to loopback requests or a request bearing
+# a valid token (either header form works — see server/src/index.ts):
+# X-Metrics-Token: <token>, or the standard Authorization: Bearer <token>
+# used below. Prometheus is NOT running on the same host as the app in
+# this setup (it's in Docker), so METRICS_TOKEN must be set in
+# server/.env and match authorization.credentials below, or this scrape
+# will get a 403.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: "aalgolakshmi-server"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9991"]
+    # Uncomment and set to the same value as METRICS_TOKEN in server/.env:
+    # authorization:
+    #   type: Bearer
+    #   credentials: "<METRICS_TOKEN value>"

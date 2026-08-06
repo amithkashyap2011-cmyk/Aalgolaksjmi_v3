@@ -1,0 +1,36 @@
+[package]
+name = "aalgolakshmi-services"
+version = "0.1.0"
+edition = "2021"
+authors = ["AALGOLAKSHMI Team"]
+description = "High Concurrency Tokio Async Services mapping AKS ML & Strategy Logic"
+
+[dependencies]
+# Async Runtime
+tokio = { version = "1.32", features = ["full"] }
+
+# Serialization & Math
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
+
+# Inter-Service Comm / IPC
+zmq = "0.10"
+
+# Networking & API Gateway
+tonic = "0.10"
+prost = "0.12"
+axum = "0.6"
+
+# Risk & Quant Models
+statrs = "0.16.0"
+
+[build-dependencies]
+tonic-build = "0.10"
+
+# Aggressive Optimization for Production release
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

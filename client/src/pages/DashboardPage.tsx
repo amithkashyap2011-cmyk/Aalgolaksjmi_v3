@@ -22,6 +22,7 @@ import ProbabilityScores from "../components/ai/ProbabilityScores";
 import OhmSyncPanel from "../components/ai/OhmSyncPanel";
 import BehaviorModifiers from "../components/ai/BehaviorModifiers";
 import AlertsFeed from "../components/ai/AlertsFeed";
+import AILearningProgressPanel from "../components/ai/AILearningProgressPanel";
 import StrategyPanel from "../components/ai/StrategyPanel";
 import GayatriFrequencyPanel from "../components/ai/GayatriFrequencyPanel";
 import PageShell from "../components/layout/PageShell";
@@ -62,12 +63,13 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Right panel — 38.2% (Hive Mind) */}
+        {/* Right panel — 38.2% (Hive Mind & AI Telemetry) */}
         <aside
           className="golden-minor space-y-phi-4 animate-in"
           style={{ animationDelay: "0.1s" }}
           aria-label="AI and behaviour panels"
         >
+          <AILearningProgressPanel />
           <StrategyPanel />
           <GayatriFrequencyPanel />
           <HiveMindPanel />

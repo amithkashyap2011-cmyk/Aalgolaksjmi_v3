@@ -1,0 +1,28 @@
+{
+  "models": [
+    {
+      "name": "cnn",
+      "checkpoint": "quant_engine/models/cnn/checkpoints/cnn_1d_v1.pt",
+      "min_size": 10000,
+      "expected_schema": "V8_INSTITUTIONAL"
+    },
+    {
+      "name": "ppo",
+      "checkpoint": "quant_engine/models/ppo/checkpoints/ppo_execution_v1.pt",
+      "min_size": 10000,
+      "expected_schema": "V8_EXECUTION"
+    },
+    {
+      "name": "mamba",
+      "checkpoint": "quant_engine/models/mamba/checkpoints/mamba-research-v1.pt",
+      "min_size": 5000,
+      "expected_schema": "V9_RESEARCH"
+    },
+    {
+      "name": "transformer",
+      "checkpoint": "quant_engine/models/transformer/checkpoints/transformer_micro_v1.pt",
+      "min_size": 5000,
+      "expected_schema": "V10_RESEARCH"
+    }
+  ]
+}

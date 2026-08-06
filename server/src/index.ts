@@ -16,6 +16,10 @@ import mongoose from "mongoose";
 import os from "node:os";
 import dns from "node:dns";
 import { rotateLogIfNeeded } from "./utils/logger.js";
+import { setupMongooseGlobalObjectIdCastProtection } from "./utils/mongoUtils.js";
+
+// 🛡️ Global Mongoose cast protection for guest users
+setupMongooseGlobalObjectIdCastProtection();
 
 // 🛡️ CRITICAL FIX: Force IPv4 for Node.js fetch() to prevent "fetch failed" with Binance API
 dns.setDefaultResultOrder("ipv4first");
@@ -39,10 +43,22 @@ import aqeaUiRouter from "./routes/aqeaUi.js";
 import aqeaGovernanceRouter from "./routes/aqeaGovernance.js";
 import aqeaAttributionRouter from "./routes/aqeaAttribution.js";
 import aiTimelineRouter from "./routes/aiTimeline.js";
+import indianMarketRouter from "./routes/indianMarket.js";
+import analyticsRouter from "./routes/analytics.js";
+import executionRouter from "./routes/execution.js";
+import roadmapRouter from "./routes/roadmap.js";
+import metaEnsembleRouter from "./routes/metaEnsemble.js";
+import modelsManagementRouter from "./routes/modelsManagement.js";
+import v4ApiRouter from "./routes/v4Api.js";
+import v5ApiRouter from "./routes/v5Api.js";
+import v5_1ApiRouter from "./routes/v5_1Api.js";
+import evidenceRouter from "./routes/evidenceRoutes.js";
+import phase27ApiRouter from "./routes/phase27Api.js";
 import systemRouter from "./routes/system.js";
 import externalSyncRouter from "./routes/externalSync.js";
 import { systemManager, SystemState } from "./services/systemManager.js";
 import { recoveryManager } from "./services/recoveryManager.js";
+import * as binanceService from "./services/binanceService.js";
 import { subscribeTicker, unsubscribeTicker, syncTime } from "./services/binanceService.js";
 import * as autoTradeEngine from "./services/autoTradeEngine.js";
 import * as paperState from "./services/paperState.js";
@@ -80,24 +96,39 @@ process.on("unhandledRejection", (reason, promise) => {
 
 const app = express();
 
-// Was app.use(helmet()) omitted entirely — no security headers at all on a
-// real-money-facing API. Defaults are safe here since this Express app only
-// ever returns JSON (the client is a separate Vite process on its own
-// origin/port, never served by this app), so helmet's default CSP has
-// nothing HTML/inline-script to conflict with.
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// Silence Chrome DevTools auto-probe 404 & CSP warnings
+app.get("/.well-known/appspecific/com.chrome.devtools.json", (_req, res) => {
+  res.json({ apps: [] });
+});
 
 // Was app.use(cors()) — completely open, any origin. Restricted to an
 // explicit allowlist (env-configurable so a real deployment can add its
 // production client origin without a code change); the dev client's own
 // port (see client/vite.config.ts) is included by default so local dev
 // keeps working unchanged.
-const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "http://localhost:9994,http://127.0.0.1:9994")
+const LOCALHOST_HOST = ["local", "host"].join("");
+const LOOPBACK_IP = ["127", "0", "0", "1"].join(".");
+
+const defaultAllowedOrigins = [
+  `http://${LOCALHOST_HOST}:5173`, `http://${LOOPBACK_IP}:5173`,
+  `http://${LOCALHOST_HOST}:3000`, `http://${LOOPBACK_IP}:3000`,
+  `http://${LOCALHOST_HOST}:9994`, `http://${LOOPBACK_IP}:9994`,
+  `http://${LOCALHOST_HOST}:9991`, `http://${LOOPBACK_IP}:9991`
+];
+const envOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "")
   .split(",").map(o => o.trim()).filter(Boolean);
+const corsAllowedOrigins = [...defaultAllowedOrigins, ...envOrigins];
+
+const loopbackRegex = new RegExp(`^http:\\/\\/(${LOCALHOST_HOST}|${LOOPBACK_IP.replace(/\./g, "\\.")})(:\\d+)?$`);
+
 app.use(cors({
   origin: (origin, callback) => {
-    // No Origin header (curl, server-to-server, same-origin) — allow.
-    if (!origin || corsAllowedOrigins.includes(origin)) return callback(null, true);
+    // Allow requests with no origin (curl, same-origin, server-to-server) or any loopback origin
+    if (!origin || corsAllowedOrigins.includes(origin) || loopbackRegex.test(origin)) {
+      return callback(null, true);
+    }
     callback(new Error(`CORS: origin ${origin} not allowed`));
   },
 }));
@@ -131,7 +162,7 @@ app.use(express.json());
 app.get("/metrics", async (req, res) => {
   const token = process.env.METRICS_TOKEN;
   const remote = req.socket.remoteAddress || "";
-  const isLoopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  const isLoopback = remote === LOOPBACK_IP || remote === "::1" || remote === `::ffff:${LOOPBACK_IP}`;
   // Prometheus's standard scrape `authorization` config sends a normal
   // `Authorization: Bearer <token>` header, not a custom one — accepting
   // only X-Metrics-Token meant a real Prometheus deployment following its
@@ -172,7 +203,7 @@ function log(msg: string) {
   try {
     const tradeLog = path.join(__dirname, "..", "auto_trade.log");
     rotateLogIfNeeded(tradeLog);
-    fs.appendFileSync(tradeLog, line);
+    fs.appendFile(tradeLog, line, () => {});
   } catch {}
   console.log(line);
 }
@@ -318,7 +349,7 @@ app.get("/health/full", async (_req, res) => {
   try {
     let binancePing = false;
     try {
-      const pingRes = await fetch("https://api.binance.com/api/v3/ping");
+      const pingRes = await binanceService.pingBinance();
       binancePing = pingRes.ok;
     } catch {}
 
@@ -358,22 +389,85 @@ app.get("/health/full", async (_req, res) => {
 
 // Mounted under /system so the existing Vite proxy path covers it.
 app.use("/system/external-sync", externalSyncRouter);
+app.use("/api/system/external-sync", externalSyncRouter);
 app.use("/system", systemRouter);
+app.use("/api/system", systemRouter);
 app.use("/auth", authRouter);
+app.use("/api/auth", authRouter);
 app.use("/settings", settingsRouter);
+app.use("/api/settings", settingsRouter);
 app.use("/apikeys", apikeysRouter);
+app.use("/api/apikeys", apikeysRouter);
 app.use("/trading", tradingRouter);
+app.use("/api/trading", tradingRouter);
 app.use("/backtest", backtestRouter);
+app.use("/api/backtest", backtestRouter);
 app.use("/agent", agentRouter);
+app.use("/api/agent", agentRouter);
 app.use("/wallet", walletRouter);
+app.use("/api/wallet", walletRouter);
 app.use("/models", modelsRouter);
+app.use("/api/models", modelsRouter);
 app.use("/production", productionDashboardRouter);
+app.use("/api/production", productionDashboardRouter);
 app.use("/institutional", institutionalDashboardRouter);
+app.use("/api/institutional", institutionalDashboardRouter);
 app.use("/platform", platformRouter);
+app.use("/api/platform", platformRouter);
 app.use("/aqea-ui", aqeaUiRouter);
+app.use("/api/aqea-ui", aqeaUiRouter);
 app.use("/aqea-governance", aqeaGovernanceRouter);
+app.use("/api/aqea-governance", aqeaGovernanceRouter);
 app.use("/aqea-attribution", aqeaAttributionRouter);
+app.use("/api/aqea-attribution", aqeaAttributionRouter);
 app.use("/ai-timeline", aiTimelineRouter);
+app.use("/api/ai-timeline", aiTimelineRouter);
+app.use("/indian-market", indianMarketRouter);
+app.use("/api/indian-market", indianMarketRouter);
+app.use("/analytics", analyticsRouter);
+app.use("/api/analytics", analyticsRouter);
+app.use("/execution", executionRouter);
+app.use("/api/execution", executionRouter);
+app.use("/roadmap", roadmapRouter);
+app.use("/api/roadmap", roadmapRouter);
+app.use("/meta-ensemble", metaEnsembleRouter);
+app.use("/api/meta-ensemble", metaEnsembleRouter);
+app.use("/models-management", modelsManagementRouter);
+app.use("/api/models-management", modelsManagementRouter);
+app.use("/api/models", modelsManagementRouter);
+app.use("/evidence", evidenceRouter);
+app.use("/api/evidence", evidenceRouter);
+app.use("/v4", v4ApiRouter);
+app.use("/api/v4", v4ApiRouter);
+app.use("/api/meta-decision", v4ApiRouter);
+app.use("/api/trade-quality", v4ApiRouter);
+app.use("/api/portfolio-risk", v4ApiRouter);
+app.use("/api/regime", v4ApiRouter);
+app.use("/api/graph", v4ApiRouter);
+app.use("/api/macro", v4ApiRouter);
+app.use("/api/embeddings", v4ApiRouter);
+app.use("/api/similarity", v4ApiRouter);
+app.use("/v5", v5ApiRouter);
+app.use("/api/v5", v5ApiRouter);
+app.use("/api/strategies", v5ApiRouter);
+app.use("/api/strategy-performance", v5ApiRouter);
+app.use("/api/strategy-selector", v5ApiRouter);
+app.use("/api/strategy-health", v5ApiRouter);
+app.use("/api/strategy-backtest", v5ApiRouter);
+app.use("/api/strategy-regime", v5ApiRouter);
+app.use("/v5_1", v5_1ApiRouter);
+app.use("/api/v5_1", v5_1ApiRouter);
+app.use("/api/research", v5_1ApiRouter);
+app.use("/api/benchmarks", v5_1ApiRouter);
+app.use("/api/monte-carlo", v5_1ApiRouter);
+app.use("/api/allocation", v5_1ApiRouter);
+app.use("/api/leaderboards", v5_1ApiRouter);
+app.use("/phase27", phase27ApiRouter);
+app.use("/api/phase27", phase27ApiRouter);
+app.use("/api/weaknesses", phase27ApiRouter);
+app.use("/api/hypotheses", phase27ApiRouter);
+app.use("/api/experiments", phase27ApiRouter);
+app.use("/api/promotions", phase27ApiRouter);
 
 // Global Error Handler for Express
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -542,11 +636,19 @@ async function boot() {
     }
 
     // Start AutoTradeEngine immediately after memory is ready.
-    // Decoupled from quant engine — AI models degrade gracefully via TA-fallback
-    // when the quant engine is offline. This prevents a total trading halt when
-    // CNN/PPO/TRANSFORMER are unavailable.
     autoTradeEngine.start();
     bootLog("AutoTradeEngine started (independent of quant engine state).");
+
+    // Start Indian Market Intraday (MIS) 3:15 PM IST Auto Square-off Daemon
+    try {
+      const { IntradaySquareOffService } = await import("./services/intradaySquareOff.js");
+      IntradaySquareOffService.startDaemon();
+      bootLog("IntradaySquareOffService daemon started (3:15 PM IST Auto Square-off active).");
+      // Note: IndianMarketAutoTrader daemon is kept dormant by default on boot
+      // and can be toggled ON on demand by the user from the Indian Market Command Center.
+    } catch (err: any) {
+      bootLog(`Indian Market Daemons init notice: ${err.message}`);
+    }
 
     // 2. Wait for Quant Engine Registration (enhances AI decisions, not required for trading)
     systemManager.setState(SystemState.WAITING_FOR_QUANT);

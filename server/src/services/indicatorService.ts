@@ -99,8 +99,11 @@ export class StreamingRSI {
 
   update(price: number): number | null {
     if (this.prevPrice === null) {
+      // Seeds prevPrice only — not a counted sample, since no gain/loss can
+      // be derived from a single price. Counting this bar was the source of
+      // an off-by-one: the simple-average phase would "finalize" one bar
+      // early, having accumulated only period-1 real deltas.
       this.prevPrice = price;
-      this.count++;
       return null;
     }
 
@@ -115,15 +118,16 @@ export class StreamingRSI {
       this.avgGain += gain / this.period;
       this.avgLoss += loss / this.period;
       if (this.count === this.period) {
-        const rs = this.avgLoss === 0 ? 100 : this.avgGain / this.avgLoss;
-        this._value = 100 - 100 / (1 + rs);
+        // avgLoss === 0 means every recent bar gained — RSI is 100 exactly,
+        // not ~99.01 (the old code ran a rs=100 sentinel through the RSI
+        // formula instead of returning the limit value directly).
+        this._value = this.avgLoss === 0 ? 100 : 100 - 100 / (1 + this.avgGain / this.avgLoss);
       }
     } else {
       // smoothed (Wilder's)
       this.avgGain = (this.avgGain * (this.period - 1) + gain) / this.period;
       this.avgLoss = (this.avgLoss * (this.period - 1) + loss) / this.period;
-      const rs = this.avgLoss === 0 ? 100 : this.avgGain / this.avgLoss;
-      this._value = 100 - 100 / (1 + rs);
+      this._value = this.avgLoss === 0 ? 100 : 100 - 100 / (1 + this.avgGain / this.avgLoss);
     }
     return this._value;
   }
@@ -201,6 +205,7 @@ export interface OHLC {
   high: number;
   low: number;
   close: number;
+  volume?: number;
 }
 
 export class StreamingATR {
@@ -451,9 +456,67 @@ export class StreamingVWAP {
   }
 }
 
+export interface SupertrendResult {
+  value: number | null;
+  direction: "bull" | "bear" | "neutral";
+}
+
+export function computeSupertrend(bars: OHLCVol[], period = 10, multiplier = 3): SupertrendResult {
+  if (!bars || bars.length < period + 1) {
+    return { value: null, direction: "neutral" };
+  }
+
+  const atrCalc = new StreamingATR(period);
+  let finalUpper: number | null = null;
+  let finalLower: number | null = null;
+  let direction: "bull" | "bear" | "neutral" = "neutral";
+  let prevClose: number | null = null;
+  let resultValue: number | null = null;
+
+  for (const bar of bars) {
+    const atr = atrCalc.update(bar);
+    const mid = (bar.high + bar.low) / 2;
+    const basicUpper = atr !== null ? mid + multiplier * atr : mid;
+    const basicLower = atr !== null ? mid - multiplier * atr : mid;
+
+    if (finalUpper === null || basicUpper < finalUpper || (prevClose !== null && prevClose > finalUpper)) {
+      finalUpper = basicUpper;
+    }
+    if (finalLower === null || basicLower > finalLower || (prevClose !== null && prevClose < finalLower)) {
+      finalLower = basicLower;
+    }
+
+    if (prevClose !== null) {
+      if (bar.close > (finalLower ?? bar.close)) {
+        direction = "bull";
+      } else if (bar.close < (finalUpper ?? bar.close)) {
+        direction = "bear";
+      }
+    }
+
+    resultValue = direction === "bull" ? finalLower : finalUpper;
+    prevClose = bar.close;
+  }
+
+  return {
+    value: resultValue,
+    direction,
+  };
+}
+
 /* ════════════════════════════════════════════════════════
  *  10.  Snapshot: compute all indicators for N bars
  * ════════════════════════════════════════════════════════ */
+
+export interface FibLevels {
+  low: number;
+  high: number;
+  fib236: number;
+  fib382: number;
+  fib500: number;
+  fib618: number;
+  fib786: number;
+}
 
 export interface IndicatorSnapshot {
   rsi14: number | null;
@@ -470,6 +533,17 @@ export interface IndicatorSnapshot {
   close: number;
   /** %‑change from previous close */
   changePercent: number;
+  /** Fibonacci retracement/extension levels */
+  fibLevels?: FibLevels | null;
+}
+
+const snapshotCache = new Map<string, IndicatorSnapshot>();
+
+function fingerprintBars(bars: OHLC[]): string {
+  const len = bars.length;
+  if (len === 0) return "empty";
+  const samples = bars.slice(Math.max(0, len - 5));
+  return `${len}_` + samples.map(b => `${b.open}_${b.high}_${b.low}_${b.close}_${b.volume ?? 0}`).join("|");
 }
 
 /**
@@ -477,6 +551,12 @@ export interface IndicatorSnapshot {
  * Pass OHLC bars oldest → newest.
  */
 export function computeSnapshot(bars: OHLC[]): IndicatorSnapshot {
+  const fp = fingerprintBars(bars);
+  const cached = snapshotCache.get(fp);
+  if (cached) {
+    return { ...cached };
+  }
+
   const rsiCalc = new StreamingRSI(14);
   const ema9 = new StreamingEMA(9);
   const ema21 = new StreamingEMA(21);
@@ -505,7 +585,28 @@ export function computeSnapshot(bars: OHLC[]): IndicatorSnapshot {
   const prev = bars.length > 1 ? bars[bars.length - 2] : last;
   const changePercent = prev.close !== 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
 
-  return {
+  // Compute Fibonacci levels from recent 60 bars (lookback)
+  let fibLevels: FibLevels | null = null;
+  if (bars.length > 0) {
+    const lookback = 60;
+    const recent = bars.slice(-Math.min(bars.length, lookback));
+    const highs = recent.map((b) => b.high);
+    const lows = recent.map((b) => b.low);
+    const high = Math.max(...highs);
+    const low = Math.min(...lows);
+    const range = high - low;
+    fibLevels = {
+      low,
+      high,
+      fib236: low + range * 0.236,
+      fib382: low + range * 0.382,
+      fib500: low + range * 0.5,
+      fib618: low + range * 0.618,
+      fib786: low + range * 0.786,
+    };
+  }
+
+  const result = {
     rsi14: rsiCalc.value,
     ema9: ema9.value,
     ema21: ema21.value,
@@ -518,5 +619,13 @@ export function computeSnapshot(bars: OHLC[]): IndicatorSnapshot {
     stdDev20: stdCalc.value,
     close: last.close,
     changePercent,
+    fibLevels,
   };
+
+  if (snapshotCache.size >= 1000) {
+    snapshotCache.clear();
+  }
+  snapshotCache.set(fp, result);
+
+  return result;
 }

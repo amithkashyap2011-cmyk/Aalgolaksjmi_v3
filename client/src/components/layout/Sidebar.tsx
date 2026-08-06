@@ -1,96 +1,129 @@
-/*
- * ─── Sidebar ───────────────────────────────────────────
- *
- * Left nav rail with golden-ratio proportions.
- * Fixed on desktop (lg+), slide-over on mobile.
- * Items: Home, AI/Strategies, Orders, Settings.
- */
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import clsx from "clsx";
-import { useAppStore } from "../../store/useAppStore";
+import {
+  LayoutDashboard, Briefcase, ClipboardList, Zap,
+  Settings, PieChart, ShieldCheck, BarChart3,
+  Brain, FileText, ChevronLeft, ChevronRight, X, Landmark,
+} from "lucide-react";
 
-const NAV_ITEMS = [
-  { to: "/",         label: "Home",            icon: "🏠" },
-  { to: "/backtest", label: "AI / Strategies", icon: "🧠" },
-  { to: "/history",  label: "Orders",          icon: "📋" },
-  { to: "/settings", label: "Settings",        icon: "⚙️" },
+const NAV = [
+  { to: "/",                label: "Dashboard",  icon: LayoutDashboard, end: true },
+  { to: "/indian-market",   label: "NSE / BSE India", icon: Landmark },
+  { to: "/aqea/wallet",     label: "Portfolio",  icon: PieChart },
+  { to: "/aqea/positions",  label: "Positions",  icon: Briefcase },
+  { to: "/aqea/orders",     label: "Orders",     icon: ClipboardList },
+  { to: "/aqea/ai",         label: "AI Engine",  icon: Zap },
+  { to: "/aqea/risk-center",label: "Risk",       icon: ShieldCheck },
 ] as const;
 
-export default function Sidebar() {
-  const { sidebarOpen, toggleSidebar } = useAppStore();
+const NAV2 = [
+  { to: "/backtest",   label: "Backtest",  icon: BarChart3 },
+  { to: "/prediction", label: "Forecast",  icon: Brain },
+  { to: "/reports",    label: "Reports",   icon: FileText },
+  { to: "/settings",   label: "Settings",  icon: Settings },
+] as const;
 
+function linkStyle(active: boolean, collapsed: boolean): React.CSSProperties {
+  return {
+    display: "flex", alignItems: "center", gap: 10,
+    padding: collapsed ? "9px 0" : "8px 12px",
+    margin: "1px 8px", borderRadius: 8,
+    textDecoration: "none", whiteSpace: "nowrap",
+    justifyContent: collapsed ? "center" : "flex-start",
+    background: active ? "rgba(59,130,246,0.12)" : "transparent",
+    color: active ? "#60a5fa" : "#64748b",
+    borderLeft: active ? "2px solid #3b82f6" : "2px solid transparent",
+    transition: "all 0.15s ease",
+    fontSize: 13, fontWeight: active ? 600 : 400,
+    cursor: "pointer",
+  };
+}
+
+interface Props { open: boolean; onClose: () => void; }
+
+export default function Sidebar({ open, onClose }: Props) {
+  const [collapsed, setCollapsed] = useState(false);
+  const W = collapsed ? 56 : 220;
+
+  const links = (items: typeof NAV | typeof NAV2, col: boolean, onClick?: () => void) =>
+    items.map((item) => (
+      <NavLink
+        key={item.to}
+        to={item.to}
+        end={"end" in item ? item.end : false}
+        title={col ? item.label : undefined}
+        onClick={onClick}
+        style={({ isActive }) => linkStyle(isActive, col)}
+      >
+        <item.icon size={16} style={{ flexShrink: 0 }} />
+        {!col && <span>{item.label}</span>}
+      </NavLink>
+    ));
+
+  const logoBlock = (col: boolean) => (
+    <div style={{ display:"flex", alignItems:"center", gap:8, padding:"14px 14px 10px", justifyContent: col ? "center" : "space-between", borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
+      {!col && (
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div style={{ width:28, height:28, background:"linear-gradient(135deg,#3b82f6,#1d4ed8)", borderRadius:7, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900, fontSize:13, color:"#fff", flexShrink:0 }}>A</div>
+          <div>
+            <div style={{ fontSize:13, fontWeight:800, color:"#f1f5f9", lineHeight:1 }}>AQEA</div>
+            <div style={{ fontSize:9, color:"#334155", fontWeight:700, letterSpacing:"0.1em" }}>V3.0</div>
+          </div>
+        </div>
+      )}
+      <button
+        onClick={() => setCollapsed(!col)}
+        style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", display:"flex", padding:4, borderRadius:6, flexShrink:0 }}
+        title={col ? "Expand" : "Collapse"}
+      >
+        {col ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+      </button>
+    </div>
+  );
+
+  /* Desktop */
   return (
     <>
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/20 backdrop-blur-sm z-30 lg:hidden"
-          onClick={toggleSidebar}
-          aria-hidden="true"
-        />
-      )}
-
       <aside
-        data-testid="sidebar"
-        className={clsx(
-          "fixed lg:sticky top-0 z-40 h-screen bg-white/95 backdrop-blur-lg border-r border-slate-200/80",
-          "transition-all duration-300 ease-out flex flex-col shrink-0",
-          sidebarOpen
-            ? "translate-x-0 w-56"
-            : "-translate-x-full lg:translate-x-0 lg:w-20 w-0",
-        )}
-        aria-label="Main navigation"
+        style={{ width:W, minWidth:W, height:"100%", flexDirection:"column", background:"#0a1120", borderRight:"1px solid rgba(255,255,255,0.05)", transition:"width 0.25s ease", overflow:"hidden", flexShrink:0, position:"relative", zIndex:30 }}
+        className="hidden lg:flex"
       >
-        {/* Brand header — golden rectangle */}
-        <div className="p-phi-4 flex items-center gap-phi-2 border-b border-slate-100">
-          <div className="w-10 h-10 rounded-phi-lg bg-gradient-to-br from-aalgold to-aalgold-dark flex items-center justify-center text-white font-bold text-phi-lg shrink-0 shadow-md">
-            A
-          </div>
-          {sidebarOpen && (
-            <span className="font-bold text-phi-sm tracking-tight hidden lg:inline bg-gradient-to-r from-aalgold to-aalgreen bg-clip-text text-transparent">
-              AALGOLAKSHMI
-            </span>
-          )}
-        </div>
-
-        {/* Nav links */}
-        <nav className="flex-1 flex flex-col gap-phi-1 p-phi-3" role="navigation">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === "/"}
-              className={({ isActive }) =>
-                clsx(
-                  "flex items-center gap-phi-3 px-phi-3 py-2.5 rounded-phi text-phi-sm transition-all duration-200",
-                  isActive
-                    ? "bg-aalgreen/10 text-aalgreen font-semibold shadow-sm"
-                    : "text-slate-600 hover:bg-slate-50 hover:translate-x-0.5",
-                )
-              }
-            >
-              <span className="w-7 h-7 rounded-phi bg-slate-100 flex items-center justify-center text-sm shrink-0">
-                {item.icon}
-              </span>
-              {sidebarOpen && (
-                <span className="hidden lg:inline">{item.label}</span>
-              )}
-            </NavLink>
-          ))}
+        {logoBlock(collapsed)}
+        <nav style={{ flex:1, overflowY:"auto", overflowX:"hidden", padding:"8px 0", scrollbarWidth:"none" }}>
+          {links(NAV, collapsed)}
+          <div style={{ margin:"6px 12px", borderTop:"1px solid rgba(255,255,255,0.05)" }} />
+          {!collapsed && <div style={{ fontSize:9, fontWeight:700, color:"#334155", textTransform:"uppercase", letterSpacing:"0.1em", padding:"6px 16px 2px" }}>Analysis</div>}
+          {links(NAV2, collapsed)}
         </nav>
-
-        {/* Bottom status */}
-        <div className="p-phi-3 border-t border-slate-100">
-          <div className="flex items-center gap-2 px-phi-3 py-2">
-            <span className="dot-paper" />
-            {sidebarOpen && (
-              <span className="text-phi-xs text-slate-400 hidden lg:inline">
-                v2.0 · Phase 6
-              </span>
-            )}
-          </div>
-        </div>
       </aside>
+
+      {/* Mobile drawer */}
+      <div
+        style={{ position:"fixed", top:0, left:0, bottom:0, width:260, background:"#0a1120", zIndex:50, flexDirection:"column", transform: open ? "translateX(0)" : "translateX(-100%)", transition:"transform 0.25s ease", borderRight:"1px solid rgba(255,255,255,0.06)" }}
+        className="flex lg:hidden"
+      >
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ width:28, height:28, background:"linear-gradient(135deg,#3b82f6,#1d4ed8)", borderRadius:7, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900, fontSize:13, color:"#fff" }}>A</div>
+            <div style={{ fontSize:14, fontWeight:800, color:"#f1f5f9" }}>AQEA V3.0</div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"#64748b", cursor:"pointer", padding:4, display:"flex" }}>
+            <X size={18} />
+          </button>
+        </div>
+        <nav style={{ flex:1, overflowY:"auto", padding:"8px 0" }}>
+          {links(NAV, false, onClose)}
+          <div style={{ margin:"6px 12px", borderTop:"1px solid rgba(255,255,255,0.05)" }} />
+          <div style={{ fontSize:9, fontWeight:700, color:"#334155", textTransform:"uppercase", letterSpacing:"0.1em", padding:"6px 16px 2px" }}>Analysis</div>
+          {links(NAV2, false, onClose)}
+        </nav>
+        <div style={{ borderTop:"1px solid rgba(255,255,255,0.05)", padding:"8px 0" }}>
+          <NavLink to="/settings" onClick={onClose} style={({ isActive }) => linkStyle(isActive, false)}>
+            <Settings size={16} />
+            <span>Settings</span>
+          </NavLink>
+        </div>
+      </div>
     </>
   );
 }

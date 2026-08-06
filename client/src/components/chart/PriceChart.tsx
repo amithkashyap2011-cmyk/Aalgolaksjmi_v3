@@ -9,17 +9,17 @@ import { useMemo } from "react";
 import Highcharts from "highcharts/highstock";
 import HighchartsReact from "highcharts-react-official";
 import { useAppStore } from "../../store/useAppStore";
-import { MOCK_CANDLES, computeFibLevels, type Symbol } from "../../mock/data";
+import { computeFibLevels, generateMockCandles } from "../../mock/data";
 
 export default function PriceChart() {
-  const { selectedSymbol } = useAppStore();
+  const { selectedSymbol, timeframe } = useAppStore();
 
   const { ohlc, fib } = useMemo(() => {
-    const candles = MOCK_CANDLES[selectedSymbol as Symbol] ?? MOCK_CANDLES.DOGEUSDT;
+    const candles = generateMockCandles(selectedSymbol, timeframe);
     const ohlcData = candles.map((c) => [c.time, c.open, c.high, c.low, c.close]);
     const fibLevels = computeFibLevels(candles);
     return { ohlc: ohlcData, fib: fibLevels };
-  }, [selectedSymbol]);
+  }, [selectedSymbol, timeframe]);
 
   const options: Highcharts.Options = {
     chart: {

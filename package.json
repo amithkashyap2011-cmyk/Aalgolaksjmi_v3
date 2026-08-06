@@ -6,7 +6,7 @@
     "dev": "concurrently -n client,server -c cyan,green \"npm run dev:client\" \"npm run dev:server\"",
     "dev:client": "cd client && npm run dev",
     "dev:server": "cd server && npm run dev",
-    "build": "npm run build:client && npm run build:server",
+    "build": "node build_gates.js && npm run build:client && npm run build:server",
     "build:client": "cd client && npm run build",
     "build:server": "cd server && npm run build",
     "install:all": "cd client && npm install && cd ../server && npm install",
@@ -19,6 +19,11 @@
     "cap:init": "npx cap init AALGOLAKSHMI com.aalgo.v2 --web-dir client/dist"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "playwright": "^1.60.0"
+  },
+  "dependencies": {
+    "lodash": "^4.18.1",
+    "openai": "^6.44.0"
   }
 }

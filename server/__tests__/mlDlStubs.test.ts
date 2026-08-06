@@ -59,7 +59,7 @@ describe("buildMLFeatures", () => {
       "rsi14", "ema9", "ema21", "ema55", "sma200",
       "macdHist", "atr14", "bollingerBW", "stdDev20", "changePercent",
       "wEagle", "wTiger", "wCheetah", "wFox", "wTortoise",
-      "wDog", "wOwl", "wCow", "wSpider", "wLion",
+      "wDog", "wOwl",
       "dailyPnlRatio", "tradesToday", "openPositionCount",
     ];
     for (const key of expectedKeys) {
@@ -92,7 +92,7 @@ describe("buildMLFeatures", () => {
 
   test("TC-K5: weight values propagate correctly", () => {
     const weights = { eagle: 0.8, tiger: 0.2, cheetah: 0.5, fox: 0.5, tortoise: 0.5,
-      dog: 0.5, owl: 0.5, cow: 0.5, spider: 0.5, lion: 0.5 };
+      dog: 0.5, owl: 0.5 };
     const features = buildMLFeatures(makeInd(), weights, 0, 100, 1, 0);
     expect(features.wEagle).toBe(0.8);
     expect(features.wTiger).toBe(0.2);
@@ -165,6 +165,13 @@ describe("buildSequenceInput", () => {
     const lastWindow = input.window[input.window.length - 1];
     const lastBar = bars[bars.length - 1];
     expect(lastWindow.close).toBe(lastBar.close);
+  });
+
+  test("TC-K12b: pads short bars array (< 10 bars) to MIN_WINDOW_SIZE (10 bars)", () => {
+    const bars = makeBars(3);
+    const input = buildSequenceInput("BTCUSDT", "5m", bars, 60);
+    expect(input.window).toHaveLength(10);
+    expect(input.window[input.window.length - 1].close).toBe(bars[2].close);
   });
 });
 

@@ -7,8 +7,8 @@ import mongoose, { Schema, type Document, type Types } from "mongoose";
 
 export interface IWalletTransaction extends Document {
   userId: Types.ObjectId;
-  type: "DEPOSIT" | "WITHDRAW" | "P2P_BUY" | "P2P_SELL";
-  method: "UPI" | "P2P" | "SYSTEM";
+  type: "DEPOSIT" | "WITHDRAW" | "WITHDRAW_CRYPTO" | "P2P_BUY" | "P2P_SELL" | "ADJUSTMENT";
+  method: "UPI" | "P2P" | "CRYPTO" | "SYSTEM" | "DEBUG";
   amount: number;          // in INR or USDT
   currency: string;        // "INR" or "USDT"
   status: "PENDING" | "COMPLETED" | "FAILED" | "CANCELLED";
@@ -17,6 +17,7 @@ export interface IWalletTransaction extends Document {
   p2pCounterparty?: string; // other user email for P2P
   p2pPrice?: number;       // INR per USDT for P2P
   note?: string;
+  accountType?: "SPOT" | "FUTURES";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -24,8 +25,8 @@ export interface IWalletTransaction extends Document {
 const WalletTransactionSchema = new Schema<IWalletTransaction>(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
-    type: { type: String, enum: ["DEPOSIT", "WITHDRAW", "P2P_BUY", "P2P_SELL"], required: true },
-    method: { type: String, enum: ["UPI", "P2P", "SYSTEM"], required: true },
+    type: { type: String, enum: ["DEPOSIT", "WITHDRAW", "WITHDRAW_CRYPTO", "P2P_BUY", "P2P_SELL", "ADJUSTMENT"], required: true },
+    method: { type: String, enum: ["UPI", "P2P", "CRYPTO", "SYSTEM", "DEBUG"], required: true },
     amount: { type: Number, required: true },
     currency: { type: String, default: "INR" },
     status: { type: String, enum: ["PENDING", "COMPLETED", "FAILED", "CANCELLED"], default: "PENDING" },
@@ -34,6 +35,7 @@ const WalletTransactionSchema = new Schema<IWalletTransaction>(
     p2pCounterparty: { type: String },
     p2pPrice: { type: Number },
     note: { type: String },
+    accountType: { type: String, enum: ["SPOT", "FUTURES"], default: "FUTURES" },
   },
   { timestamps: true },
 );

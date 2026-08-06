@@ -53,17 +53,16 @@ describe("normalizeWeights", () => {
     expect(nw.fox).toBe(0.5);
   });
 
-  test("TC-E2: includes all 15 keys", () => {
+  test("TC-E2: includes all 12 active weight keys", () => {
     const nw = normalizeWeights(makeWeights());
     const keys = Object.keys(nw);
     expect(keys).toContain("eagle");
-    expect(keys).toContain("lion");
     expect(keys).toContain("om_chant");
     expect(keys).toContain("gayatri_mantra");
     expect(keys).toContain("aaryan");
     expect(keys).toContain("aayush");
     expect(keys).toContain("lakshmi_hybrid");
-    expect(keys).toHaveLength(15);
+    expect(keys).toHaveLength(12); // cow/spider/lion removed from active scoring
   });
 
   test("TC-E3: all values between 0 and 1", () => {
@@ -91,11 +90,11 @@ describe("blendAnimalScores", () => {
     expect(result.score).toBeLessThanOrEqual(1);
   });
 
-  test("TC-E6: contributions has all 15 keys", () => {
+  test("TC-E6: contributions has all 12 active keys", () => {
     const nw = normalizeWeights(makeWeights());
     const result = blendAnimalScores(nw, makeCtx());
     const keys = Object.keys(result.contributions);
-    expect(keys).toHaveLength(15);
+    expect(keys).toHaveLength(12); // cow/spider/lion removed from active scoring
     expect(keys).toContain("om_chant");
     expect(keys).toContain("lakshmi_hybrid");
   });
@@ -103,7 +102,7 @@ describe("blendAnimalScores", () => {
   test("TC-E7: zero weights produce zero contributions", () => {
     const nw = normalizeWeights(makeWeights({
       eagle: 0, tiger: 0, cheetah: 0, fox: 0, tortoise: 0,
-      dog: 0, owl: 0, cow: 0, spider: 0, lion: 0,
+      dog: 0, owl: 0,
       om_chant: 0, gayatri_mantra: 0, aaryan: 0, aayush: 0, lakshmi_hybrid: 0,
     }));
     const result = blendAnimalScores(nw, makeCtx());
@@ -146,11 +145,11 @@ describe("blendAnimalScores", () => {
     expect(result.score).toBeLessThan(0);
   });
 
-  test("TC-E10: overtrading penalised by spider scorer", () => {
-    const nw = normalizeWeights(makeWeights({ spider: 100 }));
-    const normal = blendAnimalScores(nw, makeCtx({ tradesToday: 1 }));
-    const heavy = blendAnimalScores(nw, makeCtx({ tradesToday: 10 }));
-    // Heavy trading should produce lower/more-negative spider contribution
-    expect(heavy.contributions.spider).toBeLessThan(normal.contributions.spider);
+  test("TC-E10: daily loss breach penalised by dog scorer", () => {
+    const nw = normalizeWeights(makeWeights({ dog: 100 }));
+    const normal = blendAnimalScores(nw, makeCtx({ dailyPnl: 0 }));
+    const heavy = blendAnimalScores(nw, makeCtx({ dailyPnl: -80, maxDailyLoss: 100 }));
+    // Heavy daily loss (>70% of limit) should depress dog contribution
+    expect(heavy.contributions.dog).toBeLessThan(normal.contributions.dog);
   });
 });

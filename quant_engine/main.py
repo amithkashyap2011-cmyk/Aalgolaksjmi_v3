@@ -11,6 +11,8 @@ import ppo_replay_buffer
 
 from rl_agent import ppo_agent as legacy_ppo_agent
 from cnn_predictor import cnn_predictor
+from lstm_predictor import LSTMPredictor
+lstm_predictor = LSTMPredictor()
 from ppo_execution_agent import ppo_agent
 from mambaPredictor import mamba_predictor
 from transformerPredictor import transformer_predictor
@@ -157,6 +159,7 @@ def model_health():
 
     res = {
         "cnn": get_status("cnn", cnn_predictor.checkpoint_loaded),
+        "lstm": get_status("lstm", lstm_predictor.checkpoint_loaded),
         "ppo": get_status("ppo", ppo_agent.checkpoint_loaded),
         "transformer": get_status("transformer", transformer_predictor.checkpoint_loaded),
         "mamba": get_status("mamba", mamba_predictor.checkpoint_loaded)
@@ -324,6 +327,20 @@ def predict_cnn(data: CNNRequest):
         return result
     except Exception as e:
         logger.error(f"CNN Prediction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class LSTMRequest(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    symbol: str
+    features: List[float]
+
+@app.post("/predict/lstm")
+def predict_lstm(data: LSTMRequest):
+    try:
+        result = lstm_predictor.predict(data.symbol, data.features)
+        return result
+    except Exception as e:
+        logger.error(f"LSTM Prediction error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/debug/cnn")

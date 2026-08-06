@@ -1,0 +1,7 @@
+{
+  "_comment": "Real, measured baseline — now comprehensive across all src/**/*.ts files (jest.config.ts's collectCoverageFrom), not just whichever files happened to be imported by the current test set. An earlier baseline (47.53/46.04/46.67/41.74) was measured BEFORE collectCoverageFrom was added and was an unstable, import-driven subset — it wasn't a real regression when this number came in lower, it was the first accurate comprehensive measurement. CI fails if a future run drops below these numbers by more than the configured tolerance. Update this file deliberately (with justification in the PR) whenever coverage genuinely improves; never lower it to make a failing build pass.",
+  "lines": 42.3,
+  "statements": 41.07,
+  "functions": 41.53,
+  "branches": 37.73
+}

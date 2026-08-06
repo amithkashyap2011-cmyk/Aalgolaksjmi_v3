@@ -6,3 +6,10 @@ export { Trade, type ITrade, type TradeStatus } from "./Trade.js";
 export { BacktestRun, type IBacktestRun, type IBacktestMetrics, type IEquityPoint, type IBacktestTrade } from "./BacktestRun.js";
 export { Alert, type IAlert } from "./Alert.js";
 export { WalletTransaction, type IWalletTransaction } from "./WalletTransaction.js";
+
+/* ── AQEA Models ── */
+export { AqeaAudit, type IAqeaAudit } from "./AqeaAudit.js";
+export { AqeaTradeAnalytics, type IAqeaTradeAnalytics } from "./AqeaTradeAnalytics.js";
+export { AqeaPerformance, type IAqeaPerformance } from "./AqeaPerformance.js";
+export { AqeaOrderFlowPerformance, type IAqeaOrderFlowPerformance } from "./AqeaOrderFlowPerformance.js";
+export { AqeaSmartMoneyPerformance, type IAqeaSmartMoneyPerformance } from "./AqeaSmartMoneyPerformance.js";

@@ -195,10 +195,10 @@ describe("evaluateLakshmi", () => {
     expect(r.strategy).toBe("LAKSHMI");
   });
 
-  test("TC-D2: consensus has buyVotes + sellVotes + holdVotes", () => {
+  test("TC-D2: consensus has buyVotes + sellVotes + holdVotes summing to 4 (4 sub-strategies)", () => {
     const r = evaluateLakshmi(makeSnapshot());
     const { buyVotes, sellVotes, holdVotes } = r.consensus;
-    expect(buyVotes + sellVotes + holdVotes).toBe(3);
+    expect(buyVotes + sellVotes + holdVotes).toBe(4);
   });
 
   test("TC-D3: gayatriFrequency is between 0 and 24", () => {
@@ -207,14 +207,16 @@ describe("evaluateLakshmi", () => {
     expect(r.gayatriFrequency).toBeLessThanOrEqual(24);
   });
 
-  test("TC-D4: subResults contains aaryan, aayush, gayatri", () => {
+  test("TC-D4: subResults contains aaryan, aayush, gayatri, ohmkara", () => {
     const r = evaluateLakshmi(makeSnapshot());
     expect(r.subResults).toHaveProperty("aaryan");
     expect(r.subResults).toHaveProperty("aayush");
     expect(r.subResults).toHaveProperty("gayatri");
+    expect(r.subResults).toHaveProperty("ohmkara");
     expect(r.subResults.aaryan.strategy).toBe("AARYAN");
     expect(r.subResults.aayush.strategy).toBe("AAYUSH");
     expect(r.subResults.gayatri.strategy).toBe("GAYATRI");
+    expect((r.subResults as any).ohmkara.strategy).toBe("OHMKARA");
   });
 
   test("TC-D5: slPct is min of sub-strategies (tightest)", () => {
@@ -224,11 +226,12 @@ describe("evaluateLakshmi", () => {
     expect(r.slPct).toBe(expected);
   });
 
-  test("TC-D6: tpPct is max of sub-strategies (widest)", () => {
+  test("TC-D6: tpPct is at least max of Aaryan/Aayush/Gayatri (widest, Ohmkara may widen further)", () => {
     const r = evaluateLakshmi(makeSnapshot());
     const subs = r.subResults;
-    const expected = Math.max(subs.aaryan.tpPct, subs.aayush.tpPct, subs.gayatri.tpPct);
-    expect(r.tpPct).toBe(expected);
+    const minExpected = Math.max(subs.aaryan.tpPct, subs.aayush.tpPct, subs.gayatri.tpPct);
+    // Ohmkara may widen TP further — result must be >= baseline widest
+    expect(r.tpPct).toBeGreaterThanOrEqual(minExpected);
   });
 
   test("TC-D7: noLossActive true when gayatri gate + animal blend positive", () => {

@@ -1,0 +1,231 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════
+ *  AALGOLAKSHMI — Design Tokens & UI Hardening Layer (single source of truth)
+ * ═══════════════════════════════════════════════════════════════════
+ *  Imported LAST so it normalises Bootstrap + Tailwind + legacy styles.
+ *  Theme switches via `html.dark` (set by useAppStore.setTheme).
+ *  See DESIGN_TOKENS.md for the catalogue.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── 1. CANONICAL TOKENS ─────────────────────────────────────────── */
+:root {
+  /* Brand / semantic — identical across themes (trading convention) */
+  --ds-primary:        #3b82f6;
+  --ds-primary-strong: #2563eb;
+  --ds-accent:         #06b6d4;
+  --ds-buy:            #10b981;   /* long / positive */
+  --ds-sell:          #f43f5e;   /* short / negative */
+  --ds-hold:          #38bdf8;   /* neutral / hold */
+  --ds-warning:       #f59e0b;
+  --ds-info:          #3b82f6;
+
+  /* Surfaces & text — LIGHT theme */
+  --ds-bg:         #f8fafc;
+  --ds-surface:    #ffffff;
+  --ds-surface-2:  #f1f5f9;
+  --ds-border:     #e2e8f0;
+  --ds-text:       #0f172a;
+  --ds-text-muted: #64748b;
+  --ds-text-faint: #94a3b8;
+
+  /* Spacing scale (4px base) */
+  --ds-space-1: 0.25rem;  --ds-space-2: 0.5rem;  --ds-space-3: 0.75rem;
+  --ds-space-4: 1rem;     --ds-space-5: 1.5rem;  --ds-space-6: 2rem;
+
+  /* Radii */
+  --ds-radius-sm: 6px;  --ds-radius: 8px;  --ds-radius-lg: 12px;  --ds-radius-pill: 999px;
+
+  /* Elevation */
+  --ds-shadow-sm: 0 1px 3px rgba(2,6,23,0.06);
+  --ds-shadow:    0 4px 16px rgba(2,6,23,0.08);
+  --ds-shadow-lg: 0 12px 32px rgba(2,6,23,0.12);
+
+  /* Typography */
+  --ds-font: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ds-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  /* ── Align legacy + Bootstrap vars to the tokens (light) ── */
+  --app-bg: var(--ds-bg);
+  --app-secondary-bg: var(--ds-surface);
+  --app-card-bg: var(--ds-surface);
+  --app-border: var(--ds-border);
+  --text-primary: var(--ds-text);
+  --text-secondary: var(--ds-text-muted);
+  --text-muted: var(--ds-text-faint);
+  --color-success: var(--ds-buy);
+  --color-danger: var(--ds-sell);
+  --color-warning: var(--ds-warning);
+  --color-info: var(--ds-info);
+  --accent-primary: var(--ds-primary);
+
+  --bs-primary: var(--ds-primary);
+  --bs-success: var(--ds-buy);
+  --bs-danger: var(--ds-sell);
+  --bs-warning: var(--ds-warning);
+  --bs-info: var(--ds-info);
+  --bs-body-bg: var(--ds-bg);
+  --bs-body-color: var(--ds-text);
+  --bs-border-color: var(--ds-border);
+}
+
+/* ─── 2. DARK THEME (the missing override that caused white-in-dark) ── */
+html.dark {
+  --ds-bg:         #060b14;
+  --ds-surface:    #0b1220;
+  --ds-surface-2:  #1e293b;
+  --ds-border:     rgba(148,163,184,0.14);
+  --ds-text:       #f1f5f9;
+  --ds-text-muted: #94a3b8;
+  --ds-text-faint: #64748b;
+
+  --ds-shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+  --ds-shadow:    0 4px 16px rgba(0,0,0,0.45);
+  --ds-shadow-lg: 0 12px 32px rgba(0,0,0,0.55);
+
+  /* legacy + bootstrap surfaces now follow dark tokens */
+  --app-bg: var(--ds-bg);
+  --app-secondary-bg: var(--ds-surface);
+  --app-card-bg: var(--ds-surface);
+  --app-border: var(--ds-border);
+  --text-primary: var(--ds-text);
+  --text-secondary: var(--ds-text-muted);
+  --text-muted: var(--ds-text-faint);
+
+  --bs-body-bg: var(--ds-bg);
+  --bs-body-color: var(--ds-text);
+  --bs-border-color: var(--ds-border);
+  --bs-secondary-bg: var(--ds-surface-2);
+  --bs-tertiary-bg: var(--ds-surface);
+  --bs-emphasis-color: var(--ds-text);
+  --bs-secondary-color: var(--ds-text-muted);
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--ds-text);
+  --bs-table-border-color: var(--ds-border);
+  --bs-table-hover-bg: rgba(148,163,184,0.08);
+  --bs-table-hover-color: var(--ds-text);
+}
+
+/* ─── 2b. NAMED THEMES (data-theme on <html>) ─────────────────────────
+ * Each block overrides only the CORE --ds-* tokens. Every legacy/Bootstrap
+ * var is declared as `var(--ds-…)`, and CSS resolves that indirection at use
+ * time, so overriding the base tokens recolours the whole app automatically.
+ * Dark-based themes also carry the `.dark` class (set in applyThemeToDom),
+ * so Tailwind `dark:` variants keep working; these blocks come AFTER html.dark
+ * in source order, so they win on equal specificity.
+ * --ds-buy / --ds-sell are intentionally NOT overridden (trading convention). */
+
+/* Midnight Indigo (dark) */
+html[data-theme="midnight"] {
+  --ds-bg: #0a0e24;  --ds-surface: #131a3a;  --ds-surface-2: #1e2547;
+  --ds-border: rgba(129,140,248,0.16);
+  --ds-text: #e8eaf6;  --ds-text-muted: #a9b0d6;  --ds-text-faint: #6b73a8;
+  --ds-primary: #6366f1;  --ds-primary-strong: #4f46e5;  --ds-accent: #818cf8;  --ds-info: #6366f1;
+}
+
+/* Deep Ocean (dark) */
+html[data-theme="ocean"] {
+  --ds-bg: #06141a;  --ds-surface: #0a2027;  --ds-surface-2: #103942;
+  --ds-border: rgba(45,212,191,0.16);
+  --ds-text: #e0f7fa;  --ds-text-muted: #93c5cd;  --ds-text-faint: #5b8a92;
+  --ds-primary: #06b6d4;  --ds-primary-strong: #0891b2;  --ds-accent: #22d3ee;  --ds-info: #06b6d4;
+}
+
+/* Forest (dark) */
+html[data-theme="forest"] {
+  --ds-bg: #07140f;  --ds-surface: #0c1f17;  --ds-surface-2: #143025;
+  --ds-border: rgba(16,185,129,0.16);
+  --ds-text: #e3f5ec;  --ds-text-muted: #9bc7b2;  --ds-text-faint: #5f8a78;
+  --ds-primary: #10b981;  --ds-primary-strong: #059669;  --ds-accent: #34d399;  --ds-info: #10b981;
+}
+
+/* Crimson Gold (dark) */
+html[data-theme="crimson"] {
+  --ds-bg: #160a0c;  --ds-surface: #241115;  --ds-surface-2: #3a1a20;
+  --ds-border: rgba(245,158,11,0.16);
+  --ds-text: #f7ebd8;  --ds-text-muted: #d3b08a;  --ds-text-faint: #9a7a58;
+  --ds-primary: #f59e0b;  --ds-primary-strong: #d97706;  --ds-accent: #fbbf24;  --ds-info: #f59e0b;
+}
+
+/* Solar Light (light) */
+html[data-theme="solar"] {
+  --ds-bg: #fbf6ec;  --ds-surface: #fffdf7;  --ds-surface-2: #f3ebd9;
+  --ds-border: #e8dcc2;
+  --ds-text: #2a1f0f;  --ds-text-muted: #7c6f57;  --ds-text-faint: #a89a7d;
+  --ds-primary: #d97706;  --ds-primary-strong: #b45309;  --ds-accent: #f59e0b;  --ds-info: #d97706;
+}
+
+/* ─── 3. GLOBAL HARDENING — overflow / box model / typography ──────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { max-width: 100%; overflow-x: hidden; }
+body { font-family: var(--ds-font); background: var(--ds-bg); color: var(--ds-text); }
+img, svg, video, canvas, iframe { max-width: 100%; }
+/* Long strings (addresses, hashes) never blow out a row */
+.text-break-anywhere { overflow-wrap: anywhere; word-break: break-word; }
+
+/* ─── 4. COMPONENT NORMALISATION (theme-aware via tokens) ─────────── */
+.card-modern,
+.card-financial,
+.ds-card {
+  background: var(--ds-surface);
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius);
+  box-shadow: var(--ds-shadow-sm);
+  color: var(--ds-text);
+}
+.border-financial { border-color: var(--ds-border) !important; }
+.bg-financial, .bg-app-bg { background-color: var(--ds-bg) !important; }
+
+/* Tables — consistent header / hover / borders in both themes */
+.table-modern { background: transparent; color: var(--ds-text); }
+.table-modern thead th { background: var(--ds-surface-2); color: var(--ds-text-muted); border-bottom-color: var(--ds-border); }
+.table-modern td { border-bottom-color: var(--ds-border); color: var(--ds-text); }
+.table-modern tbody tr:hover { background: var(--bs-table-hover-bg, rgba(148,163,184,0.08)); }
+html.dark .table { --bs-table-color: var(--ds-text); color: var(--ds-text); }
+
+/* Inputs — uniform focus ring */
+.form-control, .form-select, .form-control-modern {
+  background: var(--ds-surface);
+  border-color: var(--ds-border);
+  color: var(--ds-text);
+}
+.form-control:focus, .form-select:focus, .form-control-modern:focus {
+  border-color: var(--ds-primary);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.18);
+}
+html.dark .form-control::placeholder { color: var(--ds-text-faint); }
+
+/* Dropdowns / offcanvas inherit surface in dark mode */
+html.dark .dropdown-menu { background: var(--ds-surface); border-color: var(--ds-border); color: var(--ds-text); }
+html.dark .dropdown-item { color: var(--ds-text); }
+html.dark .dropdown-item:hover { background: var(--ds-surface-2); color: var(--ds-text); }
+html.dark .offcanvas { background: var(--ds-surface); color: var(--ds-text); }
+
+/* Buttons — consistent sizing, no jumpy transform on tiny chips */
+.btn { border-radius: var(--ds-radius-sm); font-weight: 600; }
+.btn-sm { border-radius: var(--ds-radius-sm); }
+.btn:focus-visible { box-shadow: 0 0 0 3px rgba(59,130,246,0.35); }
+
+/* Unified scrollbars */
+.custom-scrollbar::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(100,116,139,0.4); border-radius: var(--ds-radius-pill); }
+
+/* ─── 5. RESPONSIVE GLOBALS ───────────────────────────────────────── */
+/* Bootstrap tables always scroll horizontally instead of breaking layout */
+.table-responsive { -webkit-overflow-scrolling: touch; }
+
+@media (max-width: 991.98px) {
+  /* tighten oversized desktop padding on tablets/phones */
+  .app-main-content { padding: 1rem 0.875rem 4.5rem !important; }
+  /* prevent fixed pixel widths from overflowing the viewport */
+  .container, .container-fluid { padding-left: 12px; padding-right: 12px; }
+}
+
+@media (max-width: 575.98px) {
+  .app-main-content { padding: 0.75rem 0.625rem 4.5rem !important; }
+  h1 { font-size: 1.5rem !important; }
+  h2 { font-size: 1.25rem !important; }
+  /* card grids collapse to single column on phones */
+  .row > [class*="col-xl-"], .row > [class*="col-lg-"] { margin-bottom: 0.5rem; }
+}

@@ -29,7 +29,7 @@ const MarketRibbon: React.FC = () => {
 
   useEffect(() => {
     fetchHeader();
-    const interval = setInterval(fetchHeader, 5000);
+    const interval = setInterval(fetchHeader, 10000);
     return () => clearInterval(interval);
   }, [fetchHeader]);
 

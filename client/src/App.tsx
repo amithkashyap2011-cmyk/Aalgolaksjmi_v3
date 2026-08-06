@@ -1,67 +1,102 @@
-/*
- * ─── App.tsx ───────────────────────────────────────────
- *
- * Phase 2: Root layout with golden-ratio AppLayout.
- *
- *   App
- *   ├── Sidebar          (left nav: Home, AI/Strategies, Orders, Settings)
- *   ├── TopBar            (logo, mode selector, wallet summary)
- *   ├── BottomNav         (mobile-only tab bar)
- *   └── Routes
- *       ├── /          → DashboardPage
- *       ├── /backtest  → BacktestPage
- *       ├── /history   → HistoryPage
- *       ├── /wallet    → WalletPage
- *       └── /settings  → SettingsPage
- */
-import { useEffect } from "react";
+import { useEffect, Suspense, lazy, useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import Sidebar from "./components/layout/Sidebar";
 import TopBar from "./components/layout/TopBar";
+import MarketRibbon from "./components/layout/MarketRibbon";
 import BottomNav from "./components/layout/BottomNav";
-import DashboardPage from "./pages/DashboardPage";
-import BacktestPage from "./pages/BacktestPage";
-import HistoryPage from "./pages/HistoryPage";
-import SettingsPage from "./pages/SettingsPage";
-import WalletPage from "./pages/WalletPage";
+import ToastContainer from "./components/layout/ToastContainer";
+import AIFooterTradeBar from "./components/ai/AIFooterTradeBar";
 import { useAppStore } from "./store/useAppStore";
 
+const HomePage       = lazy(() => import("./pages/HomePage"));
+const Positions      = lazy(() => import("./pages/Positions"));
+const OrdersPage     = lazy(() => import("./pages/OrdersPage"));
+const AIMatrix       = lazy(() => import("./pages/AIMatrix"));
+const RiskCenterV8   = lazy(() => import("./pages/RiskCenterV8"));
+const WalletCenter   = lazy(() => import("./pages/WalletCenter"));
+const SettingsPage   = lazy(() => import("./pages/SettingsPage"));
+const BacktestPage   = lazy(() => import("./pages/BacktestPage"));
+const ForecastCenter = lazy(() => import("./pages/ForecastCenter"));
+const ReportsModule  = lazy(() => import("./pages/reports/ReportsModule"));
+const IndianMarketPage = lazy(() => import("./pages/IndianMarketPage"));
+
+const Spinner = () => (
+  <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100%", minHeight:300 }}>
+    <div style={{ width:32, height:32, border:"2px solid #1e3a5f", borderTopColor:"#3b82f6", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
+  </div>
+);
+
 export default function App() {
-  const boot = useAppStore((s) => s.boot);
+  const boot  = useAppStore((s) => s.boot);
   const ready = useAppStore((s) => s.ready);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => { boot(); }, [boot]);
 
   if (!ready) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-aurora">
-        <div className="text-center">
-          <div className="animate-spin w-8 h-8 border-4 border-aalgold border-t-transparent rounded-full mx-auto mb-phi-3" />
-          <p className="text-phi-sm text-slate-500">Loading AALGOLAKSHMI…</p>
-        </div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"100vh", background:"#070d1a", flexDirection:"column", gap:16 }}>
+        <div style={{ width:40, height:40, border:"2px solid #1e3a5f", borderTopColor:"#3b82f6", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
+        <span style={{ fontSize:11, fontWeight:700, color:"#475569", letterSpacing:"0.12em", textTransform:"uppercase" }}>AALGOLAKSHMI</span>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex bg-aurora">
-      {/* Left sidebar */}
-      <Sidebar />
+    <>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.page-fade{animation:fadeIn 0.25s ease-out}`}</style>
 
-      {/* Main content area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <TopBar />
-        <main className="flex-1 p-phi-3 md:p-phi-5 pb-20 lg:pb-phi-5 overflow-y-auto" role="main">
-          <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/backtest" element={<BacktestPage />} />
-            <Route path="/history" element={<HistoryPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/wallet" element={<WalletPage />} />
-          </Routes>
-        </main>
-        <BottomNav />
+      {/* Mobile sidebar overlay backdrop */}
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:40, backdropFilter:"blur(2px)" }}
+        />
+      )}
+
+      <div style={{ display:"flex", height:"100dvh", overflow:"hidden", background:"#070d1a" }}>
+        {/* Sidebar */}
+        <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+        {/* Main column */}
+        <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0, overflow:"hidden" }}>
+          <TopBar onMenuClick={() => setSidebarOpen(true)} />
+
+          {/* Trending coins ticker — symbol · $USDT / ₹INR · BUY/SELL · trend */}
+          <MarketRibbon />
+
+          <main
+            style={{ flex:1, overflowY:"auto", overflowX:"hidden", paddingBottom: 0 }}
+            className="page-fade"
+          >
+            <Suspense fallback={<Spinner />}>
+              <Routes>
+                <Route path="/"                  element={<HomePage />} />
+                <Route path="/indian-market"     element={<IndianMarketPage />} />
+                <Route path="/aqea/wallet"        element={<WalletCenter />} />
+                <Route path="/aqea/positions"     element={<Positions />} />
+                <Route path="/aqea/orders"        element={<OrdersPage />} />
+                <Route path="/aqea/ai"            element={<AIMatrix />} />
+                <Route path="/aqea/risk-center"   element={<RiskCenterV8 />} />
+                <Route path="/backtest"           element={<BacktestPage />} />
+                <Route path="/prediction"         element={<ForecastCenter />} />
+                <Route path="/reports"            element={<ReportsModule />} />
+                <Route path="/reports/:section"   element={<ReportsModule />} />
+                <Route path="/settings"           element={<SettingsPage />} />
+              </Routes>
+            </Suspense>
+          </main>
+
+          {/* Live Upcoming AI Trade Prediction Bar */}
+          <AIFooterTradeBar />
+
+          {/* Mobile bottom nav */}
+          <BottomNav />
+        </div>
       </div>
-    </div>
+
+      <ToastContainer />
+    </>
   );
 }

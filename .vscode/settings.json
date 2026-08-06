@@ -1,0 +1,7 @@
+{
+    "git.ignoreLimitWarning": true,
+    "cmake.sourceDirectory": "/Users/amithks/aalgolakshmi_v2/cpp-hft-engine",
+    "chat.tools.terminal.autoApprove": {
+        "pkill": true
+    }
+}

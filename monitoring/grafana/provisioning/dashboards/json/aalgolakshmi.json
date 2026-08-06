@@ -1,0 +1,44 @@
+{
+  "title": "AALGOLAKSHMI — App Metrics",
+  "uid": "aalgolakshmi-app",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "MongoDB Connected",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "mongodb_connected", "refId": "A" }]
+    },
+    {
+      "id": 2,
+      "title": "Open Trades (PAPER vs LIVE)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 0 },
+      "targets": [{ "expr": "open_trades_total", "legendFormat": "{{mode}}", "refId": "A" }]
+    },
+    {
+      "id": 3,
+      "title": "Reconciliation Mismatches (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [{ "expr": "rate(reconciliation_mismatches_total[15m])", "legendFormat": "{{type}}", "refId": "A" }]
+    },
+    {
+      "id": 4,
+      "title": "HTTP Request Duration (p99 by route)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [{ "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))", "legendFormat": "{{route}}", "refId": "A" }]
+    },
+    {
+      "id": 5,
+      "title": "Order Placement Errors (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [{ "expr": "rate(order_placement_errors_total[15m])", "legendFormat": "{{mode}}/{{accountType}}", "refId": "A" }]
+    }
+  ]
+}

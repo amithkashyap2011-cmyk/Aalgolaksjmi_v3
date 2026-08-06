@@ -1,0 +1,34 @@
+# Training configuration for maximum performance.
+# Optimized for accuracy and robustness at the cost
+# of slightly longer inference latency.
+
+d_model: 512
+n_layers: 12
+d_state: 32
+d_conv: 4
+expand: 2
+
+seq_len: 500
+output_horizon: 1
+n_features: 52
+
+forecasting_mode: multi_task
+supported_horizons: [1, 3, 5, 10, 20, 50]
+
+dtype: float32
+use_amp: false
+use_gradient_checkpoint: true
+use_compile: false
+
+normalize_input: true
+robust_scaler: true
+
+use_regime_embeddings: true
+embed_regime: true
+embed_market_state: true
+
+dropout_rate: 0.15
+weight_decay: 0.001
+layer_norm_eps: 1.0e-06
+
+device: cuda

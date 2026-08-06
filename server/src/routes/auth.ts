@@ -88,7 +88,7 @@ router.post("/login", async (req, res) => {
 router.get("/me", authGuard, async (req: AuthRequest, res) => {
   try {
     try {
-      fs.appendFileSync(path.join(process.cwd(), "auto_trade.log"), `[api] /auth/me called. User is connected: ${req.userId}\n`);
+      fs.appendFile(path.join(process.cwd(), "auto_trade.log"), `[api] /auth/me called. User is connected: ${req.userId}\n`, () => {});
     } catch {}
     
     if (mongoose.connection.readyState !== 1) {

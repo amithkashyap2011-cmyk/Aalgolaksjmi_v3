@@ -47,9 +47,9 @@ describe("Settings model", () => {
     expect(doc.defaultMode).toBe("PAPER");
   });
 
-  test("TC-G6: default allowedSymbols includes 5 coins", () => {
+  test("TC-G6: default allowedSymbols includes 7 coins", () => {
     const doc = new Settings({ userId: fakeId });
-    expect(doc.allowedSymbols).toHaveLength(5);
+    expect(doc.allowedSymbols).toHaveLength(7);
     expect(doc.allowedSymbols).toContain("DOGEUSDT");
     expect(doc.allowedSymbols).toContain("SHIBUSDT");
     expect(doc.allowedSymbols).toContain("ETHUSDT");
@@ -70,19 +70,19 @@ describe("Settings model", () => {
     const doc = new Settings({ userId: fakeId });
     const bw = doc.behaviorWeights;
     expect(bw.eagle).toBe(50);
-    expect(bw.lion).toBe(50);
+    // lion is a legacy optional field, no schema default
     expect(bw.om_chant).toBe(50);
-    expect(bw.gayatri_mantra).toBe(50);
+    expect(bw.gayatri_mantra).toBe(0);
     expect(bw.aaryan).toBe(50);
-    expect(bw.aayush).toBe(50);
-    expect(bw.lakshmi_hybrid).toBe(50);
+    expect(bw.aayush).toBe(0);
+    expect(bw.lakshmi_hybrid).toBe(0);
   });
 
   test("TC-G9: chartSettings defaults", () => {
     const doc = new Settings({ userId: fakeId });
     expect(doc.chartSettings.showFibZones).toBe(true);
     expect(doc.chartSettings.defaultTimeframe).toBe("5m");
-    expect(doc.chartSettings.darkMode).toBe(false);
+    expect(doc.chartSettings.darkMode).toBe(true);
   });
 
   test("TC-G10: rejects invalid defaultMode", () => {

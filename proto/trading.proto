@@ -1,0 +1,38 @@
+syntax = "proto3";
+package hft_gateway;
+
+service HybridEngineService {
+    rpc StreamMarketData(SymbolRequest) returns (stream MarketTick);
+    rpc SubmitManualOrder(OrderRequest) returns (OrderResponse);
+    rpc GetStrategyWeights(Empty) returns (WeightMatrix);
+}
+
+message Empty {}
+
+message SymbolRequest { string symbol = 1; }
+
+message MarketTick { 
+    string symbol = 1; 
+    double bid = 2; 
+    double ask = 3; 
+    int64 timestamp = 4;
+}
+
+message OrderRequest {
+    string symbol = 1;
+    string side = 2;
+    double qty = 3;
+    bool is_iceberg = 4;
+}
+
+message OrderResponse {
+    bool success = 1;
+    string execution_id = 2;
+    string message = 3;
+}
+
+message WeightMatrix {
+    double animal_weight = 1;
+    double bird_weight = 2;
+    double aks_weight = 3;
+}

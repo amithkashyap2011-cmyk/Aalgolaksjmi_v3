@@ -8,7 +8,9 @@ import * as binance from "../services/binanceService.js";
 import { enrichOpenTrades } from "../services/pnlService.js";
 import { CurrencyService } from "../services/currencyService.js";
 import mongoose from "mongoose";
+import { Settings } from "../models/Settings.js";
 import { authGuard, type AuthRequest } from "../middleware/auth.js";
+import * as registry from "../services/modelRegistry.js";
 
 // V5 Services
 import { FutureAnalysisEngine } from "../services/aqea/futureAnalysisEngine.js";
@@ -20,6 +22,16 @@ import { SymbolIntelligenceEngine } from "../services/aqea/symbolIntelligence.js
 import * as tradeGovernor from "../services/aqea/tradeGovernor.js";
 
 const router = express.Router();
+
+/* ── High-Performance In-Memory Response Caches ── */
+interface CacheEntry { timestamp: number; data: any; }
+const dashboardCache = new Map<string, CacheEntry>();
+let headerCache: CacheEntry | null = null;
+
+export function clearDashboardCache() {
+  dashboardCache.clear();
+  headerCache = null;
+}
 
 function getSafeObjectId(userId: string): mongoose.Types.ObjectId {
   if (mongoose.Types.ObjectId.isValid(userId)) {
@@ -38,83 +50,217 @@ router.get("/dashboard", async (req, res) => {
     const userId = req.query.userId as string;
     if (!userId) return res.status(400).json({ error: "userId required" });
 
+    const reqAcctType = (req.query.accountType as string)?.toUpperCase() || "DEFAULT";
+    const cacheKey = `${userId}:${reqAcctType}`;
+    const cached = dashboardCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < 3000) {
+      return res.json(cached.data);
+    }
+
     const objectId = getSafeObjectId(userId);
     const inrRate = await CurrencyService.refreshRate();
 
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
-    // 1. Fetch All Relevant Trades
-    const trades = await Trade.find({ userId: objectId, strategy: /AQEA/ }).lean();
-    const allClosedTrades = trades.filter(t => t.status === "CLOSED");
-    // Exclude sentinel-forced closures (pnl:0 system resets) from performance metrics
+    // ── Shared Constants ──
     const SENTINEL_REASONS = new Set(["SENTINEL_AUTO_PURGE", "SENTINEL_BANKRUPTCY_CLEAR", "SENTINEL_INFLATION_CLEAR", "SENTINEL_LIQUIDATION"]);
-    const closedTrades = allClosedTrades.filter(t => !SENTINEL_REASONS.has((t as any).meta?.closeReason));
-    // Open positions must mirror the Positions page (every open PAPER/FUTURES trade,
-    // any strategy) so the "Open Orders" count agrees. Performance metrics below
-    // intentionally keep the AQEA-strategy scope via `trades`.
-    const openTrades = await Trade.find({
-      userId: objectId, status: "OPEN", mode: "PAPER", accountType: "FUTURES",
-    }).lean();
-    const todayTrades = trades.filter(t => t.closedAt && new Date(t.closedAt) >= startOfDay);
+    const INDIAN_ACCOUNT_TYPES = ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50"];
 
-    // 2. Performance Metrics (sentinel-excluded trades only)
-    const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
-    const winRate = closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : 0;
+    // ── Helper: compute per-domain metrics from a set of trades & wallets ──
+    function computeDomainMetrics(
+      domainClosedTrades: any[],
+      domainOpenTrades: any[],
+      domainAllTrades: any[],
+      walletBalances: { spot: number; futures: number },
+      openPnlByType: { spot: number; futures: number },
+      investedByType: { spot: number; futures: number },
+      notionalByType: { spot: number; futures: number },
+    ) {
+      const closedWins = domainClosedTrades.filter(t => (t.pnl || 0) > 0).length;
+      let grossProfit = 0, grossLoss = 0;
+      domainClosedTrades.forEach(t => {
+        const pnl = t.pnl || 0;
+        if (pnl > 0) grossProfit += pnl; else grossLoss += Math.abs(pnl);
+      });
+      const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 99.9 : 0);
 
-    let grossProfit = 0, grossLoss = 0;
-    closedTrades.forEach(t => {
-      const pnl = t.pnl || 0;
-      if (pnl > 0) grossProfit += pnl; else grossLoss += Math.abs(pnl);
-    });
-    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 99.9 : 0);
+      // Daily P&L = realized (closed today) + unrealized (open positions)
+      const todayClosedPnl = domainClosedTrades
+        .filter(t => t.closedAt && new Date(t.closedAt) >= startOfDay)
+        .reduce((sum, t) => sum + (t.pnl || 0), 0);
+      const openPnl = openPnlByType.spot + openPnlByType.futures;
+      const dailyPnL = todayClosedPnl + openPnl;
 
-    // 3. Daily Metrics
-    const dailyPnL = todayTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+      const totalEquity = walletBalances.spot + openPnlByType.spot + walletBalances.futures + openPnlByType.futures;
+      const totalNotional = notionalByType.spot + notionalByType.futures;
+      const exposure = totalEquity > 0 ? (totalNotional / totalEquity) * 100 : 0;
 
-    // 4. Wallet & Exposure
-    const wallet = paper.getWallet(userId, "PAPER", "FUTURES");
-    const balance = wallet.get("USDT") ?? 0;
-    
-    // Recompute live unrealised PnL (net of fees) instead of trusting the stored
-    // pnl, which is stale/0 for open trades — this is what made the Dashboard's
-    // Open PnL disagree with the Positions page total.
-    await enrichOpenTrades(openTrades);
-    let openPnL = 0;
-    let totalNotional = 0;
-    let lockedMargin = 0;
-    openTrades.forEach(t => {
+      // Win rate
+      const openWins = domainOpenTrades.filter(t => (t.pnl || 0) > 0).length;
+      const totalEvaluated = domainClosedTrades.length + domainOpenTrades.length;
+      const closedWinRate = domainClosedTrades.length > 0 ? (closedWins / domainClosedTrades.length) * 100 : 0;
+      const overallWinRate = totalEvaluated > 0 ? ((closedWins + openWins) / totalEvaluated) * 100 : 0;
+      const winRate = domainClosedTrades.length > 0 ? closedWinRate : overallWinRate;
+
+      // Net realized P&L (spot vs futures split)
+      let netPnlSpot = 0, netPnlFutures = 0;
+      domainClosedTrades.forEach(t => {
+        if ((t.accountType || "FUTURES") === "SPOT") netPnlSpot += t.pnl || 0;
+        else netPnlFutures += t.pnl || 0;
+      });
+
+      // Drawdown
+      const lifetimeRealized = domainClosedTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+      const startCap = walletBalances.futures - lifetimeRealized;
+      let ddPeak = startCap, ddRunning = startCap, maxDrawdownPct = 0;
+      [...domainClosedTrades]
+        .sort((a, b) => new Date(a.closedAt || 0).getTime() - new Date(b.closedAt || 0).getTime())
+        .forEach(t => {
+          ddRunning += (t.pnl || 0);
+          if (ddRunning > ddPeak) ddPeak = ddRunning;
+          const dd = ddPeak > 0 ? ((ddPeak - ddRunning) / ddPeak) * 100 : 0;
+          if (dd > maxDrawdownPct) maxDrawdownPct = dd;
+        });
+
+      const totalAllTimePnL = (netPnlSpot + netPnlFutures) + openPnl;
+
+      return {
+        totalEquity: parseFloat(totalEquity.toFixed(2)),
+        dailyPnL: parseFloat(dailyPnL.toFixed(2)),
+        openPnL: parseFloat(openPnl.toFixed(2)),
+        totalAllTimePnL: parseFloat(totalAllTimePnL.toFixed(2)),
+        openPositions: domainOpenTrades.length,
+        closedTrades: domainClosedTrades.length,
+        totalTrades: domainAllTrades.length,
+        winRate: parseFloat(winRate.toFixed(1)),
+        realizedWinRate: parseFloat(closedWinRate.toFixed(1)),
+        overallWinRate: parseFloat(overallWinRate.toFixed(1)),
+        profitFactor: profitFactor === 99.9 ? "MAX" : parseFloat(profitFactor.toFixed(2)),
+        maxDrawdown: parseFloat(maxDrawdownPct.toFixed(2)),
+        currentExposure: parseFloat(exposure.toFixed(1)),
+        invested: {
+          total: parseFloat((investedByType.spot + investedByType.futures).toFixed(2)),
+          spot: parseFloat(investedByType.spot.toFixed(2)),
+          futures: parseFloat(investedByType.futures.toFixed(2)),
+        },
+        balances: {
+          spot: parseFloat(walletBalances.spot.toFixed(2)),
+          futures: parseFloat(walletBalances.futures.toFixed(2)),
+        },
+        netPnL: {
+          total: parseFloat((netPnlSpot + netPnlFutures).toFixed(2)),
+          spot: parseFloat(netPnlSpot.toFixed(2)),
+          futures: parseFloat(netPnlFutures.toFixed(2)),
+        },
+      };
+    }
+
+    // ── 1. Fetch ALL trades for this user (both domains) ──
+    const allTrades = await Trade.find({ userId: objectId }).lean();
+    const allOpenTrades = await Trade.find({ userId: objectId, status: "OPEN", mode: "PAPER" }).lean();
+    await enrichOpenTrades(allOpenTrades);
+
+    // ── 2. Split by domain ──
+    const isIndian = (t: any) => INDIAN_ACCOUNT_TYPES.includes(t.accountType);
+    const isCrypto = (t: any) => !INDIAN_ACCOUNT_TYPES.includes(t.accountType);
+
+    const cryptoAllTrades = allTrades.filter(isCrypto);
+    const cryptoClosedAll = cryptoAllTrades.filter(t => t.status === "CLOSED");
+    const cryptoClosed = cryptoClosedAll.filter(t => !SENTINEL_REASONS.has((t as any).meta?.closeReason));
+    const cryptoOpen = allOpenTrades.filter(isCrypto);
+
+    const indianAllTrades = allTrades.filter(isIndian);
+    const indianClosedAll = indianAllTrades.filter(t => t.status === "CLOSED");
+    const indianClosed = indianClosedAll.filter(t => !SENTINEL_REASONS.has((t as any).meta?.closeReason));
+    const indianOpen = allOpenTrades.filter(isIndian);
+
+    // ── 3. Crypto Wallets ──
+    const cryptoFuturesBalance = paper.getWallet(userId, "PAPER", "FUTURES").get("USDT") ?? 0;
+    const cryptoSpotBalance = paper.getWallet(userId, "PAPER", "SPOT").get("USDT") ?? 0;
+
+    let cryptoOpenPnlFutures = 0, cryptoNotionalFutures = 0, cryptoLockedMargin = 0;
+    let cryptoOpenPnlSpot = 0, cryptoNotionalSpot = 0, cryptoInvestedSpot = 0;
+    cryptoOpen.forEach(t => {
       const notional = t.quantity * t.entryPrice;
-      totalNotional += notional;
-      // Margin is deducted from the wallet when a position opens (see
-      // autoTradeEngine handleLong/handleShort), so equity must add it back
-      // or the dashboard "loses" money the moment a trade opens.
-      lockedMargin += notional / (t.leverage || 1);
-      openPnL += (t.pnl || 0);
-    });
-    const totalEquity = balance + lockedMargin + openPnL;
-    const exposure = totalEquity > 0 ? (totalNotional / totalEquity) * 100 : 0;
-
-    // Invested amount = margin locked in open positions, split spot/futures.
-    // openTrades above is FUTURES-scoped, so SPOT needs its own query.
-    const openSpotTrades = await Trade.find({
-      userId: objectId, status: "OPEN", mode: "PAPER", accountType: "SPOT",
-    }).lean();
-    const investedFutures = lockedMargin;
-    const investedSpot = openSpotTrades.reduce(
-      (sum, t) => sum + (t.quantity * t.entryPrice) / (t.leverage || 1), 0);
-
-    // Lifetime realized net P&L split spot/futures — all strategies (not just
-    // AQEA), sentinel resets excluded so forced closures don't skew the number.
-    const allClosedAnyStrategy = await Trade.find({ userId: objectId, status: "CLOSED" }).lean();
-    let netPnlSpot = 0, netPnlFutures = 0;
-    allClosedAnyStrategy.forEach(t => {
-      if (SENTINEL_REASONS.has((t as any).meta?.closeReason)) return;
-      if ((t.accountType || "FUTURES") === "SPOT") netPnlSpot += t.pnl || 0;
-      else netPnlFutures += t.pnl || 0;
+      const acct = t.accountType || "FUTURES";
+      if (acct === "SPOT") {
+        cryptoNotionalSpot += notional;
+        cryptoInvestedSpot += notional / (t.leverage || 1);
+        cryptoOpenPnlSpot += (t.pnl || 0);
+      } else {
+        cryptoNotionalFutures += notional;
+        cryptoLockedMargin += notional / (t.leverage || 1);
+        cryptoOpenPnlFutures += (t.pnl || 0);
+      }
     });
 
-    // 5. Regime Analysis (derived from recent live attributions when available)
+    // ── 4. Indian Stock Wallets ──
+    const indianNseBalance = paper.getWallet(userId, "PAPER", "INDIAN_NSE").get("INR") ?? 0;
+    const indianNiftyBalance = paper.getWallet(userId, "PAPER", "INDIAN_NIFTY50").get("INR") ?? 0;
+
+    let indianOpenPnlEquity = 0, indianNotionalEquity = 0, indianInvestedEquity = 0;
+    let indianOpenPnlFno = 0, indianNotionalFno = 0, indianInvestedFno = 0;
+    indianOpen.forEach(t => {
+      const notional = t.quantity * t.entryPrice;
+      const acct = String(t.accountType || "INDIAN_NSE");
+      if (acct === "INDIAN_NIFTY50" || acct === "INDIAN_FNO") {
+        indianNotionalFno += notional;
+        indianInvestedFno += notional / (t.leverage || 1);
+        indianOpenPnlFno += (t.pnl || 0);
+      } else {
+        indianNotionalEquity += notional;
+        indianInvestedEquity += notional / (t.leverage || 1);
+        indianOpenPnlEquity += (t.pnl || 0);
+      }
+    });
+
+    // ── 5. Compute per-domain metrics ──
+    const cryptoMetrics = computeDomainMetrics(
+      cryptoClosed, cryptoOpen, cryptoAllTrades,
+      { spot: cryptoSpotBalance, futures: cryptoFuturesBalance },
+      { spot: cryptoOpenPnlSpot, futures: cryptoOpenPnlFutures },
+      { spot: cryptoInvestedSpot, futures: cryptoLockedMargin },
+      { spot: cryptoNotionalSpot, futures: cryptoNotionalFutures },
+    );
+    const indianMetrics = computeDomainMetrics(
+      indianClosed, indianOpen, indianAllTrades,
+      { spot: indianNseBalance, futures: indianNiftyBalance },
+      { spot: indianOpenPnlEquity, futures: indianOpenPnlFno },
+      { spot: indianInvestedEquity, futures: indianInvestedFno },
+      { spot: indianNotionalEquity, futures: indianNotionalFno },
+    );
+
+    // ── 6. Combined summary (backward compat) ──
+    // Use the request's domain filter to decide which combined view to return
+    const isIndianMarketDomain = reqAcctType.includes("INDIAN");
+    const activeDomain = isIndianMarketDomain ? indianMetrics : cryptoMetrics;
+
+    // For "BOTH" or default, merge both domains
+    const combinedTotalEquity = cryptoMetrics.totalEquity + (indianMetrics.totalEquity / inrRate);
+    const combinedDailyPnL = cryptoMetrics.dailyPnL + (indianMetrics.dailyPnL / inrRate);
+    const combinedOpenPnL = cryptoMetrics.openPnL + (indianMetrics.openPnL / inrRate);
+
+    const userSettings = await Settings.findOne({ userId: objectId }).lean() as any;
+    const paramAcctType = (req.query.accountType as string)?.toUpperCase();
+    const userAcctType = (paramAcctType === "SPOT" || paramAcctType === "FUTURES")
+      ? paramAcctType
+      : (paramAcctType === "BOTH" ? "BOTH" : (userSettings?.accountType || "BOTH"));
+
+    // Use active domain or combined based on filter
+    const summarySource = (reqAcctType === "BOTH" || reqAcctType === "DEFAULT")
+      ? {
+          totalEquity: parseFloat(combinedTotalEquity.toFixed(2)),
+          dailyPnL: parseFloat(combinedDailyPnL.toFixed(2)),
+          openPnL: parseFloat(combinedOpenPnL.toFixed(2)),
+        }
+      : {
+          totalEquity: activeDomain.totalEquity,
+          dailyPnL: activeDomain.dailyPnL,
+          openPnL: activeDomain.openPnL,
+        };
+
+    // ── 7. Regime Analysis (crypto-specific, kept unchanged) ──
     const recentAttributions = await AqeaDecisionAttribution.find({
       userId: objectId,
       timestamp: { $gte: new Date(Date.now() - 15 * 60 * 1000) }
@@ -176,49 +322,13 @@ router.get("/dashboard", async (req, res) => {
       ? "ELEVATED"
       : "NORMAL";
 
-    // Max drawdown: true peak-to-trough running-equity drawdown, replayed in
-    // closed-trade order. Previously this was "worst single trade loss ÷
-    // balance" — a different, smaller number mislabeled as drawdown. Anchor
-    // the replay at the equity level *before* these trades' PnL, not at the
-    // current balance, so the replay's peaks/troughs are the real historical
-    // values (see /pnl-analytics below, which had the same anchor bug).
-    const lifetimeRealizedPnL = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-    const startingCapital = balance - lifetimeRealizedPnL;
-    let ddPeak = startingCapital;
-    let ddRunning = startingCapital;
-    let maxDrawdownPct = 0;
-    [...closedTrades].sort((a, b) => new Date(a.closedAt || 0).getTime() - new Date(b.closedAt || 0).getTime())
-      .forEach(t => {
-        ddRunning += (t.pnl || 0);
-        if (ddRunning > ddPeak) ddPeak = ddRunning;
-        const dd = ddPeak > 0 ? ((ddPeak - ddRunning) / ddPeak) * 100 : 0;
-        if (dd > maxDrawdownPct) maxDrawdownPct = dd;
-      });
-
-    res.json({
+    const responseData = {
       summary: {
-        totalEquity: parseFloat(totalEquity.toFixed(2)),
-        dailyPnL: parseFloat(dailyPnL.toFixed(2)),
-        openPnL: parseFloat(openPnL.toFixed(2)),
-        openPositions: openTrades.length,
-        closedTrades: closedTrades.length,
-        // "AI Decisions" card on the Home page — total AI (AQEA) trades all-time.
-        // Was missing from the response, so the card always showed 0.
-        totalTrades: trades.length,
-        winRate: parseFloat(winRate.toFixed(1)),
-        profitFactor: profitFactor === 99.9 ? "MAX" : parseFloat(profitFactor.toFixed(2)),
-        maxDrawdown: parseFloat(maxDrawdownPct.toFixed(2)),
-        currentExposure: parseFloat(exposure.toFixed(1)),
-        invested: {
-          total: parseFloat((investedSpot + investedFutures).toFixed(2)),
-          spot: parseFloat(investedSpot.toFixed(2)),
-          futures: parseFloat(investedFutures.toFixed(2)),
-        },
-        netPnL: {
-          total: parseFloat((netPnlSpot + netPnlFutures).toFixed(2)),
-          spot: parseFloat(netPnlSpot.toFixed(2)),
-          futures: parseFloat(netPnlFutures.toFixed(2)),
-        },
+        ...cryptoMetrics,
+        // Override with combined/filtered values
+        totalEquity: summarySource.totalEquity,
+        dailyPnL: summarySource.dailyPnL,
+        openPnL: summarySource.openPnL,
         inrRate,
         regime: {
            direction: regimeDirection,
@@ -227,6 +337,19 @@ router.get("/dashboard", async (req, res) => {
            forecast,
            riskState
         }
+      },
+      // ── NEW: Separate domain metrics ──
+      domains: {
+        crypto: {
+          ...cryptoMetrics,
+          currency: "USD",
+          inrRate,
+        },
+        indianStock: {
+          ...indianMetrics,
+          currency: "INR",
+          inrRate,
+        },
       },
       status: {
         aqea: AQEA_CONFIG.AQEA_ENABLED,
@@ -240,7 +363,10 @@ router.get("/dashboard", async (req, res) => {
         mongo: mongoose.connection.readyState === 1,
         node: true
       }
-    });
+    };
+
+    dashboardCache.set(cacheKey, { timestamp: Date.now(), data: responseData });
+    res.json(responseData);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -668,6 +794,10 @@ router.get("/pnl-analytics", async (req, res) => {
  */
 router.get("/header", async (req, res) => {
   try {
+    if (headerCache && Date.now() - headerCache.timestamp < 2000) {
+      return res.json(headerCache.data);
+    }
+
     const symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "SHIBUSDT"];
     const staleCutoffMs = 15 * 60 * 1000;
     const now = Date.now();
@@ -747,7 +877,98 @@ router.get("/header", async (req, res) => {
        };
     }));
 
+    headerCache = { timestamp: Date.now(), data };
     res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/aqea-ui/models/toggles
+ * Returns the active ON/OFF status for all 10 AI models in the AQEA engine.
+ */
+router.get("/models/toggles", async (req: express.Request, res: express.Response) => {
+  try {
+    const rawUserId = (req.query.userId as string) || (req as any).userId || "guest-user";
+    const userObjId = getSafeObjectId(rawUserId);
+    const settings = await Settings.findOne({ userId: userObjId });
+
+    res.json({
+      success: true,
+      toggles: {
+        cnn: settings?.cnnVotingEnabled ?? true,
+        ppo: settings?.ppoVotingEnabled ?? true,
+        transformer: settings?.transformerVotingEnabled ?? true,
+        mamba: settings?.mambaVotingEnabled ?? true,
+        lnn: settings?.lnnVotingEnabled ?? true,
+        orderFlow: settings?.orderFlowVotingEnabled ?? true,
+        smartMoney: settings?.smartMoneyVotingEnabled ?? true,
+        gayatri: settings?.gayatriVotingEnabled ?? true,
+        ohmkara: settings?.ohmkaraVotingEnabled ?? true,
+        lakshmi: settings?.lakshmiVotingEnabled ?? true,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/aqea-ui/models/toggles
+ * Updates user preferences for individual AI models ON/OFF status.
+ */
+router.post("/models/toggles", async (req: express.Request, res: express.Response) => {
+  try {
+    const rawUserId = (req.body.userId as string) || (req as any).userId || "guest-user";
+    const userObjId = getSafeObjectId(rawUserId);
+    const { modelKey, enabled } = req.body;
+
+    const updateFieldMap: Record<string, string> = {
+      cnn: "cnnVotingEnabled",
+      ppo: "ppoVotingEnabled",
+      transformer: "transformerVotingEnabled",
+      mamba: "mambaVotingEnabled",
+      lnn: "lnnVotingEnabled",
+      orderFlow: "orderFlowVotingEnabled",
+      smartMoney: "smartMoneyVotingEnabled",
+      gayatri: "gayatriVotingEnabled",
+      ohmkara: "ohmkaraVotingEnabled",
+      lakshmi: "lakshmiVotingEnabled",
+    };
+
+    const targetField = updateFieldMap[modelKey];
+    if (!targetField) {
+      return res.status(400).json({ error: `INVALID_MODEL_KEY: ${modelKey}` });
+    }
+
+    const settings = await Settings.findOneAndUpdate(
+      { userId: userObjId },
+      { $set: { [targetField]: Boolean(enabled) } },
+      { new: true, upsert: true }
+    );
+
+    // Also sync in-memory modelRegistry
+    const registryMap: Record<string, string[]> = {
+      cnn: ["cnn", "cnn-v1"],
+      ppo: ["ppo-agent", "ppo"],
+      transformer: ["transformer"],
+      mamba: ["mamba-hybrid", "mamba"],
+      lnn: ["xlstm", "lnn"],
+      gayatri: ["gayatri"],
+      ohmkara: ["ohmkara"],
+      lakshmi: ["lakshmi"],
+    };
+    const regIds = registryMap[modelKey] || [modelKey];
+    for (const regId of regIds) {
+      try { registry.setModelEnabled(regId, Boolean(enabled)); } catch {}
+    }
+
+    res.json({
+      success: true,
+      message: `Model ${modelKey} set to ${enabled ? "ON" : "OFF"}`,
+      settings,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

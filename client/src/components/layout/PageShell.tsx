@@ -20,7 +20,7 @@ export default function PageShell({ title, children }: Props) {
       data-testid="page-shell"
     >
       {title && (
-        <h2 className="text-phi-lg sm:text-phi-xl font-bold tracking-tight text-slate-800">
+        <h2 className="text-phi-lg sm:text-phi-xl font-bold tracking-tight text-slate-200">
           {title}
         </h2>
       )}

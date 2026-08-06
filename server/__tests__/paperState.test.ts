@@ -31,6 +31,7 @@ describe("PositionIndex (Map<symbol+mode, PaperPosition>)", () => {
       quantity: 1000,
       entryPrice: 0.15,
       tradeId: "trade-1",
+      accountType: "FUTURES",
     };
     setPosition(user, "DOGEUSDT", "PAPER", pos);
     const got = getPosition(user, "DOGEUSDT", "PAPER");
@@ -48,11 +49,11 @@ describe("PositionIndex (Map<symbol+mode, PaperPosition>)", () => {
     const user = uniqueUser();
     const paperPos: PaperPosition = {
       userId: user, symbol: "ETHUSDT", side: "BUY",
-      quantity: 5, entryPrice: 3000, tradeId: "t1",
+      quantity: 5, entryPrice: 3000, tradeId: "t1", accountType: "FUTURES",
     };
     const livePos: PaperPosition = {
       userId: user, symbol: "ETHUSDT", side: "SELL",
-      quantity: 2, entryPrice: 3100, tradeId: "t2",
+      quantity: 2, entryPrice: 3100, tradeId: "t2", accountType: "FUTURES",
     };
     setPosition(user, "ETHUSDT", "PAPER", paperPos);
     setPosition(user, "ETHUSDT", "LIVE", livePos);
@@ -66,11 +67,11 @@ describe("PositionIndex (Map<symbol+mode, PaperPosition>)", () => {
     const user = uniqueUser();
     setPosition(user, "DOGEUSDT", "PAPER", {
       userId: user, symbol: "DOGEUSDT", side: "BUY",
-      quantity: 500, entryPrice: 0.12, tradeId: "t3",
+      quantity: 500, entryPrice: 0.12, tradeId: "t3", accountType: "FUTURES",
     });
     setPosition(user, "SHIBUSDT", "PAPER", {
       userId: user, symbol: "SHIBUSDT", side: "BUY",
-      quantity: 100000, entryPrice: 0.00002, tradeId: "t4",
+      quantity: 100000, entryPrice: 0.00002, tradeId: "t4", accountType: "FUTURES",
     });
 
     removePosition(user, "DOGEUSDT", "PAPER");
@@ -85,7 +86,7 @@ describe("PositionIndex (Map<symbol+mode, PaperPosition>)", () => {
     symbols.forEach((s, i) => {
       setPosition(user, s, "PAPER", {
         userId: user, symbol: s, side: "BUY",
-        quantity: 100 * (i + 1), entryPrice: 1, tradeId: `t${i}`,
+        quantity: 100 * (i + 1), entryPrice: 1, tradeId: `t${i}`, accountType: "FUTURES",
       });
     });
 
@@ -100,11 +101,11 @@ describe("PositionIndex (Map<symbol+mode, PaperPosition>)", () => {
     const user = uniqueUser();
     setPosition(user, "DOGEUSDT", "PAPER", {
       userId: user, symbol: "DOGEUSDT", side: "BUY",
-      quantity: 100, entryPrice: 0.1, tradeId: "t-paper",
+      quantity: 100, entryPrice: 0.1, tradeId: "t-paper", accountType: "FUTURES",
     });
     setPosition(user, "DOGEUSDT", "LIVE", {
       userId: user, symbol: "DOGEUSDT", side: "SELL",
-      quantity: 50, entryPrice: 0.11, tradeId: "t-live",
+      quantity: 50, entryPrice: 0.11, tradeId: "t-live", accountType: "FUTURES",
     });
 
     const paperPositions = getOpenPositions(user, "PAPER");
@@ -114,11 +115,11 @@ describe("PositionIndex (Map<symbol+mode, PaperPosition>)", () => {
 });
 
 describe("Wallet (Map<asset, balance>)", () => {
-  /* ── TC-45: new user gets default 5000 USDT ───── */
-  test("TC-45: getWallet auto-seeds 5000 USDT for new user", () => {
+  /* ── TC-45: new user gets default 20000 USDT (starting paper funds) ───── */
+  test("TC-45: getWallet auto-seeds 20000 USDT for new user (starting paper funds)", () => {
     const user = uniqueUser();
     const w = getWallet(user, "PAPER");
-    expect(w.get("USDT")).toBe(5000);
+    expect(w.get("USDT")).toBe(20000);
   });
 
   /* ── TC-46: setWalletBalance updates correctly ── */

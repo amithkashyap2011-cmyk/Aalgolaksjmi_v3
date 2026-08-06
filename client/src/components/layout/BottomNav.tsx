@@ -1,48 +1,41 @@
-/*
- * ─── BottomNav ─────────────────────────────────────────
- *
- * Mobile-only bottom tab bar (visible below lg breakpoint).
- * Golden-ratio spacing, safe-area padding for notch devices.
- * 5 tabs: Home, AI, Orders, Wallet, Settings.
- */
 import { NavLink } from "react-router-dom";
-import clsx from "clsx";
+import { LayoutDashboard, Briefcase, Zap, PieChart, Settings } from "lucide-react";
 
 const TABS = [
-  { to: "/",         label: "Home",     icon: "🏠" },
-  { to: "/backtest", label: "AI",       icon: "🧠" },
-  { to: "/history",  label: "Orders",   icon: "📋" },
-  { to: "/wallet",   label: "Wallet",   icon: "💰" },
-  { to: "/settings", label: "Settings", icon: "⚙️" },
+  { to: "/",                label: "Home",      icon: LayoutDashboard, end: true },
+  { to: "/aqea/positions",  label: "Positions", icon: Briefcase },
+  { to: "/aqea/ai",         label: "AI",        icon: Zap },
+  { to: "/aqea/wallet",     label: "Portfolio", icon: PieChart },
+  { to: "/settings",        label: "Settings",  icon: Settings },
 ] as const;
 
 export default function BottomNav() {
   return (
     <nav
-      data-testid="bottom-nav"
-      className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-lg border-t border-slate-200/80 pb-[env(safe-area-inset-bottom)]"
-      aria-label="Mobile navigation"
+      className="flex lg:hidden"
+      style={{ height:56, background:"#0a1120", borderTop:"1px solid rgba(255,255,255,0.05)", alignItems:"stretch", flexShrink:0, paddingBottom:"env(safe-area-inset-bottom)" }}
     >
-      <div className="flex items-center justify-around h-16">
-        {TABS.map((t) => (
-          <NavLink
-            key={t.to}
-            to={t.to}
-            end={t.to === "/"}
-            className={({ isActive }) =>
-              clsx(
-                "flex flex-col items-center justify-center gap-0.5 w-16 h-full text-phi-xs font-medium transition-all duration-200",
-                isActive
-                  ? "text-aalgreen scale-110"
-                  : "text-slate-400 active:text-slate-600 active:scale-95",
-              )
-            }
-          >
-            <span className="text-lg leading-none">{t.icon}</span>
-            <span>{t.label}</span>
-          </NavLink>
-        ))}
-      </div>
+      {TABS.map((t) => (
+        <NavLink
+          key={t.to}
+          to={t.to}
+          end={"end" in t ? t.end : false}
+          style={({ isActive }) => ({
+            flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:2,
+            textDecoration:"none", color: isActive ? "#3b82f6" : "#475569",
+            fontSize:9, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.06em",
+            borderTop: isActive ? "2px solid #3b82f6" : "2px solid transparent",
+            transition:"all 0.15s",
+          })}
+        >
+          {({ isActive }) => (
+            <>
+              <t.icon size={18} style={{ flexShrink:0 }} strokeWidth={isActive ? 2.5 : 1.5} />
+              <span>{t.label}</span>
+            </>
+          )}
+        </NavLink>
+      ))}
     </nav>
   );
 }

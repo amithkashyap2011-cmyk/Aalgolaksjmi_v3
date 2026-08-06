@@ -28,7 +28,11 @@ import type { IndicatorSnapshot } from "./indicatorService.js";
 
 /* ── Normalise 0‑100 slider → 0‑1 ────────────────────── */
 
-export type NormalizedWeights = Record<keyof IBehaviorWeights, number>;
+export type NormalizedWeights = {
+  eagle: number; tiger: number; cheetah: number; fox: number;
+  tortoise: number; dog: number; owl: number; om_chant: number;
+  gayatri_mantra: number; aaryan: number; aayush: number; lakshmi_hybrid: number;
+};
 
 export function normalizeWeights(raw: IBehaviorWeights): NormalizedWeights {
   return {
@@ -39,9 +43,6 @@ export function normalizeWeights(raw: IBehaviorWeights): NormalizedWeights {
     tortoise: raw.tortoise / 100,
     dog:      raw.dog      / 100,
     owl:      raw.owl      / 100,
-    cow:      raw.cow      / 100,
-    spider:   raw.spider   / 100,
-    lion:     raw.lion     / 100,
     om_chant:       raw.om_chant       / 100,
     gayatri_mantra: raw.gayatri_mantra / 100,
     aaryan:         raw.aaryan         / 100,
@@ -64,6 +65,9 @@ export interface AnimalContext {
   htfTrendBullish: boolean;
   /** Recent short‑term volatility (stdDev / close) */
   volatilityRatio: number;
+  isOverdrive?: boolean;
+  /** User-configured max concurrent positions (fallback: 15) */
+  maxConcurrentPositions?: number;
 }
 
 /* ── Per‑animal scoring functions ─────────────────────── */
@@ -109,14 +113,20 @@ function foxScore(ctx: AnimalContext): number {
 
 /** Tortoise – conservative; fewer trades, penalise overtrading. */
 function tortoiseScore(ctx: AnimalContext): number {
-  if (ctx.tradesToday > 5) return -0.8;  // too many trades
-  if (ctx.tradesToday > 3) return -0.3;
+  const userMax = ctx.maxConcurrentPositions ?? 15;
+  const maxTrades = ctx.isOverdrive ? userMax * 3 : userMax;
+  if (ctx.tradesToday > maxTrades) return -0.8;  // too many trades
+  if (ctx.tradesToday > (ctx.isOverdrive ? userMax * 2 : Math.ceil(userMax * 0.67))) return -0.3;
   return 0.2; // calm = ok
 }
 
 /** Dog – discipline; daily‑loss cap enforcement. */
 function dogScore(ctx: AnimalContext): number {
   const used = Math.abs(ctx.dailyPnl);
+  // maxDailyLoss<=0 means no valid cap is configured — dividing by it would
+  // yield NaN (used===0) or Infinity (used>0), poisoning the weighted blend.
+  // Fail safe: treat any loss as breached, no loss as neutral.
+  if (ctx.maxDailyLoss <= 0) return used > 0 ? -1 : 0.1;
   const pct = used / ctx.maxDailyLoss;
   if (pct > 1) return -1;  // breached — block
   if (pct > 0.7) return -0.7;
@@ -135,35 +145,6 @@ function owlScore(ctx: AnimalContext): number {
   return 0;
 }
 
-/** Cow – steady growth; favours mean‑reversion to EMA21. */
-function cowScore(ctx: AnimalContext): number {
-  const ema21 = ctx.ind.ema21;
-  if (ema21 === null) return 0;
-  const dist = (ctx.ind.close - ema21) / ema21;
-  // Price near EMA21 = steady; far below = opportunity; far above = risk
-  if (dist < -0.02) return 0.5;
-  if (dist > 0.04) return -0.3;
-  return 0.2;
-}
-
-/** Spider – correlation‑aware. Simplified: penalise when too many opens. */
-function spiderScore(ctx: AnimalContext): number {
-  // In full implementation, check open positions across symbols.
-  // Simplified: penalise overtrading today (proxy for correlated bets).
-  if (ctx.tradesToday > 4) return -0.5;
-  return 0.1;
-}
-
-/** Lion – aggressive trend continuation; EMA alignment. */
-function lionScore(ctx: AnimalContext): number {
-  const { ema9, ema21, ema55 } = ctx.ind;
-  if (ema9 === null || ema21 === null || ema55 === null) return 0;
-  // Perfect bull alignment: EMA9 > EMA21 > EMA55
-  if (ema9 > ema21 && ema21 > ema55) return 0.9;
-  // Perfect bear alignment
-  if (ema9 < ema21 && ema21 < ema55) return -0.7;
-  return 0;
-}
 
 /** Om Chant – harmonic mean of RSI balance + Bollinger mean reversion. */
 function omChantScore(ctx: AnimalContext): number {
@@ -228,7 +209,11 @@ function lakshmiHybridScore(ctx: AnimalContext): number {
   // Consensus: average, boosted when all agree on direction
   const avg = (a + b + g) / 3;
   const allAgree = (a > 0 && b > 0 && g > 0) || (a < 0 && b < 0 && g < 0);
-  return +(allAgree ? avg * 1.3 : avg).toFixed(4);
+  const boosted = allAgree ? avg * 1.3 : avg;
+  // The 1.3x consensus boost can push |avg| past the documented [-1, 1]
+  // range (e.g. avg=1.0 → 1.3) — clamp to keep this score on the same scale
+  // as every other animal score before it enters the weighted blend.
+  return +Math.max(-1, Math.min(1, boosted)).toFixed(4);
 }
 
 /* ── Master blend ─────────────────────────────────────── */
@@ -241,9 +226,6 @@ export interface AnimalContributions {
   tortoise: number;
   dog: number;
   owl: number;
-  cow: number;
-  spider: number;
-  lion: number;
   om_chant: number;
   gayatri_mantra: number;
   aaryan: number;
@@ -263,7 +245,7 @@ export function blendAnimalScores(
   weights: NormalizedWeights,
   ctx: AnimalContext,
 ): { score: number; contributions: AnimalContributions } {
-  const scorers: Record<keyof IBehaviorWeights, (c: AnimalContext) => number> = {
+  const scorers: Partial<Record<keyof IBehaviorWeights, (c: AnimalContext) => number>> = {
     eagle: eagleScore,
     tiger: tigerScore,
     cheetah: cheetahScore,
@@ -271,9 +253,6 @@ export function blendAnimalScores(
     tortoise: tortoiseScore,
     dog: dogScore,
     owl: owlScore,
-    cow: cowScore,
-    spider: spiderScore,
-    lion: lionScore,
     om_chant: omChantScore,
     gayatri_mantra: gayatriMantraScore,
     aaryan: aaryanScore,
@@ -285,10 +264,12 @@ export function blendAnimalScores(
   let weightedSum = 0;
   const contributions = {} as AnimalContributions;
 
-  for (const animal of Object.keys(scorers) as (keyof IBehaviorWeights)[]) {
-    const w = weights[animal];
-    const raw = scorers[animal](ctx);
-    contributions[animal] = +(w * raw).toFixed(4);
+  for (const animal of Object.keys(scorers) as (keyof typeof scorers)[]) {
+    const fn = scorers[animal];
+    if (!fn) continue;
+    const w = (weights as Record<string, number>)[animal] ?? 0;
+    const raw = fn(ctx);
+    (contributions as unknown as Record<string, number>)[animal] = +(w * raw).toFixed(4);
     weightedSum += w * raw;
     totalWeight += w;
   }

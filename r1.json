@@ -1,0 +1,1 @@
+{"error":"Trade validation failed: finalScore: Path `finalScore` is required., coreScore: Path `coreScore` is required., shadowVotes: Path `shadowVotes` is required., authorizedVotes: Path `authorizedVotes` is required., decisionPath: Path `decisionPath` is required., entrySource: Path `entrySource` is required."}

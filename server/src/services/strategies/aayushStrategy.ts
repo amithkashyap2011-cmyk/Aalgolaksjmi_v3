@@ -151,13 +151,33 @@ export function evaluateAayush(ind: IndicatorSnapshot): StrategyResult {
     ? (ind.atr14 / ind.close) * 100
     : 2.5;
 
+  let slPct = +(atrPct * 2.0).toFixed(2);
+  let tpPct = +(atrPct * 2.5).toFixed(2);
+  const trailPct = +(atrPct * 1.0).toFixed(2);
+
+  if (ind.fibLevels && ind.close > 0) {
+    const { low, high } = ind.fibLevels;
+    // Stop loss placed below the swing low
+    const fibSl = ((ind.close - low) / ind.close) * 100;
+    // Take profit targeted at the swing high (resistance)
+    const fibTp = ((high - ind.close) / ind.close) * 100;
+
+    if (fibSl > 0.5 && fibSl < 5.0) {
+      slPct = +(slPct * 0.5 + fibSl * 0.5).toFixed(2);
+    }
+    if (fibTp > 1.0 && fibTp < 10.0) {
+      tpPct = +(tpPct * 0.5 + fibTp * 0.5).toFixed(2);
+    }
+    reasons.push(`Fibonacci-adjusted risk bounds: SL=${slPct}% (Swing Low: ${low.toFixed(4)}), TP=${tpPct}% (Swing High: ${high.toFixed(4)})`);
+  }
+
   return {
     strategy: "AAYUSH",
     signal,
     confidence: Math.min(1, confidence),
-    slPct: +(atrPct * 2.0).toFixed(2),
-    tpPct: +(atrPct * 2.5).toFixed(2),
-    trailPct: +(atrPct * 1.0).toFixed(2),
+    slPct,
+    tpPct,
+    trailPct,
     scaleIn,
     reasons,
   };

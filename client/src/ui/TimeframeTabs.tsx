@@ -18,8 +18,8 @@ export default function TimeframeTabs() {
           className={clsx(
             "px-3 py-1.5 rounded-phi text-phi-xs font-medium transition-all duration-200",
             f === timeframe
-              ? "bg-slate-800 text-white shadow-sm"
-              : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+              ? "bg-indigo-600 text-white shadow-md border border-indigo-400/50"
+              : "bg-slate-900/60 text-slate-400 border border-white/5 hover:bg-slate-800 hover:text-slate-200",
           )}
         >
           {f}

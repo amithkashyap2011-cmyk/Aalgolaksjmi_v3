@@ -1,0 +1,63 @@
+# AALGOLAKSHMI V3 — monitoring stack (Prometheus + Grafana + Alertmanager)
+#
+# This is deployment tooling for the operator, not something the app
+# depends on. The app already works and exposes real data at /metrics and
+# a real webhook path (ALERT_WEBHOOK_URL) with neither of these containers
+# running — this stack is what turns that raw data into dashboards and
+# on-call paging.
+#
+# Usage:
+#   docker compose -f docker-compose.monitoring.yml up -d
+#
+# Then:
+#   Prometheus:   http://localhost:9090
+#   Grafana:      http://localhost:3000  (default admin/admin, change it)
+#   Alertmanager: http://localhost:9093
+#
+# NOT actually run in this environment (no Docker daemon available here) —
+# the YAML syntax and service wiring below is real and complete, but
+# treat this as authored-and-unverified until you run it once yourself.
+version: "3.8"
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aalgo-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # Lets the container reach the app running directly on the host
+      # (this app is not itself containerized in this deployment).
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aalgo-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=change_me_on_first_login
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: aalgo-alertmanager
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+volumes:
+  grafana-data:

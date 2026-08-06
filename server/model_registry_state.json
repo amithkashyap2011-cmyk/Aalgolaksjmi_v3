@@ -1,0 +1,37 @@
+[
+  {
+    "id": "cnn",
+    "enabled": true,
+    "weight": 0.3
+  },
+  {
+    "id": "ppo-agent",
+    "enabled": true,
+    "weight": 0.25
+  },
+  {
+    "id": "transformer",
+    "enabled": true,
+    "weight": 0.25
+  },
+  {
+    "id": "mamba-hybrid",
+    "enabled": true,
+    "weight": 0
+  },
+  {
+    "id": "xgboost",
+    "enabled": true,
+    "weight": 0.3
+  },
+  {
+    "id": "lightgbm",
+    "enabled": true,
+    "weight": 0.2
+  },
+  {
+    "id": "xlstm",
+    "enabled": true,
+    "weight": 0.2
+  }
+]

@@ -1,0 +1,59 @@
+{
+  "timestamp": "2026-06-16T21:50:00.000Z",
+  "services": {
+    "aqea-server": {
+      "name": "aqea-server",
+      "pid": 11482,
+      "port": 9991,
+      "status": "READY",
+      "endpoint": "http://127.0.0.1:9991",
+      "database": "mongodb://127.0.0.1:27017/aalgolakshmi"
+    },
+    "aqea-quant": {
+      "name": "quant_engine",
+      "pid": 11483,
+      "port": 59352,
+      "status": "Online",
+      "endpoint": "http://127.0.0.1:59352",
+      "models": {
+        "cnn": "HEALTHY",
+        "ppo": "HEALTHY",
+        "transformer": "HEALTHY",
+        "mamba": "NOT_LOADED"
+      }
+    }
+  },
+  "databases": {
+    "mongodb": {
+      "uri": "mongodb://127.0.0.1:27017/aalgolakshmi",
+      "status": "connected"
+    }
+  },
+  "inconsistencies": [
+    {
+      "type": "PORT_MISMATCH",
+      "artifact": "qport.tmp",
+      "expected": 50627,
+      "actual": 59352,
+      "impact": "Documentation/artifacts out of sync with runtime reality."
+    },
+    {
+      "type": "MISSING_ENDPOINT",
+      "service": "quant_engine",
+      "endpoint": "/api/v1/analyze-spread",
+      "requested_by": "hybridEngine.ts",
+      "actual": "Not Found (404)",
+      "impact": "Hybrid evaluation logic is broken/partially offline."
+    },
+    {
+      "type": "MODEL_DEGRADED",
+      "model": "mamba",
+      "status": "NOT_LOADED",
+      "impact": "Mamba-based research/predictions are failing and falling back to HOLD."
+    }
+  ],
+  "runtime_observations": {
+    "heartbeat_timeouts": "Frequent 'Service quant_engine heartbeat timeout' in auto_trade.log.",
+    "risk_rejections": "Frequent '[AQEA_RISK_REJECT] MAX_POSITIONS_BREACH: 7' in auto_trade.log."
+  }
+}

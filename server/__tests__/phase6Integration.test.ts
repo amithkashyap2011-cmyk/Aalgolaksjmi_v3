@@ -1,26 +1,21 @@
 /*
  * ─── Phase 6 Server Tests · Integration + Health ──────
  *
- * TC-P6-S01 to TC-P6-S20  (20 tests)
+ * TC-P6-S10 to TC-P6-S20  (11 tests)
  *
  * Covers:
- *   • Agent decision types & FusionMeta shape
  *   • Checklist spoke counts
  *   • Indicator bounds
  *   • ML/DL service stub shapes
  *   • Behaviour model weight normalization
- *   • End-to-end decision pipeline with mock context
+ *
+ * The original TC-P6-S01-S09 ("Agent Decision Pipeline") tested
+ * agentService.ts's scoreLong/scoreExit/scoreNoTrade/decideAction and the
+ * Decision/FusionMeta/Action types — all removed; agentService.ts now only
+ * builds context, and AQEAEngine makes the actual decision (see
+ * __tests__/agentService.test.ts for buildContext coverage, and
+ * __tests__/aqea/engine.integration.test.ts for the decision pipeline).
  */
-import {
-  type AgentContext,
-  type Decision,
-  type FusionMeta,
-  type Action,
-  scoreLong,
-  scoreExit,
-  scoreNoTrade,
-  decideAction,
-} from "../src/services/agentService.js";
 import {
   buildChecklist,
   type ChecklistInput,
@@ -37,9 +32,10 @@ import {
   type NormalizedWeights,
   type AnimalContext,
 } from "../src/services/behaviourModel.js";
-import { type MLPrediction, STUB_ML_PREDICTION } from "../src/services/mlModelService.js";
-import { type DLPrediction, STUB_DL_PREDICTION } from "../src/services/dlModelService.js";
+import { STUB_ML_PREDICTION } from "../src/services/mlModelService.js";
+import { STUB_DL_PREDICTION } from "../src/services/dlModelService.js";
 import type { IRiskConfig, IBehaviorWeights } from "../src/models/Settings.js";
+import { createMockRiskConfig } from "../src/utils/testHelpers";
 
 /* ── Helpers ──────────────────────────────────────────── */
 
@@ -62,31 +58,25 @@ function makeSnapshot(override: Partial<IndicatorSnapshot> = {}): IndicatorSnaps
 }
 
 function makeRisk(override: Partial<IRiskConfig> = {}): IRiskConfig {
-  return {
-    maxDailyLoss: 100,
-    maxPositionSizePct: 21,
-    defaultSL: 2,
-    defaultTP: 4,
+  return createMockRiskConfig({
     trailingSL: 1.5,
     ...override,
-  };
+  });
 }
 
 function makeWeights(): NormalizedWeights {
+  // cow/spider/lion removed from scoring; their weight redistributed to eagle/aaryan/lakshmi_hybrid
   return normalizeWeights({
-    eagle: 10,
+    eagle: 20,
     tiger: 8,
     cheetah: 7,
     fox: 6,
     tortoise: 6,
     dog: 5,
     owl: 8,
-    cow: 5,
-    spider: 5,
-    lion: 10,
     om_chant: 5,
     gayatri_mantra: 5,
-    aaryan: 7,
+    aaryan: 17,
     aayush: 7,
     lakshmi_hybrid: 6,
   } as IBehaviorWeights);
@@ -106,113 +96,9 @@ function makeBars(n = 200): OHLC[] {
   return bars;
 }
 
-function makeMLPrediction(override: Partial<MLPrediction> = {}): MLPrediction {
-  return {
-    profitProbability: 0.65,
-    expectedReturn: 0.012,
-    confidence: 0.7,
-    modelName: "test-ml-v1",
-    ...override,
-  };
-}
-
-function makeDLPrediction(override: Partial<DLPrediction> = {}): DLPrediction {
-  return {
-    directionScore: 0.7,
-    predictedMove: 0.008,
-    confidence: 0.65,
-    modelName: "test-dl-v1",
-    ...override,
-  };
-}
-
-function makeCtx(override: Partial<AgentContext> = {}): AgentContext {
-  const bars = makeBars(200);
-  const ind = makeSnapshot();
-  return {
-    symbol: "DOGEUSDT",
-    mode: "PAPER",
-    userId: "test-user",
-    bars,
-    ind,
-    weights: makeWeights(),
-    risk: makeRisk(),
-    dailyPnl: 0,
-    tradesToday: 0,
-    openPositionCount: 0,
-    htfTrendBullish: true,
-    volatilityRatio: 0.5,
-    animalBlend: { score: 0.65, contributions: {} as any },
-    mlPrediction: makeMLPrediction(),
-    dlPrediction: makeDLPrediction(),
-    ...override,
-  };
-}
-
 /* ═══════════════════════════════════════════════════════
  *  Tests
  * ═══════════════════════════════════════════════════════ */
-
-describe("Phase 6 · Agent Decision Pipeline", () => {
-  it("TC-P6-S01  scoreLong returns 0-1 range", () => {
-    const ctx = makeCtx();
-    const s = scoreLong(ctx);
-    expect(s).toBeGreaterThanOrEqual(0);
-    expect(s).toBeLessThanOrEqual(1);
-  });
-
-  it("TC-P6-S02  scoreExit returns 0-1 range", () => {
-    const s = scoreExit(makeCtx());
-    expect(s).toBeGreaterThanOrEqual(0);
-    expect(s).toBeLessThanOrEqual(1);
-  });
-
-  it("TC-P6-S03  scoreNoTrade returns 0-1 range", () => {
-    const s = scoreNoTrade(makeCtx());
-    expect(s).toBeGreaterThanOrEqual(0);
-    expect(s).toBeLessThanOrEqual(1);
-  });
-
-  it("TC-P6-S04  decideAction returns valid Action enum", () => {
-    const d = decideAction(makeCtx());
-    expect(["LONG", "EXIT", "NO_TRADE"]).toContain(d.action);
-  });
-
-  it("TC-P6-S05  Decision includes FusionMeta with all fields", () => {
-    const d = decideAction(makeCtx());
-    expect(d.fusion).toBeDefined();
-    expect(typeof d.fusion.effRuleWeight).toBe("number");
-    expect(typeof d.fusion.effMLWeight).toBe("number");
-    expect(typeof d.fusion.effDLWeight).toBe("number");
-    expect(typeof d.fusion.modelsAgree).toBe("boolean");
-    expect(typeof d.fusion.agreementBonus).toBe("number");
-  });
-
-  it("TC-P6-S06  Fusion weights sum to ≈1", () => {
-    const d = decideAction(makeCtx());
-    const sum = d.fusion.effRuleWeight + d.fusion.effMLWeight + d.fusion.effDLWeight;
-    expect(sum).toBeCloseTo(1.0, 1);
-  });
-
-  it("TC-P6-S07  Decision ML/DL fields propagated", () => {
-    const d = decideAction(makeCtx());
-    expect(d.ml).toBeDefined();
-    expect(d.dl).toBeDefined();
-    expect(typeof d.ml.profitProbability).toBe("number");
-    expect(typeof d.dl.directionScore).toBe("number");
-  });
-
-  it("TC-P6-S08  Overbought RSI pushes toward EXIT", () => {
-    const base = decideAction(makeCtx({ ind: makeSnapshot({ rsi14: 50 }) }));
-    const ob = decideAction(makeCtx({ ind: makeSnapshot({ rsi14: 85 }) }));
-    expect(ob.confidenceExit).toBeGreaterThanOrEqual(base.confidenceExit);
-  });
-
-  it("TC-P6-S09  Oversold RSI keeps confidenceLong > 0", () => {
-    const os = decideAction(makeCtx({ ind: makeSnapshot({ rsi14: 22 }) }));
-    expect(os.confidenceLong).toBeGreaterThan(0);
-  });
-});
 
 describe("Phase 6 · Checklist Integration", () => {
   it("TC-P6-S10  buildChecklist returns 24 items", () => {

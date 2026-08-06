@@ -2,8 +2,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const backendTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:9991';
+
 export default defineConfig({
   plugins: [react()],
+  esbuild: false,
   test: {
     globals: true,
     environment: 'jsdom',
@@ -12,17 +15,23 @@ export default defineConfig({
     css: false,
   },
   server: {
-    port: 5173,
+    host: '0.0.0.0',
+    port: 9994,
     proxy: {
-      '/auth':    { target: 'http://localhost:5050', changeOrigin: true },
-      '/settings':{ target: 'http://localhost:5050', changeOrigin: true },
-      '/apikeys': { target: 'http://localhost:5050', changeOrigin: true },
-      '/trading': { target: 'http://localhost:5050', changeOrigin: true },
-      '/backtest':{ target: 'http://localhost:5050', changeOrigin: true },
-      '/agent':   { target: 'http://localhost:5050', changeOrigin: true },
-      '/wallet':  { target: 'http://localhost:5050', changeOrigin: true },
-      '/health':  { target: 'http://localhost:5050', changeOrigin: true },
-      '/socket.io': { target: 'http://localhost:5050', changeOrigin: true, ws: true },
+      '/auth':          { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/settings':      { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/apikeys':       { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/trading':       { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/backtest':      { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/agent':         { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/wallet':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/models':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/system':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/health':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/indian-market': { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/api':           { target: backendTarget, changeOrigin: true },
+      '/aqea-ui':       { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/socket.io':     { target: backendTarget, changeOrigin: true, ws: true },
     },
   },
 });

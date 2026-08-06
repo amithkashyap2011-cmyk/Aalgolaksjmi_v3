@@ -13,7 +13,7 @@ import {
   evaluateAayush,
   evaluateGayatri,
   evaluateLakshmi,
-  type StrategyName,
+  evaluateOhmkara,
 } from "../services/strategies/index.js";
 
 const router = Router();
@@ -37,13 +37,32 @@ function klineToOHLC(k: binance.Kline): OHLC {
   };
 }
 
+import { evaluateHybridSignal } from "../services/hybridEngine.js";
+
 /** Run the selected strategy on an IndicatorSnapshot, return signal + SL/TP. */
-function evaluateStrategy(
+async function evaluateStrategy(
   strategyName: string,
   bars: OHLC[],
-): { signal: string; slPct: number; tpPct: number } {
+): Promise<{ signal: string; slPct: number; tpPct: number }> {
   const ind = computeSnapshot(bars);
-  switch (strategyName.toUpperCase() as StrategyName) {
+
+  // HYBRID AKS FALLBACK
+  if (strategyName === "HYBRID_AKS") {
+    // Build dummy hybrid market context
+    const hybridCtx = {
+       ind,
+       htfTrendBullish: ind.ema9 !== null && ind.ema21 !== null ? ind.ema9 > ind.ema21 : true,
+       volatilityRatio: ind.stdDev20 !== null && ind.close > 0 ? ind.stdDev20 / ind.close : 0.01,
+       tradesToday: 0,
+       dailyPnl: 0,
+       risk: { maxDailyLoss: 100 }
+    };
+    const hybridSig = await evaluateHybridSignal(hybridCtx, "BACKTEST_USER");
+    const mappedSignal = hybridSig.direction === "LONG" ? "BUY" : hybridSig.direction === "SHORT" ? "SELL" : "NEUTRAL";
+    return { signal: mappedSignal, slPct: 2, tpPct: 4 };
+  }
+
+  switch (strategyName.toUpperCase()) {
     case "AARYAN": {
       const r = evaluateAaryan(ind);
       return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
@@ -56,12 +75,54 @@ function evaluateStrategy(
       const r = evaluateGayatri(ind);
       return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
     }
+    case "OHMKARA": {
+      const r = evaluateOhmkara(ind);
+      return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
+    }
+    case "ENSEMBLE": {
+      return evaluateEnsembleBacktest(bars);
+    }
     case "LAKSHMI":
     default: {
       const r = evaluateLakshmi(ind);
       return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
     }
   }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function evaluateEnsembleBacktest(bars: OHLC[]): { signal: string; slPct: number; tpPct: number } {
+  const ind = computeSnapshot(bars);
+  const close = ind.close || 1;
+  const trendScore = ind.ema9 !== null && ind.ema21 !== null
+    ? clamp((ind.ema9 - ind.ema21) / Math.max(1, Math.abs(ind.ema21)), -0.2, 0.2)
+    : 0;
+  const macdHist = ind.macd?.histogram ?? 0;
+  const momentumScore = clamp(macdHist / Math.max(10, close), -0.08, 0.08);
+  const rsiBalance = ind.rsi14 !== null ? clamp(1 - Math.abs(ind.rsi14 - 50) / 50, 0, 1) : 0.5;
+  const adxScore = ind.adx14 !== null ? clamp(ind.adx14 / 40, 0, 1) : 0.5;
+  const volatility = ind.stdDev20 !== null ? clamp(ind.stdDev20 / close, 0, 0.2) : 0.02;
+
+  const longProb = clamp(
+    0.50 + trendScore * 0.55 + momentumScore * 0.6 + (rsiBalance - 0.5) * 0.12 + (adxScore - 0.5) * 0.06,
+    0.05,
+    0.95,
+  );
+
+  const confidence = 0.45 + Math.abs(longProb - 0.5) * 0.85;
+  const signal = longProb > 0.62 && confidence >= 0.55
+    ? "BUY"
+    : longProb < 0.38 && confidence >= 0.55
+      ? "SELL"
+      : "NEUTRAL";
+
+  const slPct = clamp((0.008 + volatility * 0.4) * 100, 0.6, 1.4);
+  const tpPct = clamp((0.012 + volatility * 0.7) * 100, 1.0, 2.8);
+
+  return { signal, slPct, tpPct };
 }
 
 /* ── run backtest ─────────────────────────────────────── */
@@ -114,56 +175,73 @@ router.post("/run", authGuard, async (req: AuthRequest, res) => {
     // Minimum 55 bars for indicators to warm up (EMA55)
     const warmup = 55;
 
+    const slippagePct = 0.0002; // 0.02% slippage (2 bps)
+    const feePct = 0.0004; // 0.04% perpetual futures taker fee
+
     for (let i = warmup; i < bars.length; i++) {
-      const windowBars = bars.slice(Math.max(0, i - 200), i + 1);
-      const { signal, slPct, tpPct } = evaluateStrategy(primaryStrategy, windowBars);
-      const close = bars[i].close;
+      const windowBars = bars.slice(Math.max(0, i - 200), i);
+      if (windowBars.length < 50) continue; // safety check for strategy indicators
+
+      const { signal, slPct, tpPct } = await evaluateStrategy(primaryStrategy, windowBars);
+      const openPrice = bars[i].open;
 
       if (signal === "BUY" || signal === "STRONG_BUY") {
         // Allocate 10% of equity per trade
-        const qty = (equity * 0.1) / close;
-        const slPrice = close * (1 - slPct / 100);
-        const tpPrice = close * (1 + tpPct / 100);
+        const actualEntryPrice = openPrice * (1 + slippagePct);
+        const qty = (equity * 0.1) / actualEntryPrice;
+        const entryFee = (equity * 0.1) * feePct;
 
-        // Walk forward to find exit
-        let exitPrice = close;
+        const slPrice = openPrice * (1 - slPct / 100);
+        const tpPrice = openPrice * (1 + tpPct / 100);
+
+        // Walk forward to find exit, starting from entry bar i
+        let exitPrice = bars[i].close;
         let exitIdx = i;
-        for (let j = i + 1; j < Math.min(i + 20, bars.length); j++) {
+        for (let j = i; j < Math.min(i + 20, bars.length); j++) {
           if (bars[j].low <= slPrice) { exitPrice = slPrice; exitIdx = j; break; }
           if (bars[j].high >= tpPrice) { exitPrice = tpPrice; exitIdx = j; break; }
           exitPrice = bars[j].close;
           exitIdx = j;
         }
 
-        const pnl = qty * (exitPrice - close);
+        const actualExitPrice = exitPrice * (1 - slippagePct);
+        const exitFee = (qty * actualExitPrice) * feePct;
+        const pnl = qty * (actualExitPrice - actualEntryPrice) - (entryFee + exitFee);
+
         equity += pnl;
         if (pnl > 0) wins++; else losses++;
         btTrades.push({
           entryTs: klines[i].openTime, exitTs: klines[exitIdx].openTime,
-          entryPrice: close, exitPrice, side: "BUY", pnl,
+          entryPrice: openPrice, exitPrice, side: "BUY", pnl,
         });
         // Skip past exit bar to avoid overlapping trades
         i = exitIdx;
       } else if (signal === "SELL" || signal === "STRONG_SELL") {
-        const qty = (equity * 0.1) / close;
-        const slPrice = close * (1 + slPct / 100);
-        const tpPrice = close * (1 - tpPct / 100);
+        const actualEntryPrice = openPrice * (1 - slippagePct);
+        const qty = (equity * 0.1) / actualEntryPrice;
+        const entryFee = (equity * 0.1) * feePct;
 
-        let exitPrice = close;
+        const slPrice = openPrice * (1 + slPct / 100);
+        const tpPrice = openPrice * (1 - tpPct / 100);
+
+        let exitPrice = bars[i].close;
         let exitIdx = i;
-        for (let j = i + 1; j < Math.min(i + 20, bars.length); j++) {
+        for (let j = i; j < Math.min(i + 20, bars.length); j++) {
           if (bars[j].high >= slPrice) { exitPrice = slPrice; exitIdx = j; break; }
           if (bars[j].low <= tpPrice) { exitPrice = tpPrice; exitIdx = j; break; }
           exitPrice = bars[j].close;
           exitIdx = j;
         }
 
-        const pnl = qty * (close - exitPrice);
+        const actualExitPrice = exitPrice * (1 + slippagePct);
+        const exitFee = (qty * actualExitPrice) * feePct;
+        const pnl = qty * (actualEntryPrice - actualExitPrice) - (entryFee + exitFee);
+
         equity += pnl;
         if (pnl > 0) wins++; else losses++;
         btTrades.push({
           entryTs: klines[i].openTime, exitTs: klines[exitIdx].openTime,
-          entryPrice: close, exitPrice, side: "SELL", pnl,
+          entryPrice: openPrice, exitPrice, side: "SELL", pnl,
         });
         i = exitIdx;
       }

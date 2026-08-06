@@ -130,13 +130,34 @@ export function evaluateAaryan(ind: IndicatorSnapshot): StrategyResult {
     ? (ind.atr14 / ind.close) * 100
     : 2.0; // default 2%
 
+  let slPct = +(atrPct * 1.5).toFixed(2);     // 1.5 × ATR
+  let tpPct = +(atrPct * 3.0).toFixed(2);     // 3.0 × ATR (2:1 R:R)
+  const trailPct = +(atrPct * 0.5).toFixed(2);  // 0.5 × ATR trail
+
+  if (ind.fibLevels && ind.close > 0) {
+    const { low, high } = ind.fibLevels;
+    // Stop loss placed below the swing low
+    const fibSl = ((ind.close - low) / ind.close) * 100;
+    // Take profit targeted at the 1.382 Fibonacci extension
+    const targetVal = low + (high - low) * 1.382;
+    const fibTp = ((targetVal - ind.close) / ind.close) * 100;
+
+    if (fibSl > 0.5 && fibSl < 5.0) {
+      slPct = +(slPct * 0.5 + fibSl * 0.5).toFixed(2);
+    }
+    if (fibTp > 1.0 && fibTp < 10.0) {
+      tpPct = +(tpPct * 0.5 + fibTp * 0.5).toFixed(2);
+    }
+    reasons.push(`Fibonacci-adjusted risk bounds: SL=${slPct}% (Swing Low: ${low.toFixed(4)}), TP=${tpPct}% (138.2% Ext: ${targetVal.toFixed(4)})`);
+  }
+
   return {
     strategy: "AARYAN",
     signal,
     confidence: Math.min(1, confidence),
-    slPct: +(atrPct * 1.5).toFixed(2),     // 1.5 × ATR
-    tpPct: +(atrPct * 3.0).toFixed(2),     // 3.0 × ATR (2:1 R:R)
-    trailPct: +(atrPct * 0.5).toFixed(2),  // 0.5 × ATR trail
+    slPct,
+    tpPct,
+    trailPct,
     reasons,
   };
 }

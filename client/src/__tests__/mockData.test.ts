@@ -28,9 +28,9 @@ import {
 } from "../mock/data";
 
 describe("Mock Data – Symbols & Timeframes", () => {
-  test("P2-01: SYMBOLS contains exactly DOGE, SHIB, ETH, ADA, BNB pairs", () => {
-    expect(SYMBOLS).toEqual(["DOGEUSDT", "SHIBUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT"]);
-    expect(SYMBOLS).toHaveLength(5);
+  test("P2-01: SYMBOLS contains the 8 supported trading pairs", () => {
+    expect(SYMBOLS).toEqual(["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "SHIBUSDT", "XRPUSDT"]);
+    expect(SYMBOLS).toHaveLength(8);
   });
 
   test("P2-02: TIMEFRAMES contains 1m, 5m, 15m, 1h, 4h, 1d", () => {
@@ -81,8 +81,8 @@ describe("Mock Data – Candles & Fibonacci", () => {
 });
 
 describe("Mock Data – Trading Data", () => {
-  test("P2-08: MOCK_WALLET has initial balance of 5000", () => {
-    expect(MOCK_WALLET.balance).toBe(5000);
+  test("P2-08: MOCK_WALLET starts at a zero baseline (deposit-driven, not pre-funded)", () => {
+    expect(MOCK_WALLET.balance).toBe(0);
   });
 
   test("P2-09: MOCK_POSITIONS has at least 1 position with required fields", () => {
@@ -108,8 +108,8 @@ describe("Mock Data – Trading Data", () => {
     expect(t).toHaveProperty("time");
   });
 
-  test("P2-11: MOCK_ALERTS has 10 alerts with GREEN/AMBER/RED levels", () => {
-    expect(MOCK_ALERTS).toHaveLength(10);
+  test("P2-11: MOCK_ALERTS has 11 alerts with GREEN/AMBER/RED levels", () => {
+    expect(MOCK_ALERTS).toHaveLength(11);
     const levels = new Set(MOCK_ALERTS.map((a) => a.level));
     expect(levels.has("GREEN")).toBe(true);
     expect(levels.has("AMBER")).toBe(true);
@@ -157,8 +157,8 @@ describe("Mock Data – AI & Behaviour", () => {
     }
   });
 
-  test("P2-16: BACKTEST_STRATEGIES has 11 strategies including new core ones", () => {
-    expect(BACKTEST_STRATEGIES).toHaveLength(11);
+  test("P2-16: BACKTEST_STRATEGIES has 12 strategies including new core ones", () => {
+    expect(BACKTEST_STRATEGIES).toHaveLength(12);
     expect(BACKTEST_STRATEGIES).toContain("Lakshmi Master");
     expect(BACKTEST_STRATEGIES).toContain("Aaryan");
     expect(BACKTEST_STRATEGIES).toContain("Aayush");
@@ -176,9 +176,9 @@ describe("Mock Data – AI & Behaviour", () => {
 });
 
 describe("Mock Data – Core Strategies", () => {
-  test("P2-S1: CORE_STRATEGIES has 4 strategies (Lakshmi, Aaryan, Aayush, Gayatri)", () => {
-    expect(CORE_STRATEGIES).toHaveLength(4);
-    expect(CORE_STRATEGIES.map((s) => s.id)).toEqual(["LAKSHMI", "AARYAN", "AAYUSH", "GAYATRI"]);
+  test("P2-S1: CORE_STRATEGIES has 6 strategies (Lakshmi, Aaryan, Aayush, Gayatri, Ohmkara, Saraswati)", () => {
+    expect(CORE_STRATEGIES).toHaveLength(6);
+    expect(CORE_STRATEGIES.map((s) => s.id)).toEqual(["LAKSHMI", "AARYAN", "AAYUSH", "GAYATRI", "OHMKARA", "SARASWATI"]);
   });
 
   test("P2-S2: Each strategy has emoji, tagline, description, color", () => {
@@ -191,8 +191,8 @@ describe("Mock Data – Core Strategies", () => {
     }
   });
 
-  test("P2-S3: SYMBOL_LABELS maps all 5 symbols to short names", () => {
-    expect(Object.keys(SYMBOL_LABELS)).toHaveLength(5);
+  test("P2-S3: SYMBOL_LABELS maps all 8 symbols to short names", () => {
+    expect(Object.keys(SYMBOL_LABELS)).toHaveLength(8);
     expect(SYMBOL_LABELS.DOGEUSDT).toBe("DOGE");
     expect(SYMBOL_LABELS.SHIBUSDT).toBe("SHIB");
     expect(SYMBOL_LABELS.ETHUSDT).toBe("ETH");
@@ -201,7 +201,7 @@ describe("Mock Data – Core Strategies", () => {
   test("P2-S4: MOCK_POSITIONS have strategy and sl/tp fields", () => {
     for (const p of MOCK_POSITIONS) {
       expect(p.strategy).toBeDefined();
-      expect(["LAKSHMI", "AARYAN", "AAYUSH", "GAYATRI"]).toContain(p.strategy);
+      expect(["LAKSHMI", "AARYAN", "AAYUSH", "GAYATRI", "OHMKARA", "SARASWATI"]).toContain(p.strategy);
       expect(typeof p.sl).toBe("number");
       expect(typeof p.tp).toBe("number");
     }
@@ -239,10 +239,10 @@ describe("Mock Data – Gayatri 24-Signal", () => {
     expect(signals.filter((s) => s.octave === "OM")).toHaveLength(8);
   });
 
-  test("P2-G4: generateMockStrategyEvals returns 4 evaluations per symbol", () => {
+  test("P2-G4: generateMockStrategyEvals returns 6 evaluations per symbol", () => {
     const evals = generateMockStrategyEvals("DOGEUSDT");
-    expect(evals).toHaveLength(4);
-    expect(evals.map((e) => e.id)).toEqual(["LAKSHMI", "AARYAN", "AAYUSH", "GAYATRI"]);
+    expect(evals).toHaveLength(6);
+    expect(evals.map((e) => e.id)).toEqual(["LAKSHMI", "AARYAN", "AAYUSH", "GAYATRI", "OHMKARA", "SARASWATI"]);
   });
 
   test("P2-G5: Each eval has signal, confidence, slPct, tpPct, reasons", () => {

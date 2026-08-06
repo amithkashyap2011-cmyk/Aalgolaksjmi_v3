@@ -1,0 +1,120 @@
+  console.log
+    [BENCHMARK] Multi-TF Engine Alignment: 5ms
+
+      at Object.<anonymous> (__tests__/aqea/benchmarks.test.ts:76:13)
+
+  console.log
+    [BENCHMARK] AQEA Orchestrator Decision: 609ms
+
+      at Object.<anonymous> (__tests__/aqea/benchmarks.test.ts:96:13)
+
+  console.log
+    [binance-service] Synchronized with Binance server time. Local offset: 3ms (Latency: 88ms)
+
+      at syncTime (src/services/binanceService.ts:34:13)
+
+  console.warn
+    [dl] invalid input: window must have at least 10 bars, got 3 — returning stub
+
+      288 |   const validation = validateSequenceInput(input);
+      289 |   if (!validation.valid) {
+    > 290 |     console.warn(`[dl] invalid input: ${validation.error} — returning stub`);
+          |             ^
+      291 |     return { ...STUB_DL_PREDICTION };
+      292 |   }
+      293 |
+
+      at predictSequence (src/services/dlModelService.ts:290:13)
+      at Object.<anonymous> (__tests__/phase5ML.test.ts:287:24)
+
+  console.log
+    [binance-service] Synchronized with Binance server time. Local offset: 20ms (Latency: 106.5ms)
+
+      at syncTime (src/services/binanceService.ts:34:13)
+
+  console.log
+    [binance-service] Synchronized with Binance server time. Local offset: 3ms (Latency: 99ms)
+
+      at syncTime (src/services/binanceService.ts:34:13)
+
+  console.log
+    [binance-service] Synchronized with Binance server time. Local offset: 20ms (Latency: 103ms)
+
+      at syncTime (src/services/binanceService.ts:34:13)
+
+  console.log
+    [paper-state] Wallet test-user-8-1781012002101:PAPER set USDT=3500
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-9-1781012002107:PAPER set USDT=2000
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-9-1781012002107:PAPER set DOGE=50000
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-9-1781012002107:PAPER set ETH=1.5
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-10-1781012002111:PAPER set USDT=1000
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-10-1781012002111:LIVE set USDT=999
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-11-1781012002114:PAPER set USDT=0
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-12-1781012002119:PAPER set USDT=1111
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.log
+    [paper-state] Wallet test-user-13-1781012002119:PAPER set USDT=2222
+
+      at log (src/services/paperState.ts:19:11)
+
+  console.info
+    [DEPLOYMENT_MANAGER] Initiating Production Readiness Audit...
+
+      at DeploymentManager.verifyProductionReadiness (src/services/production/deploymentManager.ts:19:13)
+
+  console.info
+    🛡️ CIRCUIT BREAKER RESET.
+
+      at CircuitBreaker.reset (src/services/production/circuitBreaker.ts:104:13)
+
+{
+  "error": {
+    "code": 1,
+    "summary": "",
+    "detail": ""
+  }
+}
+{
+  "error": {
+    "code": 1,
+    "summary": "",
+    "detail": ""
+  }
+}
+{
+  "error": {
+    "code": 1,
+    "summary": "",
+    "detail": ""
+  }
+}

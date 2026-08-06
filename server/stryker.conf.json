@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "testRunner": "jest",
+  "jest": {
+    "projectType": "custom",
+    "config": {
+      "transform": { "^.+\\.tsx?$": "@swc/jest" },
+      "testEnvironment": "node",
+      "testMatch": ["**/__tests__/pnlService.property.test.ts", "**/__tests__/pnlService.enrichOpenTrades.test.ts", "**/__tests__/autoTradeEngine.decisionLogic.test.ts"]
+    },
+    "enableFindRelatedTests": false
+  },
+  "mutate": [
+    "src/services/pnlService.ts",
+    "src/services/autoTradeEngine.decisionLogic.ts"
+  ],
+  "coverageAnalysis": "off",
+  "reporters": ["clear-text", "json"],
+  "timeoutMS": 15000,
+  "concurrency": 2
+}

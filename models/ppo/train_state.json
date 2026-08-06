@@ -1,0 +1,9 @@
+{
+  "last_promoted_avg_reward_per_step": -0.0004232481222630653,
+  "last_promoted_at": "2026-07-08T03:30:35.395980+00:00",
+  "last_attempt_at": "2026-08-05T23:30:17.357101+00:00",
+  "last_attempt_avg_reward_per_step": -0.00045631140943491657,
+  "steps_trained": 248980,
+  "last_attempt_promoted": false,
+  "env_source": "replay_buffer"
+}

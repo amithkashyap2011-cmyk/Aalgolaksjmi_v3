@@ -13,11 +13,35 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        aurora: { 50: '#fcfdfc', DEFAULT: '#f7fbfa' },
+        aurora: { 50: '#fcfdfc', DEFAULT: 'var(--bg-aurora)' },
         aalgold: { DEFAULT: '#d4af37', light: '#e8cd6b', dark: '#b8961e' },
         aalgreen: { DEFAULT: '#00b96b', light: '#33d48d', dark: '#008f53' },
         aalred: { DEFAULT: '#ff3b30', light: '#ff6961', dark: '#cc2f26' },
         aalmuted: '#6b7280',
+        'trade-green': '#059669',
+        'trade-red': '#e11d48',
+        'trade-cyan': '#0284c7',
+        'trade-gold': '#d97706',
+        terminal: {
+          950: 'var(--color-terminal-950)',
+          900: 'var(--color-terminal-900)',
+          800: 'var(--color-terminal-800)',
+          700: 'var(--color-terminal-700)',
+          600: 'var(--color-terminal-600)',
+        },
+        slate: {
+          50: 'var(--color-slate-50)',
+          100: 'var(--color-slate-100)', 
+          200: 'var(--color-slate-200)',  
+          300: 'var(--color-slate-300)',
+          400: 'var(--color-slate-400)',
+          500: 'var(--color-slate-500)',
+          600: 'var(--color-slate-600)',
+          700: 'var(--color-slate-700)',
+          800: 'var(--color-slate-800)',
+          900: 'var(--color-slate-900)',
+          950: 'var(--color-slate-950)',
+        },
       },
       /* Golden-ratio derived spacing */
       spacing: {

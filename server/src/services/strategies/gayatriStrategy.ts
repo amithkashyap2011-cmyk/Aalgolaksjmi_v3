@@ -87,7 +87,9 @@ export interface StrategyResult {
   trailPct: number;
   signals: GayatriSignalItem[];
   reasons: string[];
+  noiseGateActive?: boolean; // Added for 18.8 Hz Infrasound Gate
 }
+
 
 /* ── The 24 Gayatri syllables ────────────────────────── */
 const SYLLABLES = [
@@ -123,14 +125,14 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
   /* ═══════════════ OCTAVE 1 — TAT (Momentum) ═══════════ */
 
   // 1. EMA9 > EMA21
-  add("TAT", "EMA9 > EMA21",
+  add("TAT", "EMA9 > EMA21 (short trend)",
     ind.ema9 !== null && ind.ema21 !== null && ind.ema9 > ind.ema21,
     ind.ema9 !== null && ind.ema21 !== null
       ? `EMA9=${ind.ema9.toFixed(6)}, EMA21=${ind.ema21.toFixed(6)}`
       : "Insufficient data");
 
   // 2. EMA21 > EMA55
-  add("TAT", "EMA21 > EMA55",
+  add("TAT", "EMA21 > EMA55 (mid trend)",
     ind.ema21 !== null && ind.ema55 !== null && ind.ema21 > ind.ema55,
     ind.ema21 !== null && ind.ema55 !== null
       ? `EMA21=${ind.ema21.toFixed(6)}, EMA55=${ind.ema55.toFixed(6)}`
@@ -141,19 +143,19 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
     ind.macd !== null && ind.macd.macd > ind.macd.signal,
     ind.macd ? `MACD=${ind.macd.macd.toFixed(6)}, Sig=${ind.macd.signal.toFixed(6)}` : "No MACD");
 
-  // 4. MACD histogram > 0
-  add("TAT", "MACD histogram positive",
-    ind.macd !== null && ind.macd.histogram > 0,
-    ind.macd ? `Hist=${ind.macd.histogram.toFixed(6)}` : "No MACD");
+  // 4. MACD positive (longer-term momentum)
+  add("TAT", "MACD line positive",
+    ind.macd !== null && ind.macd.macd > 0,
+    ind.macd ? `MACD=${ind.macd.macd.toFixed(6)}` : "No MACD");
 
-  // 5. RSI > 40
-  add("TAT", "RSI above 40",
-    ind.rsi14 !== null && ind.rsi14 > 40,
+  // 5. RSI > 45 (bullish zone lower bound)
+  add("TAT", "RSI above 45",
+    ind.rsi14 !== null && ind.rsi14 > 45,
     ind.rsi14 !== null ? `RSI=${ind.rsi14.toFixed(1)}` : "No RSI");
 
-  // 6. RSI < 70
-  add("TAT", "RSI below 70",
-    ind.rsi14 !== null && ind.rsi14 < 70,
+  // 6. RSI < 65 (not overextended)
+  add("TAT", "RSI below 65",
+    ind.rsi14 !== null && ind.rsi14 < 65,
     ind.rsi14 !== null ? `RSI=${ind.rsi14.toFixed(1)}` : "No RSI");
 
   // 7. Price > EMA9
@@ -161,9 +163,9 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
     ind.ema9 !== null && ind.close > ind.ema9,
     ind.ema9 !== null ? `Close=${ind.close.toFixed(6)}, EMA9=${ind.ema9.toFixed(6)}` : "No EMA9");
 
-  // 8. Positive price change
-  add("TAT", "Positive candle",
-    ind.changePercent > 0,
+  // 8. Positive momentum rate
+  add("TAT", "Change percent > 0.1%",
+    ind.changePercent > 0.1,
     `Change=${ind.changePercent.toFixed(2)}%`);
 
   /* ═══════════════ OCTAVE 2 — SAT (Structure) ═══════════ */
@@ -173,14 +175,22 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
     ind.bollinger !== null && ind.close > ind.bollinger.middle,
     ind.bollinger ? `Close=${ind.close.toFixed(6)}, Mid=${ind.bollinger.middle.toFixed(6)}` : "No BB");
 
-  // 10. Price < Bollinger upper (not overextended)
-  add("SAT", "Below Bollinger upper",
-    ind.bollinger !== null && ind.close < ind.bollinger.upper,
-    ind.bollinger ? `Close=${ind.close.toFixed(6)}, Upper=${ind.bollinger.upper.toFixed(6)}` : "No BB");
+  // 10. Bollinger room to run
+  let bbRoom = false;
+  let bbRoomDetail = "No Bollinger data";
+  if (ind.bollinger) {
+    const range = ind.bollinger.upper - ind.bollinger.lower;
+    const limit = ind.bollinger.lower + range * 0.85;
+    bbRoom = ind.close < limit;
+    bbRoomDetail = `Close=${ind.close.toFixed(6)}, Upper85%=${limit.toFixed(6)}`;
+  }
+  add("SAT", "Bollinger room to run (close < 85% of upper)",
+    bbRoom,
+    bbRoomDetail);
 
   // 11. Bollinger bandwidth expanding
   add("SAT", "Bandwidth expanding",
-    ind.bollinger !== null && ind.bollinger.bandwidth > 0.01,
+    ind.bollinger !== null && ind.bollinger.bandwidth > 0.02,
     ind.bollinger ? `BW=${(ind.bollinger.bandwidth * 100).toFixed(2)}%` : "No BB");
 
   // 12. Price > SMA200 (long-term bullish)
@@ -188,33 +198,35 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
     ind.sma200 !== null && ind.close > ind.sma200,
     ind.sma200 !== null ? `Close=${ind.close.toFixed(6)}, SMA200=${ind.sma200.toFixed(6)}` : "Insufficient data");
 
-  // 13. ATR active
-  add("SAT", "ATR active",
-    ind.atr14 !== null && ind.atr14 > 0,
-    ind.atr14 !== null ? `ATR=${ind.atr14.toFixed(6)}` : "No ATR");
+  // 13. ADX trend strength confirmed
+  add("SAT", "ADX trending (ADX > 20)",
+    ind.adx14 !== null && ind.adx14 > 20,
+    ind.adx14 !== null ? `ADX14=${ind.adx14.toFixed(1)}` : "No ADX");
 
-  // 14. Healthy volatility (stdDev/price 0.5%–5%)
+  // 14. Healthy volatility (stdDev/price 0.5%–4%)
   const volRatio = ind.stdDev20 !== null && ind.close > 0 ? ind.stdDev20 / ind.close : 0;
   add("SAT", "Healthy volatility range",
-    volRatio >= 0.005 && volRatio <= 0.05,
+    volRatio >= 0.005 && volRatio <= 0.04,
     `VolRatio=${(volRatio * 100).toFixed(3)}%`);
 
-  // 15. Bullish candle (close > open proxy via changePercent)
-  add("SAT", "Bullish candle structure",
-    ind.changePercent > 0,
-    `Change=${ind.changePercent.toFixed(2)}%`);
+  // 15. Price above middle EMA
+  add("SAT", "Price above mid EMA (EMA21)",
+    ind.ema21 !== null && ind.close > ind.ema21,
+    ind.ema21 !== null ? `Close=${ind.close.toFixed(6)}, EMA21=${ind.ema21.toFixed(6)}` : "No EMA21");
 
-  // 16. Fast MA slope positive (EMA9 > EMA21 as proxy for rising)
-  add("SAT", "Fast MA rising",
-    ind.ema9 !== null && ind.ema21 !== null && (ind.ema9 - ind.ema21) > 0,
-    ind.ema9 !== null && ind.ema21 !== null
-      ? `Spread=${(ind.ema9 - ind.ema21).toFixed(6)}` : "No data");
+  // 16. EMA spread expanding
+  const emaSpreadOk = ind.ema9 !== null && ind.ema21 !== null && ind.atr14 !== null && (ind.ema9 - ind.ema21) > ind.atr14;
+  add("SAT", "EMA spread expanding (EMA9 - EMA21 > ATR)",
+    emaSpreadOk,
+    ind.ema9 !== null && ind.ema21 !== null && ind.atr14 !== null
+      ? `Spread=${(ind.ema9 - ind.ema21).toFixed(6)}, ATR=${ind.atr14.toFixed(6)}`
+      : "Insufficient data");
 
   /* ═══════════════ OCTAVE 3 — OM (Harmony) ══════════════ */
 
-  // 17. RSI not at extremes (30–70)
-  add("OM", "RSI balanced",
-    ind.rsi14 !== null && ind.rsi14 >= 30 && ind.rsi14 <= 70,
+  // 17. RSI balanced mid-range (40–60)
+  add("OM", "RSI balanced mid-range",
+    ind.rsi14 !== null && ind.rsi14 >= 40 && ind.rsi14 <= 60,
     ind.rsi14 !== null ? `RSI=${ind.rsi14.toFixed(1)}` : "No RSI");
 
   // 18. MACD not extreme divergence (|histogram| < ATR)
@@ -225,48 +237,62 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
     macdControlled,
     ind.macd ? `|Hist|=${Math.abs(ind.macd.histogram).toFixed(6)}` : "No MACD");
 
-  // 19. Price within 5% of EMA21
+  // 19. Price within 3% of EMA21 (reversion anchor)
   const ema21Dist = ind.ema21 !== null
     ? Math.abs((ind.close - ind.ema21) / ind.ema21)
     : 0;
-  add("OM", "Near EMA21 (within 5%)",
-    ind.ema21 !== null && ema21Dist < 0.05,
+  add("OM", "Near EMA21 (within 3%)",
+    ind.ema21 !== null && ema21Dist < 0.03,
     ind.ema21 !== null ? `Dist=${(ema21Dist * 100).toFixed(2)}%` : "No EMA21");
 
-  // 20. Liquidity present (ATR/close > 0.5%)
+  // 20. Liquidity present (ATR/close > 0.3%)
   const liquidityRatio = ind.atr14 !== null && ind.close > 0 ? ind.atr14 / ind.close : 0;
   add("OM", "Liquidity present",
-    liquidityRatio > 0.005,
+    liquidityRatio > 0.003,
     `ATR/Price=${(liquidityRatio * 100).toFixed(3)}%`);
 
-  // 21. Bollinger %B between 0.2–0.8
+  // 21. Bollinger %B healthy range (30%-70%)
   const pctB = ind.bollinger
     ? (ind.close - ind.bollinger.lower) / (ind.bollinger.upper - ind.bollinger.lower || 1)
     : 0.5;
-  add("OM", "Bollinger %B healthy range",
-    pctB >= 0.2 && pctB <= 0.8,
+  add("OM", "Bollinger %B healthy range (30-70%)",
+    pctB >= 0.3 && pctB <= 0.7,
     `%B=${(pctB * 100).toFixed(1)}%`);
 
-  // 22. Full EMA alignment (9 > 21 > 55)
-  add("OM", "Full EMA harmony",
-    ind.ema9 !== null && ind.ema21 !== null && ind.ema55 !== null
-      && ind.ema9 > ind.ema21 && ind.ema21 > ind.ema55,
-    "EMA9 > EMA21 > EMA55 check");
+  // 22. Macro trend aligned (EMA55 > SMA200)
+  add("OM", "Macro trend aligned (EMA55 > SMA200)",
+    ind.ema55 !== null && ind.sma200 !== null && ind.ema55 > ind.sma200,
+    ind.ema55 !== null && ind.sma200 !== null
+      ? `EMA55=${ind.ema55.toFixed(6)}, SMA200=${ind.sma200.toFixed(6)}`
+      : "Insufficient data");
 
-  // 23. Balance check — RSI moderate (35–65)
-  add("OM", "RSI moderate balance",
-    ind.rsi14 !== null && ind.rsi14 >= 35 && ind.rsi14 <= 65,
-    ind.rsi14 !== null ? `RSI=${ind.rsi14.toFixed(1)}` : "No RSI");
+  // 23. RSI and ADX trend harmony
+  const rsiTrendHarmony = ind.rsi14 !== null && ind.adx14 !== null && ind.rsi14 > 50 && ind.adx14 > 15;
+  add("OM", "RSI/ADX trend harmony (RSI > 50 & ADX > 15)",
+    rsiTrendHarmony,
+    ind.rsi14 !== null && ind.adx14 !== null
+      ? `RSI=${ind.rsi14.toFixed(1)}, ADX=${ind.adx14.toFixed(1)}`
+      : "Insufficient data");
 
-  // 24. Self-referential resonance (≥ 15 other signals active)
+  // 24. Self-referential resonance (≥ 14 other signals active)
   const preCount = signals.filter((s) => s.active).length;
-  add("OM", "Composite resonance ≥ 15",
-    preCount >= 15,
+  add("OM", "Composite resonance ≥ 14",
+    preCount >= 14,
     `Active signals so far: ${preCount}/23`);
 
   /* ═══════════════ Frequency Score ══════════════════════ */
   const frequency = signals.filter((s) => s.active).length;
   const frequencyPct = +(frequency / 24 * 100).toFixed(1);
+
+  // Dynamic Infrasound Noise Detection (18.8 Hz Gate criteria)
+  const adxNoise = ind.adx14 !== null && ind.adx14 < 18.8;
+  const rsiCongestion = ind.rsi14 !== null && ind.rsi14 >= 42.5 && ind.rsi14 <= 57.5;
+  const volChop = ind.stdDev20 !== null && ind.close > 0 && (ind.stdDev20 / ind.close) < 0.01;
+  const noiseGateActive = adxNoise || (rsiCongestion && volChop);
+
+  if (noiseGateActive) {
+    reasons.push(`🌌 18.8 Hz Infrasound Noise Gate is ACTIVE (ADX=${ind.adx14?.toFixed(1) ?? "N/A"}) — filtering market chop`);
+  }
 
   /* ═══════════════ Signal Decision ══════════════════════ */
   let signal: StrategySignal;
@@ -289,11 +315,21 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
 
   /* ═══════════════ Hz Label ═════════════════════════════ */
   let hzLabel: string;
-  if (frequency >= 20) hzLabel = "528 Hz ✨ (Love Frequency)";
-  else if (frequency >= 16) hzLabel = "432 Hz 🎵 (Harmonic)";
-  else if (frequency >= 12) hzLabel = "396 Hz ⚖️ (Liberation)";
-  else if (frequency >= 8) hzLabel = "285 Hz ⚠️ (Healing Needed)";
-  else hzLabel = "174 Hz 🔻 (Foundation Reset)";
+  if (frequency >= 22) {
+    hzLabel = "108 Hz 🕉️ (Cosmic Wholeness)";
+  } else if (frequency >= 20) {
+    hzLabel = "528 Hz ✨ (Love Frequency)";
+  } else if (frequency >= 18) {
+    hzLabel = noiseGateActive ? "18.8 Hz 🌌 (Noise Elimination)" : "518 Hz 🎵 (Harmonic)";
+  } else if (frequency >= 16) {
+    hzLabel = "518 Hz 🎵 (Harmonic)";
+  } else if (frequency >= 12) {
+    hzLabel = "396 Hz ⚖️ (Liberation)";
+  } else if (frequency >= 8) {
+    hzLabel = "285 Hz ⚠️ (Healing Needed)";
+  } else {
+    hzLabel = "174 Hz 🔻 (Foundation Reset)";
+  }
 
   /* ═══════════════ Dynamic Risk Management ══════════════ */
   const atrPct = ind.atr14 !== null && ind.close > 0
@@ -317,5 +353,6 @@ export function evaluateGayatri(ind: IndicatorSnapshot): StrategyResult {
     trailPct: +(atrPct * 0.75).toFixed(2),
     signals,
     reasons,
+    noiseGateActive,
   };
 }

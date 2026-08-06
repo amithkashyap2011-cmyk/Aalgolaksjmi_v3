@@ -2,128 +2,165 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ─── Reset & global ────────────────────────────────────── */
+/* ─── Global Reset — Clean Light Theme Foundation ─── */
 html, body, #root { height: 100%; margin: 0; }
-html { overscroll-behavior: none; -webkit-overflow-scrolling: touch; }
+body { 
+  background-color: theme('colors.terminal.950');
+  color: theme('colors.slate.100');
+  -webkit-font-smoothing: antialiased;
+}
 
-/* ─── Touch‑friendly defaults ───────────────────────────── */
+/* ─── Touch‑friendly defaults & CSS Variables ───────────────────────────── */
 @layer base {
+  :root {
+    /* LIGHT MODE (User's Default) */
+    --color-terminal-950: #F8F9FA;
+    --color-terminal-900: #FFFFFF;
+    --color-terminal-800: #E9ECEF;
+    --color-terminal-700: #DEE2E6;
+    --color-terminal-600: #ADB5BD;
+    
+    --color-slate-50: #000000;
+    --color-slate-100: #000000;
+    --color-slate-200: #000000;
+    --color-slate-300: #111827;
+    --color-slate-400: #1F2937;
+    --color-slate-500: #374151;
+    --color-slate-600: #4B5563;
+    --color-slate-700: #6B7280;
+    --color-slate-800: #E5E7EB;
+    --color-slate-900: #F3F4F6;
+    --color-slate-950: #FFFFFF;
+
+    --bg-aurora: #f7fbfa;
+  }
+
+  html.dark {
+    /* DARK MODE */
+    --color-terminal-950: #0B0E14;
+    --color-terminal-900: #151A23;
+    --color-terminal-800: #1F2937;
+    --color-terminal-700: #374151;
+    --color-terminal-600: #4B5563;
+    
+    --color-slate-50: #f8fafc;
+    --color-slate-100: #f1f5f9;
+    --color-slate-200: #e2e8f0;
+    --color-slate-300: #cbd5e1;
+    --color-slate-400: #94a3b8;
+    --color-slate-500: #64748b;
+    --color-slate-600: #475569;
+    --color-slate-700: #334155;
+    --color-slate-800: #1e293b;
+    --color-slate-900: #0f172a;
+    --color-slate-950: #020617;
+
+    --bg-aurora: #0B0E14;
+  }
+
   button, [role="button"], a,
   input[type="checkbox"], input[type="radio"], select {
     min-height: 2.75rem;
     min-width: 2.75rem;
   }
-  * { -webkit-tap-highlight-color: rgba(212, 175, 55, 0.15); }
+  * { -webkit-tap-highlight-color: rgba(14, 203, 129, 0.1); }
   input[type="text"], input[type="email"], input[type="password"],
   input[type="number"], textarea, select {
-    @apply rounded-lg px-3 py-2.5 text-base;
-    font-size: 1rem;
+    @apply rounded-md px-3 py-2 text-sm bg-terminal-900 border-terminal-700 text-white focus:ring-trade-cyan/50 focus:border-trade-cyan transition-all;
   }
 }
 
-/* ─── Golden-Ratio Component Layer ──────────────────────── */
+/* ─── Fibonacci & Golden Ratio Classes — Clean Light Theme ─── */
 @layer components {
-  /* Base card */
+  /* Premium Flat Card */
   .card {
-    @apply bg-white rounded-phi-lg shadow-sm border border-slate-100;
+     background: theme('colors.terminal.900');
+     border: 1px solid theme('colors.terminal.800');
+     @apply rounded-lg shadow-sm;
   }
+  
   .card-phi {
-    @apply bg-white rounded-phi-xl shadow-sm border border-slate-100 p-phi-5;
+    background: theme('colors.terminal.900');
+    border: 1px solid theme('colors.terminal.700');
+    @apply rounded-xl shadow-md p-4;
   }
 
-  /* Golden split container */
-  .golden-split {
-    @apply flex flex-col lg:flex-row gap-phi-4;
-  }
-  .golden-major {
-    @apply w-full lg:w-[61.8%] shrink-0;
-  }
-  .golden-minor {
-    @apply w-full lg:w-[38.2%];
-  }
+  /* Status Colors (Refined) */
+  .dot-live    { @apply w-2 h-2 rounded-full bg-trade-green inline-block; animation: pulse-emerald 2s infinite; }
+  .dot-paper   { @apply w-2 h-2 rounded-full bg-trade-gold inline-block; }
+  .dot-backtest { @apply w-2 h-2 rounded-full bg-sky-500 inline-block; }
 
-  /* Fibonacci color bands for chart */
-  .fib-band-236 { background: rgba(212, 175, 55, 0.08); }  /* gold */
-  .fib-band-382 { background: rgba(0, 185, 107, 0.06); }   /* green */
-  .fib-band-500 { background: rgba(59, 130, 246, 0.05); }   /* blue */
-  .fib-band-618 { background: rgba(168, 85, 247, 0.06); }   /* purple */
-  .fib-band-786 { background: rgba(255, 59, 48, 0.05); }    /* red */
-
-  /* Status dots */
-  .dot-live    { @apply w-2 h-2 rounded-full bg-aalgreen inline-block; animation: pulse-dot 2s infinite; }
-  .dot-paper   { @apply w-2 h-2 rounded-full bg-aalgold inline-block; }
-  .dot-backtest { @apply w-2 h-2 rounded-full bg-blue-500 inline-block; }
+  /* Compact Glassmorphism (Mobile-Friendly) */
+  .glass {
+     background: rgba(255, 255, 255, 0.85);
+     backdrop-filter: blur(8px);
+     border: 1px solid rgba(0, 0, 0, 0.05);
+  }
 
   /* Animated entry */
   .animate-in { @apply animate-fade-in; }
 
-  /* Gauge bar track */
-  .gauge-track {
-    @apply w-full h-2 bg-slate-100 rounded-full overflow-hidden;
-  }
-  .gauge-fill {
-    @apply h-full rounded-full transition-all duration-500 ease-out;
-  }
-
-  /* Safe-area */
-  .safe-top    { padding-top:    env(safe-area-inset-top); }
-  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
-
-  /* Scrollbar hide */
-  .scroll-hide::-webkit-scrollbar { display: none; }
-  .scroll-hide { -ms-overflow-style: none; scrollbar-width: none; }
-
-  /* Alert badge colors */
-  .alert-green { @apply bg-aalgreen/10 text-aalgreen border-aalgreen/20; }
-  .alert-amber { @apply bg-amber-50 text-amber-700 border-amber-200; }
-  .alert-red   { @apply bg-aalred/10 text-aalred border-aalred/20; }
-
-  /* Glass morphism panel */
-  .glass {
-    @apply bg-white/80 backdrop-blur-xl border border-white/40 shadow-lg;
-  }
+  /* Fibonacci color bands for chart (Darkened) */
+  .fib-band-236 { background: rgba(245, 158, 11, 0.05); }  /* amber */
+  .fib-band-382 { background: rgba(16, 185, 129, 0.04); }   /* emerald */
+  .fib-band-500 { background: rgba(14, 165, 233, 0.03); }   /* sky */
+  .fib-band-618 { background: rgba(139, 92, 246, 0.04); }   /* violet */
+  .fib-band-786 { background: rgba(244, 63, 94, 0.03); }    /* rose */
 }
 
-/* Pulse dot keyframes */
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%      { opacity: 0.5; transform: scale(1.3); }
+/* Animations */
+@keyframes pulse-emerald {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  50%      { opacity: 0.6; box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
 }
 
-/* ─── Dark mode ─────────────────────────────────────────── */
-@layer base {
-  .dark body { @apply bg-slate-900 text-slate-100; }
-  .dark .card, .dark .card-phi { @apply bg-slate-800 border-slate-700; }
-  .dark .glass { @apply bg-slate-800/80 border-slate-700/40; }
+/* Hide scrollbars but keep functionality */
+.custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { 
+  background: rgba(0, 0, 0, 0.15); 
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { 
+  background: rgba(0, 0, 0, 0.3); 
 }
 
-/* ─── Responsive utilities ──────────────────────────────── */
 @layer utilities {
-  /* Hide on mobile, show on tablet+ */
-  .desktop-only { @apply hidden lg:block; }
-  .mobile-only  { @apply block lg:hidden; }
-
-  /* Responsive text clamp */
-  .text-responsive-sm { font-size: clamp(0.75rem, 1vw + 0.5rem, 0.875rem); }
-  .text-responsive-base { font-size: clamp(0.875rem, 1vw + 0.5rem, 1rem); }
-  .text-responsive-lg { font-size: clamp(1rem, 1.5vw + 0.5rem, 1.25rem); }
-  .text-responsive-xl { font-size: clamp(1.25rem, 2vw + 0.5rem, 1.618rem); }
-
-  /* Touch-safe padding */
-  .touch-pad { @apply p-3 sm:p-4 lg:p-phi-5; }
-
-  /* Horizontal scroll container for tables on mobile */
-  .scroll-x-mobile {
-    @apply overflow-x-auto -mx-3 px-3 sm:mx-0 sm:px-0 sm:overflow-visible;
-  }
+  .text-shadow-glow { text-shadow: 0 0 10px rgba(16, 185, 129, 0.3); }
+  .bg-grid { background-image: radial-gradient(#00000006 1px, transparent 1px); background-size: 24px 24px; }
 }
 
-/* ─── Focus visible ring (accessibility + touch) ────────── */
-@layer base {
-  :focus-visible {
-    @apply outline-none ring-2 ring-aalgold/50 ring-offset-2;
-  }
+@keyframes marquee {
+  0% { transform: translate3d(0, 0, 0); }
+  100% { transform: translate3d(-50%, 0, 0); }
 }
 
-/* ─── Print ─────────────────────────────────────────────── */
-@media print { nav, aside, .bottom-nav { display: none !important; } }
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee 30s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+
+/* ── Responsive grid utilities ──────────────────────────
+   Pages set their desktop layout with inline styles, which cannot hold
+   media queries — these classes override the column count on small
+   screens. Keep every fixed inline gridTemplateColumns paired with one
+   of these (or a page-specific class below). */
+@media (max-width: 900px) {
+  .chart-grid { grid-template-columns: 1fr !important; }
+}
+@media (max-width: 700px) {
+  .risk-grid,
+  .grid-collapse-sm { grid-template-columns: 1fr !important; }
+  .grid-4to2 { grid-template-columns: repeat(2, 1fr) !important; }
+}
+@media (max-width: 600px) {
+  .bal-grid { grid-template-columns: 1fr !important; }
+}
+/* Page headers (title + actions) wrap instead of overflowing. */
+.page-header-wrap { flex-wrap: wrap; row-gap: 10px; }

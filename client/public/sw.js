@@ -4,7 +4,27 @@
  * Cache‑first for static assets, network‑first for API calls.
  * Versioned cache so updates propagate on deploy.
  * Gives an app‑like install experience on mobile / Capacitor.
+ *
+ * In development (localhost), the SW unregisters itself to
+ * avoid interfering with Vite's hot module replacement.
  */
+
+/* ── Dev-mode bypass ─────────────────────────────────── */
+if (
+  self.location.hostname === "localhost" ||
+  self.location.hostname === "127.0.0.1"
+) {
+  self.addEventListener("install", () => self.skipWaiting());
+  self.addEventListener("activate", (event) => {
+    event.waitUntil(
+      self.clients.matchAll({ type: "window" }).then((clients) => {
+        clients.forEach((client) => client.navigate(client.url));
+        return self.registration.unregister();
+      })
+    );
+  });
+  // In dev mode, don't intercept any fetch events
+} else {
 
 const CACHE_VERSION = 2;
 const CACHE_NAME = `aalgo-v2-cache-v${CACHE_VERSION}`;
@@ -76,3 +96,5 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+} // end else (production only)

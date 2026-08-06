@@ -1,0 +1,4 @@
+{
+  "_comment": "Real, measured baseline from an actual executed Stryker run (server/stryker.conf.json), scoped to pnlService.ts and autoTradeEngine.decisionLogic.ts only. CI fails if a future run's score drops below this. Expanding scope to more files should raise this baseline in the same PR, with the new score — never lower it to make a failing build pass.",
+  "mutationScore": 83.66
+}

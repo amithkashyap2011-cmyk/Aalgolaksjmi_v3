@@ -1,0 +1,33 @@
+# Lightweight configuration for edge deployment or fast inference.
+# Optimized for speed and memory efficiency.
+
+d_model: 192
+n_layers: 4
+d_state: 8
+d_conv: 4
+expand: 1
+
+seq_len: 60
+output_horizon: 1
+n_features: 52
+
+forecasting_mode: classification
+supported_horizons: [1, 3, 5]
+
+dtype: float16
+use_amp: true
+use_gradient_checkpoint: false
+use_compile: true
+
+normalize_input: true
+robust_scaler: true
+
+use_regime_embeddings: false
+embed_regime: false
+embed_market_state: false
+
+dropout_rate: 0.05
+weight_decay: 0.0
+layer_norm_eps: 1.0e-06
+
+device: cuda

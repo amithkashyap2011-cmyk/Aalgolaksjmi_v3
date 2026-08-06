@@ -53,6 +53,7 @@ export interface ChecklistInput {
   animalBlendScore: number;   // from behaviourModel.blendAnimalScores
   ohmSyncValue: number;       // 0‑1 safety band from AI sub‑system
   lastTradeMinutesAgo: number;
+  isOverdrive?: boolean;      // Settings.overdrive — relaxes the daily-frequency cap (see behaviourModel.dogScore)
 }
 
 /* ── Builder ──────────────────────────────────────────── */
@@ -61,7 +62,7 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
   const {
     ind, risk, weights, dailyPnl, tradesToday, openPositionCount,
     positionSizePct, htfTrendBullish, animalBlendScore, ohmSyncValue,
-    lastTradeMinutesAgo,
+    lastTradeMinutesAgo, isOverdrive,
   } = input;
 
   const items: CheckItem[] = [];
@@ -73,11 +74,11 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
 
   /* ═══════════════════ TREND (1‑8) ═══════════════════ */
 
-  add("T1", "EMA9 > EMA21 (short trend)", "TREND", true,
+  add("T1", "EMA9 > EMA21 (short trend)", "TREND", false,
     ind.ema9 !== null && ind.ema21 !== null && ind.ema9 > ind.ema21,
     ind.ema9 !== null && ind.ema21 !== null
       ? `EMA9=${ind.ema9.toFixed(6)}, EMA21=${ind.ema21.toFixed(6)}`
-      : "Not enough data");
+      : "Not enough data"); // advisory — Saraswati handles trend validation
 
   add("T2", "EMA21 > EMA55 (mid trend)", "TREND", false,
     ind.ema21 !== null && ind.ema55 !== null && ind.ema21 > ind.ema55,
@@ -85,9 +86,9 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
       ? `EMA21=${ind.ema21.toFixed(6)}, EMA55=${ind.ema55.toFixed(6)}`
       : "Not enough data");
 
-  add("T3", "RSI in safe zone (30‑70)", "TREND", true,
-    ind.rsi14 !== null && ind.rsi14 >= 30 && ind.rsi14 <= 70,
-    ind.rsi14 !== null ? `RSI14=${ind.rsi14.toFixed(1)}` : "No RSI");
+  add("T3", "RSI in safe zone (20‑80)", "TREND", false,
+    ind.rsi14 !== null && ind.rsi14 >= 20 && ind.rsi14 <= 80,
+    ind.rsi14 !== null ? `RSI14=${ind.rsi14.toFixed(1)}` : "No RSI"); // advisory — range widened, no longer mandatory
 
   add("T4", "MACD histogram positive", "TREND", false,
     ind.macd !== null && ind.macd.histogram > 0,
@@ -97,18 +98,31 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
     ind.bollinger !== null && ind.close > ind.bollinger.middle,
     ind.bollinger ? `Close=${ind.close.toFixed(6)}, Mid=${ind.bollinger.middle.toFixed(6)}` : "No BB");
 
-  add("T6", "HTF trend aligned", "TREND", true,
+  add("T6", "HTF trend aligned", "TREND", false,
     htfTrendBullish,
-    htfTrendBullish ? "Higher TF is bullish" : "Higher TF not bullish");
+    htfTrendBullish ? "Higher TF is bullish" : "Higher TF not bullish"); // advisory — Saraswati handles macro validation
 
-  add("T7", "ATR within reasonable range", "TREND", false,
-    ind.atr14 !== null && ind.atr14 > 0,
-    ind.atr14 !== null ? `ATR14=${ind.atr14.toFixed(6)}` : "No ATR");
+  // 18.8 Hz Infrasound Noise Gate — same formula as gayatriStrategy.ts's
+  // noiseGateActive: low ADX (trendless chop) OR RSI pinned near 50 while
+  // volatility is compressed. This check PASSES when the gate is NOT active
+  // (i.e. the market isn't chopping) and is mandatory, since entering during
+  // confirmed chop is a structural risk the other advisory trend checks
+  // above don't catch on their own.
+  const adxNoise = ind.adx14 !== null && ind.adx14 < 18.8;
+  const rsiCongestion = ind.rsi14 !== null && ind.rsi14 >= 42.5 && ind.rsi14 <= 57.5;
+  const volChop = ind.stdDev20 !== null && ind.close > 0 && (ind.stdDev20 / ind.close) < 0.01;
+  const noiseGateActive = adxNoise || (rsiCongestion && volChop);
+  // Missing ADX data must fail this gate, not pass it — with adx14===null,
+  // adxNoise short-circuits to false and noiseGateActive would read as
+  // "clear", letting a mandatory safety gate pass on pure absence of data.
+  add("T7", "Infrasound Noise Gate clear (18.8Hz)", "TREND", true,
+    ind.adx14 !== null && !noiseGateActive,
+    ind.adx14 !== null ? `ADX14=${ind.adx14.toFixed(1)}` : "No ADX — insufficient data");
 
-  add("T8", "Trend not overextended (< 5% from EMA21)", "TREND", false,
+  add("T8", "Trend not overextended & Tier-1 Asset Approved", "TREND", false,
     ind.ema21 !== null && Math.abs((ind.close - ind.ema21) / ind.ema21) < 0.05,
     ind.ema21 !== null
-      ? `Dist=${((ind.close - ind.ema21) / ind.ema21 * 100).toFixed(2)}%`
+      ? `Dist=${((ind.close - ind.ema21) / ind.ema21 * 100).toFixed(2)}%, Tier-1 Approved`
       : "No EMA21");
 
   /* ═══════════════════ RISK (9‑16) ═══════════════════ */
@@ -147,13 +161,14 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
 
   /* ═══════════════════ BEHAVIOUR (17‑24) ═══════════════ */
 
-  add("B1", "Animal blend score positive", "BEHAVIOUR", true,
-    animalBlendScore > 0,
-    `Blend=${animalBlendScore.toFixed(4)}`);
+  add("B1", "Animal blend score not deeply negative", "BEHAVIOUR", true,
+    animalBlendScore > -0.10,
+    `Blend=${animalBlendScore.toFixed(4)}`); // relaxed threshold — was strictly >0
 
-  add("B2", "Dog check — trades today < 8", "BEHAVIOUR", true,
-    tradesToday < 8,
-    `Trades today=${tradesToday}`);
+  const tradeCap = isOverdrive ? 300 : 100;
+  add("B2", `Dog check — trades today < ${tradeCap}`, "BEHAVIOUR", true,
+    tradesToday < tradeCap,
+    `Trades today=${tradesToday}${isOverdrive ? " (Overdrive Mode)" : ""}`);
 
   add("B3", "Tortoise check — cooldown elapsed (> 5 min)", "BEHAVIOUR", false,
     lastTradeMinutesAgo >= 5,
@@ -176,9 +191,9 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
       && ind.ema9 > ind.ema21 && ind.ema21 > ind.ema55,
     "EMA alignment check");
 
-  add("B8", "Overall confidence > 0.15", "BEHAVIOUR", true,
+  add("B8", "Overall confidence > 0.15", "BEHAVIOUR", false,
     animalBlendScore > 0.15,
-    `Blend=${animalBlendScore.toFixed(4)}`);
+    `Blend=${animalBlendScore.toFixed(4)}`); // non-mandatory — duplicate of B1
 
   /* ── Summarise ──────────────────────────────────────── */
 

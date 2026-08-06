@@ -1,0 +1,83 @@
+{
+  "system": "AALGOLAKSHMI_V2",
+  "components": {
+    "MongoDB": {
+      "startup": [],
+      "runtime": [],
+      "shutdown": [],
+      "failure": []
+    },
+    "Redis": {
+      "startup": [],
+      "runtime": [],
+      "shutdown": [],
+      "failure": []
+    },
+    "Binance": {
+      "startup": [],
+      "runtime": [],
+      "shutdown": [],
+      "failure": []
+    },
+    "AI Models": {
+      "startup": [],
+      "runtime": ["Quant Engine"],
+      "shutdown": [],
+      "failure": []
+    },
+    "Quant Engine": {
+      "startup": ["AI Models"],
+      "runtime": ["Node Server", "MongoDB"],
+      "shutdown": [],
+      "failure": ["AI Models"]
+    },
+    "Node Server": {
+      "startup": ["MongoDB"],
+      "runtime": ["MongoDB", "Binance", "Quant Engine", "Governance", "Telemetry", "Risk Engine", "Execution Engine", "AutoTrade", "Socket Layer"],
+      "shutdown": ["Socket Layer", "Quant Engine", "Binance", "MongoDB"],
+      "failure": ["MongoDB", "Binance"]
+    },
+    "Socket Layer": {
+      "startup": ["Node Server"],
+      "runtime": ["UI", "Node Server"],
+      "shutdown": [],
+      "failure": ["Node Server"]
+    },
+    "UI": {
+      "startup": ["Node Server"],
+      "runtime": ["Socket Layer", "Node Server"],
+      "shutdown": [],
+      "failure": ["Socket Layer", "Node Server"]
+    },
+    "Governance": {
+      "startup": ["Node Server"],
+      "runtime": ["Telemetry", "Risk Engine", "Execution Engine"],
+      "shutdown": [],
+      "failure": ["Node Server"]
+    },
+    "Telemetry": {
+      "startup": ["Node Server"],
+      "runtime": ["Node Server", "Quant Engine", "Execution Engine"],
+      "shutdown": [],
+      "failure": ["Node Server"]
+    },
+    "Risk Engine": {
+      "startup": ["Node Server"],
+      "runtime": ["Quant Engine", "Execution Engine", "Binance"],
+      "shutdown": [],
+      "failure": ["Node Server"]
+    },
+    "Execution Engine": {
+      "startup": ["Node Server"],
+      "runtime": ["Binance", "Risk Engine", "Quant Engine"],
+      "shutdown": [],
+      "failure": ["Binance", "Risk Engine"]
+    },
+    "AutoTrade": {
+      "startup": ["Node Server"],
+      "runtime": ["Execution Engine", "Risk Engine", "Quant Engine"],
+      "shutdown": [],
+      "failure": ["Execution Engine", "Node Server"]
+    }
+  }
+}

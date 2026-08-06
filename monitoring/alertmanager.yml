@@ -1,0 +1,26 @@
+# Alertmanager routes for Prometheus-detected conditions (process down,
+# high memory, high event-loop lag, etc. — define these as Prometheus
+# alerting rules separately; this file only routes already-fired alerts).
+#
+# This deliberately points at the SAME generic webhook mechanism the app
+# already uses for its own RED alerts (ALERT_WEBHOOK_URL in server/.env)
+# so Prometheus-side and application-side alerts converge on one
+# on-call channel instead of two separate ones an operator has to watch.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: "app-webhook"
+  group_by: ["alertname"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: "app-webhook"
+    webhook_configs:
+      # Set this to the same URL as ALERT_WEBHOOK_URL in server/.env —
+      # e.g. a Slack incoming-webhook URL, or any endpoint that accepts a
+      # POST with a JSON body.
+      - url: "http://REPLACE_WITH_YOUR_WEBHOOK_URL"
+        send_resolved: true

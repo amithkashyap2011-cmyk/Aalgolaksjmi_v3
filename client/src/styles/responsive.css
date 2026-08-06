@@ -1,0 +1,54 @@
+/* ── Responsive hardening layer ─────────────────────────
+   Loaded last (after design-tokens.css) so it wins ties.
+
+   Strategy: pages now use fluid grids — repeat(auto-fit, minmax(min(100%, N px), 1fr))
+   — which reflow continuously at every viewport width (phone, tablet,
+   split-screen desktop) without breakpoints. This file covers what fluid
+   grids can't: media that overflows, tables on narrow screens, the
+   Settings tab rail, and touch ergonomics. */
+
+/* Media can never force horizontal scroll. */
+img, svg:not(.recharts-surface), video, canvas { max-width: 100%; }
+
+/* Grid/flex children may shrink below their content width instead of
+   blowing the layout open (long symbols, monospace numbers, URLs). */
+.page-fade [style*="display:grid"] > *,
+.page-fade [style*="display: grid"] > * { min-width: 0; }
+
+/* Every data table scrolls inside its own wrapper on narrow screens —
+   pages already wrap tables in an overflow-x container; this keeps the
+   cells readable instead of crushing them. */
+@media (max-width: 767.98px) {
+  main table { min-width: 560px; }
+}
+
+/* ── Settings page tab rail ──
+   Desktop: vertical sidebar (Bootstrap col-lg-3).
+   Below lg: a horizontally scrollable strip instead of a screen-tall list. */
+@media (max-width: 991.98px) {
+  .settings-tab-nav {
+    flex-direction: row !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .settings-tab-nav::-webkit-scrollbar { display: none; }
+  .settings-tab-nav .nav-link {
+    white-space: nowrap;
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+    border-start-width: 0 !important;
+    border-bottom: 3px solid transparent;
+  }
+  .settings-tab-nav .nav-link.bg-white {
+    border-bottom-color: var(--bs-primary, #0d6efd);
+  }
+  .settings-nav-footer { display: none; }
+}
+
+/* ── Touch ergonomics ──
+   On coarse pointers give interactive controls a comfortable hit area
+   without changing their visual size. */
+@media (pointer: coarse) {
+  button, a, [role="button"] { touch-action: manipulation; }
+}

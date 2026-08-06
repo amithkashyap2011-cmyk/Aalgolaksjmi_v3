@@ -10,6 +10,7 @@ import {
   type ChecklistInput,
   type ChecklistResult,
 } from "../src/services/checklist";
+import { createMockRiskConfig } from "../src/utils/testHelpers";
 import type { IndicatorSnapshot } from "../src/services/indicatorService";
 import type { IRiskConfig } from "../src/models/Settings";
 import type { NormalizedWeights } from "../src/services/behaviourModel";
@@ -20,7 +21,7 @@ function makeInd(override: Partial<IndicatorSnapshot> = {}): IndicatorSnapshot {
   return {
     rsi14: 50, ema9: 100, ema21: 99, ema55: 98, sma200: 95,
     macd: { macd: 0.01, signal: 0.005, histogram: 0.005 },
-    atr14: 2, adx14: null,
+    atr14: 2, adx14: 20.0,
     bollinger: { upper: 110, middle: 100, lower: 90, bandwidth: 20 },
     stdDev20: 1.5, close: 100, changePercent: 0.5,
     ...override,
@@ -28,14 +29,10 @@ function makeInd(override: Partial<IndicatorSnapshot> = {}): IndicatorSnapshot {
 }
 
 function makeRisk(override: Partial<IRiskConfig> = {}): IRiskConfig {
-  return {
-    maxDailyLoss: 100,
-    maxPositionSizePct: 21,
-    defaultSL: 2,
-    defaultTP: 4,
-    trailingSL: 1,
+  return createMockRiskConfig({
+    maxPositionSizePct: 1.0,
     ...override,
-  };
+  });
 }
 
 function makeWeights(override: Partial<NormalizedWeights> = {}): NormalizedWeights {
@@ -56,7 +53,7 @@ function makePassingInput(override: Partial<ChecklistInput> = {}): ChecklistInpu
     dailyPnl: 0,
     tradesToday: 1,
     openPositionCount: 1,
-    positionSizePct: 10,
+    positionSizePct: 0.8,
     htfTrendBullish: true,
     animalBlendScore: 0.5,   // positive and > 0.15
     ohmSyncValue: 0.6,
@@ -141,36 +138,48 @@ describe("buildChecklist — all pass", () => {
  * ═══════════════════════════════════════════════════════ */
 
 describe("buildChecklist — mandatory gates", () => {
-  test("TC-I8: T1 fails — EMA9 < EMA21 → allowed = false", () => {
+  test("TC-I8: T1 fails — EMA9 < EMA21 → check fails but allowed = true (non-mandatory)", () => {
     const result = buildChecklist(makePassingInput({
       ind: makeInd({ ema9: 98, ema21: 100 }),
     }));
     const t1 = result.items.find((i) => i.spoke === "T1")!;
     expect(t1.passed).toBe(false);
+    expect(t1.mandatory).toBe(false);
+    expect(result.allowed).toBe(true); // T1 is now advisory, Saraswati handles trend validation
+  });
+
+  test("TC-I8b: T7 fails — ADX < 15 (Infrasound Noise Gate active) → allowed = false", () => {
+    const result = buildChecklist(makePassingInput({
+      ind: makeInd({ adx14: 12.0 }), // noisy market
+    }));
+    const t7 = result.items.find((i) => i.spoke === "T7")!;
+    expect(t7.passed).toBe(false);
     expect(result.allowed).toBe(false);
   });
 
-  test("TC-I9: T3 fails — RSI outside 30-70 → allowed = false", () => {
+  test("TC-I9: T3 RSI 75 passes (range widened to 20-80, T3 non-mandatory) → allowed = true", () => {
     const result = buildChecklist(makePassingInput({
       ind: makeInd({ rsi14: 75 }),
     }));
     const t3 = result.items.find((i) => i.spoke === "T3")!;
-    expect(t3.passed).toBe(false);
-    expect(result.allowed).toBe(false);
+    expect(t3.passed).toBe(true);   // 75 is within new 20-80 range
+    expect(t3.mandatory).toBe(false); // advisory only
+    expect(result.allowed).toBe(true);
   });
 
-  test("TC-I10: T6 fails — HTF not bullish → allowed = false", () => {
+  test("TC-I10: T6 fails — HTF not bullish → check fails but allowed = true (non-mandatory)", () => {
     const result = buildChecklist(makePassingInput({
       htfTrendBullish: false,
     }));
     const t6 = result.items.find((i) => i.spoke === "T6")!;
     expect(t6.passed).toBe(false);
-    expect(result.allowed).toBe(false);
+    expect(t6.mandatory).toBe(false);
+    expect(result.allowed).toBe(true); // T6 is now advisory, Saraswati handles macro validation
   });
 
   test("TC-I11: R1 fails — position size > max → allowed = false", () => {
     const result = buildChecklist(makePassingInput({
-      positionSizePct: 50,
+      positionSizePct: 22,
       risk: makeRisk({ maxPositionSizePct: 21 }),
     }));
     const r1 = result.items.find((i) => i.spoke === "R1")!;
@@ -206,40 +215,51 @@ describe("buildChecklist — mandatory gates", () => {
     expect(result.allowed).toBe(false);
   });
 
-  test("TC-I15: R6 fails — open positions ≥ 5 → allowed = false", () => {
+  test("TC-I15: R6 fails — open positions ≥ 8 → allowed = false", () => {
     const result = buildChecklist(makePassingInput({
-      openPositionCount: 5,
+      openPositionCount: 8,
     }));
     const r6 = result.items.find((i) => i.spoke === "R6")!;
     expect(r6.passed).toBe(false);
     expect(result.allowed).toBe(false);
   });
 
-  test("TC-I16: B1 fails — animalBlendScore ≤ 0 → allowed = false", () => {
+  test("TC-I16: B1 fails — animalBlendScore deeply negative → allowed = false", () => {
     const result = buildChecklist(makePassingInput({
-      animalBlendScore: -0.1,
+      animalBlendScore: -0.15, // below relaxed threshold of -0.10
     }));
     const b1 = result.items.find((i) => i.spoke === "B1")!;
     expect(b1.passed).toBe(false);
     expect(result.allowed).toBe(false);
   });
 
-  test("TC-I17: B2 fails — tradesToday ≥ 8 → allowed = false", () => {
+  test("TC-I17: B2 fails — tradesToday ≥ 100 → allowed = false", () => {
     const result = buildChecklist(makePassingInput({
-      tradesToday: 10,
+      tradesToday: 100,
     }));
     const b2 = result.items.find((i) => i.spoke === "B2")!;
     expect(b2.passed).toBe(false);
     expect(result.allowed).toBe(false);
   });
 
-  test("TC-I18: B8 fails — animalBlendScore ≤ 0.15 → allowed = false", () => {
+  test("TC-I17b: B2 passes in Overdrive Mode if tradesToday is 100 (< 300) → allowed = true", () => {
     const result = buildChecklist(makePassingInput({
-      animalBlendScore: 0.10,
+      tradesToday: 100,
+      isOverdrive: true,
+    }));
+    const b2 = result.items.find((i) => i.spoke === "B2")!;
+    expect(b2.passed).toBe(true);
+    expect(result.allowed).toBe(true);
+  });
+
+  test("TC-I18: B8 fails — animalBlendScore ≤ 0 → check fails but allowed = true (non-mandatory)", () => {
+    const result = buildChecklist(makePassingInput({
+      animalBlendScore: -0.05, // mildly negative — B8 fails but is non-mandatory
     }));
     const b8 = result.items.find((i) => i.spoke === "B8")!;
     expect(b8.passed).toBe(false);
-    expect(result.allowed).toBe(false);
+    expect(b8.mandatory).toBe(false);
+    expect(result.allowed).toBe(true); // B8 is non-mandatory (duplicate of B1)
   });
 });
 
