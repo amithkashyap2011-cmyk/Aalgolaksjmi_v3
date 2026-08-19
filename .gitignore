@@ -100,3 +100,10 @@ node_modules
 /.docx_venv/
 /server/auto_trade.log.1
 /server/server_crash.log.1
+/client/node_modules/
+/node_modules/
+**/node_modules/
+**/__pycache__/
+*.pyc
+models/ppo/replay_buffer.jsonl
+data/historical/*.csv
