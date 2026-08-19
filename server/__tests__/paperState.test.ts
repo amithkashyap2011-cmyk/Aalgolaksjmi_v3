@@ -115,11 +115,12 @@ describe("PositionIndex (Map<symbol+mode, PaperPosition>)", () => {
 });
 
 describe("Wallet (Map<asset, balance>)", () => {
-  /* ── TC-45: new user gets default 20000 USDT (starting paper funds) ───── */
-  test("TC-45: getWallet auto-seeds 20000 USDT for new user (starting paper funds)", () => {
+  /* ── TC-45: new user defaults to 0 USDT and 0 INR (zero baseline) ───── */
+  test("TC-45: getWallet initializes 0 USDT for new user (clean zero baseline)", () => {
     const user = uniqueUser();
     const w = getWallet(user, "PAPER");
-    expect(w.get("USDT")).toBe(20000);
+    expect(w.get("USDT")).toBe(0);
+    expect(w.get("INR")).toBe(0);
   });
 
   /* ── TC-46: setWalletBalance updates correctly ── */

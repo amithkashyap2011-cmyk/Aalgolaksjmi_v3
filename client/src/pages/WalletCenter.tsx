@@ -326,8 +326,8 @@ export default function WalletCenter() {
   });
 
   const openAllocationModal = () => {
-    setAllocSpotAmt((balances.spot.total || 20000).toString());
-    setAllocFuturesAmt((balances.futures.total || 20000).toString());
+    setAllocSpotAmt((balances.spot.total ?? 0).toString());
+    setAllocFuturesAmt((balances.futures.total ?? 0).toString());
     openModal("allocate");
   };
 

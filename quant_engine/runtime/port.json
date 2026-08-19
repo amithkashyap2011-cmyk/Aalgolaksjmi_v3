@@ -1,0 +1,6 @@
+{
+  "service": "quant_engine",
+  "host": "127.0.0.1",
+  "port": 49155,
+  "startedAt": "2026-08-19T07:03:50.831518"
+}

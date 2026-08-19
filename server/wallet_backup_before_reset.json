@@ -1,0 +1,182 @@
+{
+  "timestamp": "2026-08-19T14:52:04.912Z",
+  "database": "aalgolakshmi",
+  "walletsnapshots": [
+    {
+      "_id": "6a7b11a67a3dd02a57f5672d",
+      "userId": "000000000000000000000000",
+      "accountType": "INDIAN_NIFTY50",
+      "mode": "PAPER",
+      "__v": 0,
+      "balances": {
+        "USDT": 0,
+        "INR": 0
+      },
+      "updatedAt": "2026-08-17T07:34:49.261Z"
+    },
+    {
+      "_id": "6a7b11a67a3dd02a57f5672f",
+      "mode": "PAPER",
+      "accountType": "SPOT",
+      "userId": "000000000000000000000000",
+      "__v": 0,
+      "balances": {
+        "USDT": 0,
+        "INR": 0
+      },
+      "updatedAt": "2026-08-17T07:34:49.261Z"
+    },
+    {
+      "_id": "6a7b11a67a3dd02a57f5672e",
+      "mode": "PAPER",
+      "accountType": "FUTURES",
+      "userId": "000000000000000000000000",
+      "__v": 0,
+      "balances": {
+        "USDT": 0,
+        "INR": 0
+      },
+      "updatedAt": "2026-08-17T07:34:49.261Z"
+    },
+    {
+      "_id": "6a7b11a67a3dd02a57f56730",
+      "mode": "PAPER",
+      "accountType": "INDIAN_BSE",
+      "userId": "000000000000000000000000",
+      "__v": 0,
+      "balances": {
+        "USDT": 0,
+        "INR": 0
+      },
+      "updatedAt": "2026-08-17T07:34:49.261Z"
+    },
+    {
+      "_id": "6a7b11a67a3dd02a57f56731",
+      "mode": "PAPER",
+      "accountType": "INDIAN_NSE",
+      "userId": "000000000000000000000000",
+      "__v": 0,
+      "balances": {
+        "USDT": 0,
+        "INR": 0
+      },
+      "updatedAt": "2026-08-17T07:34:49.261Z"
+    },
+    {
+      "_id": "6a7b4f70c4d5f658aa088e99",
+      "mode": "PAPER",
+      "accountType": "FUTURES",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "__v": 0,
+      "balances": {
+        "USDT": 1764.2986771301942,
+        "INR": 0
+      },
+      "updatedAt": "2026-08-19T14:25:48.413Z"
+    },
+    {
+      "_id": "6a7b5031c4d5f658aa088e9a",
+      "mode": "PAPER",
+      "accountType": "SPOT",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "__v": 0,
+      "balances": {
+        "USDT": 10.4723,
+        "INR": 0
+      },
+      "updatedAt": "2026-08-17T07:36:41.358Z"
+    }
+  ],
+  "wallettransactions": [
+    {
+      "_id": "6a7b4f709e274d7872723852",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "type": "DEPOSIT",
+      "method": "DEBUG",
+      "amount": 1000,
+      "currency": "INR",
+      "status": "COMPLETED",
+      "txnRef": "PAPER1786466160227",
+      "note": "Dummy Paper Deposit: +₹1000 (10.49 USDT equivalent @ ₹95.32/USDT)",
+      "accountType": "FUTURES",
+      "createdAt": "2026-08-11T16:36:00.259Z",
+      "updatedAt": "2026-08-11T16:36:00.259Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a7b50319e274d7872723cf8",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "type": "DEPOSIT",
+      "method": "DEBUG",
+      "amount": 1000,
+      "currency": "INR",
+      "status": "COMPLETED",
+      "txnRef": "PAPER1786466353043",
+      "note": "Dummy Paper Deposit: +₹1000 (10.49 USDT equivalent @ ₹95.30/USDT)",
+      "accountType": "SPOT",
+      "createdAt": "2026-08-11T16:39:13.051Z",
+      "updatedAt": "2026-08-11T16:39:13.051Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a7d6446eacb19a583c94916",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "type": "DEPOSIT",
+      "method": "DEBUG",
+      "amount": 1000,
+      "currency": "INR",
+      "status": "COMPLETED",
+      "txnRef": "PAPER1786602566742",
+      "note": "Dummy Paper Deposit: +₹1000 (10.49 USDT equivalent @ ₹95.30/USDT)",
+      "accountType": "SPOT",
+      "createdAt": "2026-08-13T06:29:26.749Z",
+      "updatedAt": "2026-08-13T06:29:26.749Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a7d646beacb19a583c9498a",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "type": "DEPOSIT",
+      "method": "DEBUG",
+      "amount": 1000,
+      "currency": "INR",
+      "status": "COMPLETED",
+      "txnRef": "PAPER1786602603636",
+      "note": "Dummy Paper Deposit: +₹1000 (10.49 USDT equivalent @ ₹95.30/USDT)",
+      "accountType": "FUTURES",
+      "createdAt": "2026-08-13T06:30:03.637Z",
+      "updatedAt": "2026-08-13T06:30:03.637Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a82b9ec21f28cf342402d3f",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "type": "DEPOSIT",
+      "method": "DEBUG",
+      "amount": 1000,
+      "currency": "INR",
+      "status": "COMPLETED",
+      "txnRef": "PAPER1786952172150",
+      "note": "Dummy Paper Deposit: +₹1000 (10.47 USDT equivalent @ ₹95.49/USDT)",
+      "accountType": "FUTURES",
+      "createdAt": "2026-08-17T07:36:12.181Z",
+      "updatedAt": "2026-08-17T07:36:12.181Z",
+      "__v": 0
+    },
+    {
+      "_id": "6a82ba0921f28cf3424031a0",
+      "userId": "6a39c0e7a5e2995ed257ca68",
+      "type": "DEPOSIT",
+      "method": "DEBUG",
+      "amount": 1000,
+      "currency": "INR",
+      "status": "COMPLETED",
+      "txnRef": "PAPER1786952201364",
+      "note": "Dummy Paper Deposit: +₹1000 (10.47 USDT equivalent @ ₹95.49/USDT)",
+      "accountType": "SPOT",
+      "createdAt": "2026-08-17T07:36:41.365Z",
+      "updatedAt": "2026-08-17T07:36:41.365Z",
+      "__v": 0
+    }
+  ]
+}

@@ -1497,12 +1497,12 @@ router.post("/hard-reset", optionalAuth, async (req: AuthRequest, res) => {
       // 3. Force re-seed clean baseline ($20k USDT & ₹20L INR)
       if (paper && typeof paper.setWalletBalance === 'function') {
         await Promise.all([
-          paper.setWalletBalance(primaryUserId, "PAPER", "USDT", 20000, "FUTURES"),
-          paper.setWalletBalance(primaryUserId, "PAPER", "USDT", 20000, "SPOT"),
+          paper.setWalletBalance(primaryUserId, "PAPER", "USDT", 0, "FUTURES"),
+          paper.setWalletBalance(primaryUserId, "PAPER", "USDT", 0, "SPOT"),
           paper.setWalletBalance(primaryUserId, "LIVE", "USDT", 0, "FUTURES"),
           paper.setWalletBalance(primaryUserId, "LIVE", "USDT", 0, "SPOT"),
-          paper.setWalletBalance("guest-user", "PAPER", "USDT", 20000, "FUTURES"),
-          paper.setWalletBalance("guest-user", "PAPER", "USDT", 20000, "SPOT"),
+          paper.setWalletBalance("guest-user", "PAPER", "USDT", 0, "FUTURES"),
+          paper.setWalletBalance("guest-user", "PAPER", "USDT", 0, "SPOT"),
         ]);
       }
 
@@ -1518,11 +1518,11 @@ router.post("/hard-reset", optionalAuth, async (req: AuthRequest, res) => {
       await Promise.all([
         safeUpsert(
           { userId: objId, mode: "PAPER", accountType: "FUTURES" },
-          { $set: { balances: { USDT: 20000, INR: 2000000 } } }
+          { $set: { balances: { USDT: 0, INR: 0 } } }
         ),
         safeUpsert(
           { userId: objId, mode: "PAPER", accountType: "SPOT" },
-          { $set: { balances: { USDT: 20000, INR: 2000000 } } }
+          { $set: { balances: { USDT: 0, INR: 0 } } }
         )
       ]);
 
@@ -1531,7 +1531,7 @@ router.post("/hard-reset", optionalAuth, async (req: AuthRequest, res) => {
     res.json({
       success: true,
       message: "Hard reset complete. All trades vaporized. AutoTrade PAUSED. Wallet set to 20,000 USDT ($20k). Re-enable AutoTrade in Settings when ready.",
-      newBalance: 20000,
+      newBalance: 0,
     });
   } catch (err: any) {
     console.error("[HARD_RESET_FATAL]", err);

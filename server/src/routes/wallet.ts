@@ -135,7 +135,7 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
       // PAPER mode or DB is down — always use in-memory wallet
       const wallet = paper.getWallet(userId, mode, accountType as any);
       if (accountType.startsWith("INDIAN_")) {
-        const rawInr = wallet.get("INR") ?? (accountType === "INDIAN_NIFTY50" ? 1000000 : 500000);
+        const rawInr = wallet.get("INR") ?? 0;
         usdt = rawInr / rate;
       } else {
         usdt = wallet.get("USDT") ?? 0;
@@ -257,7 +257,7 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
 
     // Self-healing fallback: If they have no recorded deposit transactions but have a balance, 
     // treat their starting balance as the initial core capital, and auto-persist a completed DEPOSIT transaction.
-    if (totalDepositsUsdt === 0 && realizedBalance > 0) {
+    if (mode === "LIVE" && totalDepositsUsdt === 0 && realizedBalance > 0) {
       if (mongoose.connection.readyState === 1 && req.userId && mongoose.Types.ObjectId.isValid(req.userId)) {
         try {
           await WalletTransaction.create({
@@ -287,7 +287,7 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
     const coreCapital = Math.max(0, realizedBalance - bookedProfit);
 
     const rawInrVal = accountType.startsWith("INDIAN_")
-      ? (paper.getWallet(userId, mode, accountType as any).get("INR") ?? (accountType === "INDIAN_NIFTY50" ? 1000000 : 500000))
+      ? (paper.getWallet(userId, mode, accountType as any).get("INR") ?? 0)
       : +(usdt * rate).toFixed(2);
 
     res.json({
@@ -860,7 +860,7 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
 router.post("/init", authGuard, async (req: AuthRequest, res) => {
   try {
     const mode = (req.body?.mode as string) || "PAPER";
-    const initialBalance = req.body?.balance ?? 100; // Default 100 USDT
+    const initialBalance = req.body?.balance ?? 0; // Clean 0 baseline
     const accountType = (req.body?.accountType as string) || "FUTURES";
 
     const wallet = paper.getWallet(req.userId!, mode, accountType);
@@ -932,11 +932,11 @@ router.post("/reset", authGuard, async (req: AuthRequest, res) => {
     }
 
     // Re-seed $20,000 USDT & ₹20,00,000 INR baseline
-    await paper.setWalletBalance(req.userId!, mode, "USDT", 20000, accountType);
+    await paper.setWalletBalance(req.userId!, mode, "USDT", 0, accountType);
 
     res.json({
       message: "Wallet reset to standard baseline 20,000 USDT ($20k) state.",
-      newBalance: 20000,
+      newBalance: 0,
       mode,
     });
   } catch (err: any) {

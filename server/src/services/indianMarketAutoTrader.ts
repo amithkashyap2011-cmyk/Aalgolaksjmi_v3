@@ -182,7 +182,7 @@ export class IndianMarketAutoTrader {
     const wallet = paper.getWallet(userId, mode, accountType as any);
     let inrBal = wallet.get("INR");
     if (inrBal === undefined || inrBal === null || (mode === "PAPER" && inrBal < marginRequired)) {
-      inrBal = 2000000; // 20 Lakhs INR baseline
+      inrBal = wallet.get("INR") || 0;
       wallet.set("INR", inrBal);
     }
 
@@ -345,7 +345,7 @@ export class IndianMarketAutoTrader {
         const userIdStr = trade.userId ? trade.userId.toString() : userId;
         const accountType = trade.symbol.includes("NIFTY") || trade.symbol.includes("BANK") ? "INDIAN_NIFTY50" : "INDIAN_NSE";
         const wallet = paper.getWallet(userIdStr, trade.mode as any, accountType as any);
-        const currentBal = wallet.get("INR") || 2000000;
+        const currentBal = wallet.get("INR") || 0;
         wallet.set("INR", currentBal + marginReturned + realizedPnl);
 
         if (paper && typeof paper.removePosition === "function") {

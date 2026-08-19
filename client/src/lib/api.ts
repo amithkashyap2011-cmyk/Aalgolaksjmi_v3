@@ -219,7 +219,7 @@ export async function healthCheck() {
 
 /* ── Wallet ────────────────────────────────────────────── */
 
-export async function initWallet(mode: string = "PAPER", balance: number = 100) {
+export async function initWallet(mode: string = "PAPER", balance: number = 0) {
   return request<{
     message: string;
     newBalance: number;

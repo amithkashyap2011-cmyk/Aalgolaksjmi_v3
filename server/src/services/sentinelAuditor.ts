@@ -24,7 +24,7 @@ import { ApiKeys } from "../models/ApiKeys.js";
 import { decrypt } from "../lib/crypto.js";
 
 const AUTO_FIX_LOG = "/Users/amithks/aalgolakshmi_v3/server/auto_trade.log";
-const STATIC_BASELINE_USDT = 20000; // Reset balance to safe $20K if corrupted
+const STATIC_BASELINE_USDT = 0; // Reset balance to safe $20K if corrupted
 
 function logAutoFix(msg: string) {
   const timestamp = new Date().toISOString();

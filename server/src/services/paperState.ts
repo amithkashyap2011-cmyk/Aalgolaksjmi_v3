@@ -176,13 +176,7 @@ export function getWallet(userId: string, mode: string, accountType: string = "F
   const k = walletKey(userId, mode, accountType);
   let w = wallets.get(k);
   if (!w) {
-    if (accountType === "INDIAN_NSE" || accountType === "INDIAN_BSE" || accountType === "INDIAN_EQUITY") {
-      w = new Map([["INR", 2000000], ["USDT", 20000]]); // ₹20,00,000 INR ($20,000 USDT) starting funds
-    } else if (accountType === "INDIAN_NIFTY50" || accountType === "INDIAN_FNO") {
-      w = new Map([["INR", 2000000], ["USDT", 20000]]); // ₹20,00,000 INR ($20,000 USDT) starting funds
-    } else {
-      w = new Map([["USDT", 20000], ["INR", 2000000]]); // Default $20,000 USDT (₹20,00,000 INR) starting paper funds
-    }
+    w = new Map([["USDT", 0], ["INR", 0]]);
     wallets.set(k, w);
   }
   return w;

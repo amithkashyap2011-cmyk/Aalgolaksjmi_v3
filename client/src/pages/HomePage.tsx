@@ -95,7 +95,7 @@ export default function HomePage() {
     ? (cryptoD.balances ?? { spot: 0, futures: 0 })
     : domainTab === 'indian'
       ? (indianD.balances ?? { spot: 0, futures: 0 })
-      : (summary as any).balances ?? { spot: totalEquity / 2, futures: totalEquity / 2 };
+      : (summary as any).balances ?? { spot: 0, futures: 0 };
   const netPnl     = domainTab === 'crypto'
     ? (cryptoD.netPnL ?? { total: 0, spot: 0, futures: 0 })
     : domainTab === 'indian'
