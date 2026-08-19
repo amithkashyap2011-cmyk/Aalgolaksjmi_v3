@@ -61,6 +61,8 @@ export async function enrichOpenTrades(trades: any[]): Promise<any[]> {
 
       trade.markPrice = markPrice;
       trade.pnl = pnl;
+      trade.unrealisedPnl = pnl;
+      trade.margin = margin;
       trade.unrealisedPnlPct = margin > 0 ? (pnl / margin) * 100 : 0;
     } catch (err: any) {
       console.error(`[pnlService] Failed to attach live PnL for ${trade.symbol}:`, err.message);

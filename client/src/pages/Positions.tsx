@@ -62,7 +62,7 @@ export default function Positions() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [closingAll, setClosingAll] = useState(false);
-  const { userId, mode } = useAppStore();
+  const { userId, mode, accountType } = useAppStore();
   const { currencyMode, summary } = useDashboardStore();
   const inrRate = summary?.inrRate || 85;
 
@@ -79,7 +79,7 @@ export default function Positions() {
     if (!silent) setLoading(true);
     try {
       if (tab === "OPEN") {
-        const data = await api.getOpenPositions(mode);
+        const data = await api.getOpenPositions(mode, accountType === "BOTH" ? undefined : accountType);
         setPositions(Array.isArray(data) ? data : []);
       } else {
         const res = await api.getTradeHistory(mode, 50, 0, "CLOSED");
@@ -96,7 +96,7 @@ export default function Positions() {
     } finally { if (!silent) setLoading(false); }
   };
 
-  useEffect(() => { load(false); }, [userId, mode, tab]);
+  useEffect(() => { load(false); }, [userId, mode, tab, accountType]);
   useEffect(() => {
     if (!userId || tab !== "OPEN") return;
     const t = setInterval(() => load(true), 5000); // live PnL refresh (silent)

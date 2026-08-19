@@ -75,7 +75,7 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const mode = (req.query?.mode as string) || "PAPER";
     const accountType = (req.query?.accountType as string) || "FUTURES";
-    const userId = req.userId || "guest-user"; // Default to guest for unauthenticated requests
+    const userId = req.userId || (req.body?.userId && mongoose.Types.ObjectId.isValid(req.body.userId) ? String(req.body.userId) : "guest-user");
     console.log(`[balance-request] User: ${userId}, Mode: ${mode}, AccountType: ${accountType}`);
     const sid = (req.query?.sid as string) || "unknown";
     console.log(`[balance-debug] Request: mode=${mode}, type=${accountType}, user=${userId}, sid=${sid}`);
@@ -761,7 +761,7 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
 
     let newBalance = 0;
     if (acctType.startsWith("INDIAN_")) {
-      const currentInr = wallet.get("INR") ?? (acctType === "INDIAN_NIFTY50" ? 1000000 : 500000);
+      const currentInr = wallet.get("INR") ?? 0;
       const newInrBalance = currentInr + numAmount;
       await paper.setWalletBalance(userId, mode, "INR", newInrBalance, acctType);
       await paper.setWalletBalance(userId, mode, "USDT", newInrBalance / rate, acctType);

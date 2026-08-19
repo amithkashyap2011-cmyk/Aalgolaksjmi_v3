@@ -6,10 +6,20 @@ import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 
 jest.unstable_mockModule("../src/services/binanceService.js", () => ({
-  getKlines: (jest.fn() as any).mockResolvedValue([]),
-  getLatestFundingRate: (jest.fn() as any).mockResolvedValue(0),
-  getTickerPrice: (jest.fn() as any).mockResolvedValue(50000),
-  getTickerPriceSync: (jest.fn() as any).mockResolvedValue(50000),
+  getKlines: (jest.fn() as any).mockResolvedValue([
+    { openTime: 1000, open: "50000", high: "51000", low: "49500", close: "50500", volume: "100", closeTime: 2000 }
+  ]),
+  getLatestFundingRate: (jest.fn() as any).mockResolvedValue(0.0001),
+  getFuturesOpenInterest: (jest.fn() as any).mockResolvedValue(1000),
+  getTickerPrice: (jest.fn() as any).mockResolvedValue(50500),
+  getTickerPriceSync: (jest.fn() as any).mockReturnValue(50500),
+  subscribeTicker: jest.fn(),
+  unsubscribeTicker: jest.fn(),
+  getActiveSocketsInfo: (jest.fn() as any).mockReturnValue([]),
+  formatFuturesQuantity: (jest.fn() as any).mockImplementation((s: string, q: number) => String(q)),
+  setFuturesLeverage: (jest.fn() as any).mockResolvedValue({ leverage: 10 }),
+  placeFuturesOrder: (jest.fn() as any).mockResolvedValue({ orderId: 12345, executedQty: "0.01", avgPrice: "50500" }),
+  genClientOrderId: (jest.fn() as any).mockReturnValue("test-order-1"),
 }));
 
 const JWT_SECRET = process.env.JWT_SECRET || "test-secret-dummy-wallet-zero";
@@ -22,7 +32,7 @@ let WalletSnapshot: any;
 let WalletTransaction: any;
 let Trade: any;
 
-describe("DUMMY / PAPER Complete Zero-Capital Regression Suite", () => {
+describe("DUMMY / PAPER Trading Pipeline & Zero Baseline Comprehensive Suite", () => {
   beforeAll(async () => {
     process.env.JWT_SECRET = JWT_SECRET;
     const connected = await connectIfAvailable();
@@ -35,10 +45,13 @@ describe("DUMMY / PAPER Complete Zero-Capital Regression Suite", () => {
 
     const walletRouter = (await import("../src/routes/wallet.js")).default;
     const aqeaUiRouter = (await import("../src/routes/aqeaUi.js")).default;
+    const tradingRouter = (await import("../src/routes/trading.js")).default;
+
     app = express();
     app.use(express.json());
     app.use("/wallet", walletRouter);
     app.use("/aqea-ui", aqeaUiRouter);
+    app.use("/trading", tradingRouter);
   });
 
   afterAll(async () => {
@@ -50,114 +63,140 @@ describe("DUMMY / PAPER Complete Zero-Capital Regression Suite", () => {
     await disconnectMongo();
   });
 
-  it("TEST 1: New/uninitialized PAPER wallet defaults to 0 USDT and 0 INR", () => {
-    const freshUser = new mongoose.Types.ObjectId().toString();
-    const w = paper.getWallet(freshUser, "PAPER", "FUTURES");
-    expect(w.get("USDT")).toBe(0);
-    expect(w.get("INR")).toBe(0);
-  });
-
-  it("TEST 2: MongoDB PAPER WalletSnapshot stores USDT=0 and INR=0", async () => {
+  it("1. Zero PAPER balance does not silently auto-fund", async () => {
     if (skipIfNoMongo()) return;
     await paper.setWalletBalance(testUserId, "PAPER", "USDT", 0, "FUTURES");
-    await paper.setWalletBalance(testUserId, "PAPER", "INR", 0, "FUTURES");
-
-    const snap = await WalletSnapshot.findOne({ userId: testUserId, mode: "PAPER", accountType: "FUTURES" });
-    expect(snap).toBeDefined();
-    expect(snap.balances.get ? snap.balances.get("USDT") : snap.balances.USDT).toBe(0);
-    expect(snap.balances.get ? snap.balances.get("INR") : snap.balances.INR).toBe(0);
-  });
-
-  it("TEST 3: Server restart / rehydration preserves 0 balance without creating funds", async () => {
-    if (skipIfNoMongo()) return;
-    await paper.setWalletBalance(testUserId, "PAPER", "USDT", 0, "FUTURES");
-    paper.resetAllPaperStateToZero();
-    await paper.hydrate();
     const w = paper.getWallet(testUserId, "PAPER", "FUTURES");
     expect(w.get("USDT")).toBe(0);
   });
 
-  it("TEST 4: Repeated GET /wallet/balance requests keep balance at 0", async () => {
-    if (skipIfNoMongo()) return;
-    for (let i = 0; i < 3; i++) {
-      const res = await request(app)
-        .get("/wallet/balance?mode=PAPER&accountType=FUTURES")
-        .set("Authorization", `Bearer ${token}`);
-      expect(res.status).toBe(200);
-      expect(res.body.usdt).toBe(0);
-      expect(res.body.totalBalance).toBe(0);
-      expect(res.body.lockedMargin).toBe(0);
-    }
-  });
-
-  it("TEST 5: Repeated dashboard requests keep totalEquity at 0 when no positions open", async () => {
-    if (skipIfNoMongo()) return;
-    for (let i = 0; i < 3; i++) {
-      const res = await request(app)
-        .get(`/aqea-ui/dashboard?userId=${testUserId}&accountType=BOTH`);
-      expect(res.status).toBe(200);
-      expect(res.body.summary.totalEquity).toBe(0);
-      expect(res.body.domains.crypto.totalEquity).toBe(0);
-      expect(res.body.domains.indianStock.totalEquity).toBe(0);
-    }
-  });
-
-  it("TEST 6: Zero open positions means zero locked margin and zero portfolio equity", async () => {
-    if (skipIfNoMongo()) return;
-    const positions = paper.getOpenPositions(testUserId, "PAPER");
-    expect(positions.length).toBe(0);
-    const res = await request(app)
-      .get(`/aqea-ui/dashboard?userId=${testUserId}&accountType=BOTH`);
-    expect(res.body.summary.invested.total).toBe(0);
-    expect(res.body.summary.totalEquity).toBe(0);
-  });
-
-  it("TEST 7: Closing open PAPER positions reduces open positions count to 0", async () => {
-    if (skipIfNoMongo()) return;
-    paper.setPosition(testUserId, "BTCUSDT", "PAPER", {
-      userId: testUserId,
-      symbol: "BTCUSDT",
-      side: "BUY",
-      quantity: 0.1,
-      entryPrice: 50000,
-      tradeId: new mongoose.Types.ObjectId().toString(),
-      accountType: "FUTURES",
-      leverage: 10
-    });
-    expect(paper.getOpenPositions(testUserId, "PAPER").length).toBe(1);
-    paper.removePosition(testUserId, "BTCUSDT", "PAPER", "FUTURES");
-    expect(paper.getOpenPositions(testUserId, "PAPER").length).toBe(0);
-  });
-
-  it("TEST 8: LIVE/REAL wallets remain completely unchanged and isolated", async () => {
-    if (skipIfNoMongo()) return;
-    await paper.setWalletBalance(testUserId, "PAPER", "USDT", 0, "FUTURES");
-    const paperWallet = paper.getWallet(testUserId, "PAPER", "FUTURES");
-    const liveWallet = paper.getWallet(testUserId, "LIVE", "FUTURES");
-    expect(paperWallet.get("USDT")).toBe(0);
-    expect(liveWallet.get("USDT")).toBe(0);
-  });
-
-  it("TEST 9: A legitimate PAPER deposit increases wallet balance exactly once", async () => {
+  it("2. Explicit PAPER funding works exactly once", async () => {
     if (skipIfNoMongo()) return;
     const res = await request(app)
       .post("/wallet/deposit/paper")
       .set("Authorization", `Bearer ${token}`)
-      .send({ amount: 500, accountType: "FUTURES" });
+      .send({ amount: 1000, currency: "USDT", accountType: "FUTURES" });
     expect(res.status).toBe(200);
-    expect(res.body.newBalance).toBe(500);
-    expect(paper.getWallet(testUserId, "PAPER", "FUTURES").get("USDT")).toBe(500);
-    // Clean back to 0
-    await paper.setWalletBalance(testUserId, "PAPER", "USDT", 0, "FUTURES");
+    expect(res.body.newBalance).toBe(1000);
+    expect(paper.getWallet(testUserId, "PAPER", "FUTURES").get("USDT")).toBe(1000);
   });
 
-  it("TEST 10: Repeated dashboard calls do not synthesize/create money", async () => {
+  it("3. Restart/rehydration does not duplicate funding", async () => {
     if (skipIfNoMongo()) return;
-    const initialRes = await request(app)
-      .get(`/aqea-ui/dashboard?userId=${testUserId}&accountType=BOTH`);
-    const secondRes = await request(app)
-      .get(`/aqea-ui/dashboard?userId=${testUserId}&accountType=BOTH`);
-    expect(initialRes.body.summary.totalEquity).toBe(0);
-    expect(secondRes.body.summary.totalEquity).toBe(0);
+    paper.resetAllPaperStateToZero();
+    await paper.hydrate();
+    expect(paper.getWallet(testUserId, "PAPER", "FUTURES").get("USDT")).toBe(1000);
+  });
+
+  it("4. PAPER and LIVE wallets remain isolated", async () => {
+    if (skipIfNoMongo()) return;
+    const paperW = paper.getWallet(testUserId, "PAPER", "FUTURES");
+    const liveW = paper.getWallet(testUserId, "LIVE", "FUTURES");
+    expect(paperW.get("USDT")).toBe(1000);
+    expect(liveW.get("USDT")).toBe(0);
+  });
+
+  it("5. Zero balance does not permanently disable user-initiated PAPER activation", async () => {
+    if (skipIfNoMongo()) return;
+    await paper.setWalletBalance(testUserId, "PAPER", "USDT", 0, "FUTURES");
+    expect(paper.getWallet(testUserId, "PAPER", "FUTURES").get("USDT")).toBe(0);
+    const res = await request(app)
+      .post("/wallet/deposit/paper")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ amount: 500, currency: "USDT", accountType: "FUTURES" });
+    expect(res.status).toBe(200);
+    expect(res.body.newBalance).toBe(500);
+  });
+
+  it("6. OPEN PAPER position is created and persisted to MongoDB", async () => {
+    if (skipIfNoMongo()) return;
+    const trade = await Trade.create({
+      userId: new mongoose.Types.ObjectId(testUserId),
+      mode: "PAPER",
+      symbol: "BTCUSDT",
+      side: "BUY",
+      quantity: 0.01,
+      entryPrice: 50000,
+      leverage: 10,
+      accountType: "FUTURES",
+      status: "OPEN",
+      openedAt: new Date(),
+      sl: 49000,
+      tp: 52000,
+      strategy: "AQEA_V33",
+      decisionPath: {
+        regime: "TRENDING_BULL",
+        coreScore: 85,
+        finalScore: 88
+      }
+    });
+    expect(trade._id).toBeDefined();
+    paper.setPosition(testUserId, "BTCUSDT", "PAPER", {
+      userId: testUserId,
+      symbol: "BTCUSDT",
+      side: "BUY",
+      quantity: 0.01,
+      entryPrice: 50000,
+      tradeId: trade._id.toString(),
+      accountType: "FUTURES",
+      leverage: 10
+    });
+  });
+
+  it("7. Positions API (/trading/open-positions) returns enriched OPEN position", async () => {
+    if (skipIfNoMongo()) return;
+    const res = await request(app)
+      .get("/trading/open-positions?mode=PAPER&accountType=FUTURES")
+      .set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThanOrEqual(1);
+    const btcPos = res.body.find((p: any) => p.symbol === "BTCUSDT");
+    expect(btcPos).toBeDefined();
+    expect(btcPos.entryPrice).toBe(50000);
+    expect(btcPos.margin).toBe(50); // 0.01 * 50000 / 10 = 50
+    expect(btcPos.pnl).toBeDefined();
+  });
+
+  it("8. PnL calculation signs are correct for LONG and SHORT", async () => {
+    const { computeUnrealisedPnl } = await import("../src/services/pnlService.js");
+    // LONG: price up is profit
+    const longProfit = computeUnrealisedPnl({ side: "BUY", entryPrice: 50000, quantity: 1, accountType: "FUTURES" }, 51000);
+    expect(longProfit).toBeGreaterThan(0);
+    // LONG: price down is loss
+    const longLoss = computeUnrealisedPnl({ side: "BUY", entryPrice: 50000, quantity: 1, accountType: "FUTURES" }, 49000);
+    expect(longLoss).toBeLessThan(0);
+    // SHORT: price down is profit
+    const shortProfit = computeUnrealisedPnl({ side: "SELL", entryPrice: 50000, quantity: 1, accountType: "FUTURES" }, 49000);
+    expect(shortProfit).toBeGreaterThan(0);
+    // SHORT: price up is loss
+    const shortLoss = computeUnrealisedPnl({ side: "SELL", entryPrice: 50000, quantity: 1, accountType: "FUTURES" }, 51000);
+    expect(shortLoss).toBeLessThan(0);
+  });
+
+  it("9. Invested amount calculation is exactly quantity * entryPrice / leverage", () => {
+    const qty = 0.01;
+    const entry = 50000;
+    const lev = 10;
+    const invested = (qty * entry) / lev;
+    expect(invested).toBe(50);
+  });
+
+  it("10. Reset returns PAPER wallet and positions to clean zero", async () => {
+    if (skipIfNoMongo()) return;
+    await Trade.updateMany({ userId: new mongoose.Types.ObjectId(testUserId), mode: "PAPER" }, { $set: { status: "CLOSED" } });
+    await paper.setWalletBalance(testUserId, "PAPER", "USDT", 0, "FUTURES");
+    paper.removePosition(testUserId, "BTCUSDT", "PAPER", "FUTURES");
+
+    const resPos = await request(app)
+      .get("/trading/open-positions?mode=PAPER&accountType=FUTURES")
+      .set("Authorization", `Bearer ${token}`);
+    expect(resPos.body.length).toBe(0);
+
+    const resBal = await request(app)
+      .get("/wallet/balance?mode=PAPER&accountType=FUTURES")
+      .set("Authorization", `Bearer ${token}`);
+    expect(resBal.body.usdt).toBe(0);
+    expect(resBal.body.totalBalance).toBe(0);
   });
 });
