@@ -1,0 +1,19 @@
+{
+  "model_name": "FinancialMambaModel",
+  "version": "v1.0.0-trained",
+  "training_date": "2026-08-15T00:42:23.471776",
+  "pytorch_version": "2.2.0",
+  "random_seed": 42,
+  "feature_schema_version": "v1.0-52feat",
+  "n_features": 52,
+  "seq_len": 240,
+  "d_model": 256,
+  "n_layers": 6,
+  "d_state": 16,
+  "n_classes": 3,
+  "class_mapping": {
+    "0": "LONG",
+    "1": "SHORT",
+    "2": "HOLD"
+  }
+}

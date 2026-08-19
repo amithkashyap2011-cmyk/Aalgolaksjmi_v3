@@ -156,8 +156,9 @@ describe("RiskEngine — property-based invariants", () => {
             currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001,
           });
 
-          const breachesDailyLimit = Math.abs(todayPnl) / balance > AQEA_CONFIG.DAILY_DRAWDOWN_LIMIT;
+          const breachesDailyLimit = todayPnl < 0 && Math.abs(todayPnl) / balance > AQEA_CONFIG.DAILY_DRAWDOWN_LIMIT;
           if (breachesDailyLimit) {
+
             expect(res.allowed).toBe(false);
             expect(res.reason).toBe("DAILY_DRAWDOWN_BREACH");
           }

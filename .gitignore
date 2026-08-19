@@ -1,4 +1,59 @@
+# Dependencies
+node_modules/
+**/node_modules/
 
+# Python environments
+venv/
+.venv/
+**/venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Rust build
+target/
+**/target/
+
+# Frontend builds
+dist/
+**/dist/
+build/
+**/build/
+
+# Logs
+*.log
+logs/
+**/logs/
+soak_logs/
+
+# Databases / runtime data
+db/
+db_data/
+*.wt
+WiredTiger*
+*.journal
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# ML generated artifacts
+*.pt
+*.pth
+*.ckpt
+
+# Training/replay data
+replay_buffer.jsonl
 node_modules
 backups/
 
@@ -42,3 +97,6 @@ node_modules
 node_modules
 node_modules
 node_modules
+/.docx_venv/
+/server/auto_trade.log.1
+/server/server_crash.log.1

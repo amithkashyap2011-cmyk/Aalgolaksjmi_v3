@@ -129,13 +129,17 @@ describe("AQEA Risk Engine", () => {
       currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
     };
     const now = new Date();
-    const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 3600000);
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(todayStart);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    const earlierThisWeek = now.getDay() === 0 ? new Date(now.getTime() - 1000) : new Date(weekStart.getTime() + 3600000);
 
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) });
     mockTradeFind.mockReturnValueOnce({
       lean: (jest.fn() as any).mockResolvedValue([
         { pnl: -200, status: "CLOSED", openedAt: now },
-        { pnl: -2500, status: "CLOSED", openedAt: twoDaysAgo },
+        { pnl: -2500, status: "CLOSED", openedAt: earlierThisWeek },
       ]),
     });
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -2900, status: "CLOSED" }]) });
