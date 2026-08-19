@@ -213,7 +213,7 @@ export default function Positions() {
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr style={{ borderBottom:`1px solid ${BORD}` }}>
-                    {["Symbol","Side","Size","Entry","Mark","SL","TP","Unreal PnL","PnL %","Lev","Action"].map((h) => {
+                    {["Symbol","Side","Size","Entry","Mark","Invested","SL","TP","Unreal PnL","PnL %","Lev","Action"].map((h) => {
                       const sticky = h === "Action"; // pin so CLOSE stays visible while the wide table scrolls
                       return (
                         <th key={h} style={{ padding:"10px 14px", textAlign: sticky ? "center" : "left", fontSize:9, fontWeight:700, color:TXT_FAINT, textTransform:"uppercase", letterSpacing:"0.08em", whiteSpace:"nowrap", position: sticky ? "sticky" : undefined, right: sticky ? 0 : undefined, zIndex: sticky ? 2 : undefined, background: sticky ? CARD : undefined, borderLeft: sticky ? `1px solid ${BORD}` : undefined }}>{h}</th>
@@ -227,6 +227,10 @@ export default function Positions() {
                     const pnlPct = parseFloat(p.unrealisedPnlPct ?? p.unrealizedPnlPct ?? 0);
                     const isLong = (p.side ?? "BUY") === "BUY" || p.side === "LONG";
                     const tradeId = p._id ?? p.tradeId;
+                    const qty    = parseFloat(p.quantity ?? p.positionAmt ?? p.size ?? 0);
+                    const entry  = parseFloat(p.entryPrice ?? 0);
+                    const lev    = parseFloat(p.leverage ?? 1) || 1;
+                    const invested = p.margin ? parseFloat(p.margin) : (qty * entry) / lev;
                     return (
                       <tr key={tradeId ?? i} style={{ borderBottom:`1px solid ${BORD}` }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(59,130,246,0.04)")}
@@ -240,12 +244,16 @@ export default function Positions() {
                         </td>
                         <td style={{ padding:"12px 14px", color:TXT_MUTED, fontFamily:"monospace" }}>{p.quantity ?? p.positionAmt ?? p.size ?? "—"}</td>
                         <td style={{ padding:"12px 14px", color:TXT_MUTED, fontFamily:"monospace" }}>
-                          ${parseFloat(p.entryPrice ?? 0).toLocaleString("en-US", { maximumFractionDigits:8 })}
-                          {showInr && <div style={{ fontSize:9, color:TXT_FAINT }}>{inrText(parseFloat(p.entryPrice ?? 0))}</div>}
+                          ${entry.toLocaleString("en-US", { maximumFractionDigits:8 })}
+                          {showInr && <div style={{ fontSize:9, color:TXT_FAINT }}>{inrText(entry)}</div>}
                         </td>
                         <td style={{ padding:"12px 14px", color:TXT, fontFamily:"monospace" }}>
                           ${parseFloat(p.markPrice ?? p.currentPrice ?? 0).toLocaleString("en-US", { maximumFractionDigits:8 })}
                           {showInr && <div style={{ fontSize:9, color:TXT_FAINT }}>{inrText(parseFloat(p.markPrice ?? p.currentPrice ?? 0))}</div>}
+                        </td>
+                        <td style={{ padding:"12px 14px", color:TXT, fontFamily:"monospace", fontWeight:600 }}>
+                          ${invested.toLocaleString("en-US", { minimumFractionDigits:2, maximumFractionDigits:2 })}
+                          {showInr && <div style={{ fontSize:9, color:TXT_FAINT, fontWeight:400 }}>{inrText(invested)}</div>}
                         </td>
                         <td style={{ padding:"12px 14px" }}>
                           <EditableLevel value={parseFloat(p.sl ?? 0)} color={R} onSave={(v) => handleSaveLevel(tradeId, { sl: v })} />
