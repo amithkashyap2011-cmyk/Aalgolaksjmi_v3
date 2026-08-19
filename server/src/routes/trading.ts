@@ -1007,7 +1007,15 @@ router.get("/klines", async (req, res) => {
 
 router.post("/update-sl-tp", authGuard, async (req: AuthRequest, res) => {
   try {
-    const { tradeId, sl, tp } = req.body as { tradeId: string; sl?: number; tp?: number };
+    const { tradeId, sl, tp, leverage } = req.body as {
+      tradeId: string;
+      sl?: number;
+      tp?: number;
+      leverage?: number;
+      symbol?: string;
+      mode?: string;
+      accountType?: string;
+    };
     if (!tradeId) {
       res.status(400).json({ error: "tradeId is required" });
       return;
@@ -1019,12 +1027,50 @@ router.post("/update-sl-tp", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
+    if (leverage !== undefined && typeof leverage === "number" && leverage > 0) {
+      const oldLeverage = trade.leverage || 1;
+      const newLeverage = leverage;
+      if (oldLeverage !== newLeverage) {
+        const entryPrice = trade.entryPrice || 0;
+        const qty = trade.quantity || 0;
+        const oldMargin = (entryPrice * qty) / oldLeverage;
+        const newMargin = (entryPrice * qty) / newLeverage;
+        const marginDelta = oldMargin - newMargin;
+
+        const mode = trade.mode || "PAPER";
+        const accountType = trade.accountType || "FUTURES";
+
+        if (mode === "PAPER") {
+          const w = paper.getWallet(req.userId!, mode, accountType);
+          const currentBal = w.get("USDT") ?? 0;
+          if (marginDelta < 0 && currentBal < Math.abs(marginDelta)) {
+            res.status(400).json({ error: "Insufficient wallet balance to lower leverage" });
+            return;
+          }
+          await paper.setWalletBalance(req.userId!, mode, "USDT", currentBal + marginDelta, accountType);
+
+          const memPos = paper.getPosition(req.userId!, trade.symbol, mode, accountType);
+          if (memPos) {
+            memPos.leverage = newLeverage;
+            paper.setPosition(req.userId!, trade.symbol, mode, memPos);
+          }
+        }
+        trade.leverage = newLeverage;
+      }
+    }
+
     if (sl !== undefined) trade.sl = sl;
     if (tp !== undefined) trade.tp = tp;
 
     await trade.save();
 
-    res.json({ success: true, trade });
+    res.json({
+      success: true,
+      trade,
+      leverage: trade.leverage,
+      sl: trade.sl,
+      tp: trade.tp
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

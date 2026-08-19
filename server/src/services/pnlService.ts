@@ -27,9 +27,19 @@ export function computeUnrealisedPnl(trade: any, markPrice: number): number {
   const qty = trade.quantity || trade.qty || 0;
   if (!entryPrice || !qty || !markPrice) return 0;
 
-  return trade.side === "BUY"
+  const side = (trade.side || "").toUpperCase();
+  const isLong = side === "BUY" || side === "LONG";
+  const grossPnl = isLong
     ? (markPrice - entryPrice) * qty
     : (entryPrice - markPrice) * qty;
+
+  if (trade.accountType === "FUTURES") {
+    const entryFee = entryPrice * qty * TAKER_FEE;
+    const exitFee = markPrice * qty * TAKER_FEE;
+    return grossPnl - entryFee - exitFee;
+  }
+
+  return grossPnl;
 }
 
 /**
