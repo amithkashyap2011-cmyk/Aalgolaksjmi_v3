@@ -176,7 +176,7 @@ export default function HomePage() {
 
           <button
             onClick={async () => {
-              if (confirm("☢️ NUCLEAR RESET: Purge all old trades, open positions, alerts, and reset paper wallet to $40,000 USDT?")) {
+              if (confirm("☢️ NUCLEAR RESET: Purge all old trades, open positions, alerts, and reset paper wallet to 0 USDT / ₹0 INR?")) {
                 try {
                   await api.hardReset();
                   await useAppStore.getState().boot();

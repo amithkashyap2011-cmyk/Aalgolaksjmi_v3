@@ -1494,16 +1494,15 @@ router.post("/hard-reset", optionalAuth, async (req: AuthRequest, res) => {
         console.warn(`[HARD_RESET_WARN] Settings update warning: ${err?.message}`);
       }
       
-      // 3. Force re-seed clean baseline ($20k USDT & ₹20L INR)
+      // 3. Force clean zero baseline across all account types
+      const ALL_ACCOUNT_TYPES = ["FUTURES", "SPOT", "INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50"] as const;
       if (paper && typeof paper.setWalletBalance === 'function') {
-        await Promise.all([
-          paper.setWalletBalance(primaryUserId, "PAPER", "USDT", 0, "FUTURES"),
-          paper.setWalletBalance(primaryUserId, "PAPER", "USDT", 0, "SPOT"),
-          paper.setWalletBalance(primaryUserId, "LIVE", "USDT", 0, "FUTURES"),
-          paper.setWalletBalance(primaryUserId, "LIVE", "USDT", 0, "SPOT"),
-          paper.setWalletBalance("guest-user", "PAPER", "USDT", 0, "FUTURES"),
-          paper.setWalletBalance("guest-user", "PAPER", "USDT", 0, "SPOT"),
-        ]);
+        for (const acct of ALL_ACCOUNT_TYPES) {
+          await paper.setWalletBalance(primaryUserId, "PAPER", "USDT", 0, acct);
+          await paper.setWalletBalance(primaryUserId, "PAPER", "INR", 0, acct);
+          await paper.setWalletBalance("guest-user", "PAPER", "USDT", 0, acct);
+          await paper.setWalletBalance("guest-user", "PAPER", "INR", 0, acct);
+        }
       }
 
       // 4. Force DB sync (Defensive Upsert)
@@ -1515,22 +1514,18 @@ router.post("/hard-reset", optionalAuth, async (req: AuthRequest, res) => {
         }
       };
 
-      await Promise.all([
-        safeUpsert(
-          { userId: objId, mode: "PAPER", accountType: "FUTURES" },
-          { $set: { balances: { USDT: 0, INR: 0 } } }
-        ),
-        safeUpsert(
-          { userId: objId, mode: "PAPER", accountType: "SPOT" },
-          { $set: { balances: { USDT: 0, INR: 0 } } }
-        )
-      ]);
+      for (const acct of ALL_ACCOUNT_TYPES) {
+        await safeUpsert(
+          { userId: objId, mode: "PAPER", accountType: acct },
+          { $set: { balances: { USDT: 0, INR: 0 }, updatedAt: new Date() } }
+        );
+      }
 
-    console.log(`[HARD_RESET] Purge complete. Account ${primaryUserId} restored to $20,000 USDT (₹20,00,000 INR) baseline.`);
+    console.log(`[HARD_RESET] Purge complete. Account ${primaryUserId} restored to clean 0 USDT / ₹0 INR baseline.`);
 
     res.json({
       success: true,
-      message: "Hard reset complete. All trades vaporized. AutoTrade PAUSED. Wallet set to 20,000 USDT ($20k). Re-enable AutoTrade in Settings when ready.",
+      message: "Hard reset complete. All trades vaporized. AutoTrade PAUSED. Wallet reset to 0 USDT / ₹0 INR. Deposit test capital when ready.",
       newBalance: 0,
     });
   } catch (err: any) {

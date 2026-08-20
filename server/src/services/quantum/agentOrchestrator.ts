@@ -169,8 +169,8 @@ export class AgentOrchestrator {
 
     // 4. Construct Portfolio State
     const accountBalance = await adapter.getAccountBalance().catch(() => ({
-      totalBalance: 10000,
-      availableBalance: 10000,
+      totalBalance: 0,
+      availableBalance: 0,
       unrealizedPnl: 0,
       assets: {},
     }));

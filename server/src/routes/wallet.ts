@@ -26,6 +26,7 @@ import { WalletSnapshot } from "../models/WalletSnapshot.js";
 import { runSentinelAudit } from "../services/sentinelAuditor.js";
 import { Settings } from "../models/Settings.js";
 import * as autoTradeEngine from "../services/autoTradeEngine.js";
+import { clearDashboardCache } from "./aqeaUi.js";
 
 const router = Router();
 
@@ -767,11 +768,13 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
       await paper.setWalletBalance(userId, mode, "USDT", newInrBalance / rate, acctType);
       newBalance = newInrBalance;
       log(`[deposit] Indian Wallet ${userId} (${acctType}) deposited +₹${numAmount} INR. New INR Balance: ₹${newInrBalance}`);
+    clearDashboardCache();
     } else {
       const current = wallet.get("USDT") ?? 0;
       newBalance = current + usdtAmount;
       await paper.setWalletBalance(userId, mode, "USDT", newBalance, acctType);
       log(`[deposit] User ${userId} deposited ${usdtAmount.toFixed(4)} USDT. New balance: ${newBalance}`);
+    clearDashboardCache();
     }
 
     // Persist transaction only if DB is connected and userId is valid ObjectId

@@ -92,7 +92,7 @@ router.get("/dashboard", async (req, res) => {
       const openPnl = openPnlByType.spot + openPnlByType.futures;
       const dailyPnL = todayClosedPnl + openPnl;
 
-      const totalEquity = walletBalances.spot + openPnlByType.spot + walletBalances.futures + openPnlByType.futures;
+      const totalEquity = walletBalances.spot + investedByType.spot + openPnlByType.spot + walletBalances.futures + investedByType.futures + openPnlByType.futures;
       const totalNotional = notionalByType.spot + notionalByType.futures;
       const exposure = totalEquity > 0 ? (totalNotional / totalEquity) * 100 : 0;
 
@@ -157,7 +157,7 @@ router.get("/dashboard", async (req, res) => {
     }
 
     // ── 1. Fetch ALL trades for this user (both domains) ──
-    const allTrades = await Trade.find({ userId: objectId }).lean();
+    const allTrades = await Trade.find({ userId: objectId, mode: "PAPER" }).lean();
     const allOpenTrades = await Trade.find({ userId: objectId, status: "OPEN", mode: "PAPER" }).lean();
     await enrichOpenTrades(allOpenTrades);
 
