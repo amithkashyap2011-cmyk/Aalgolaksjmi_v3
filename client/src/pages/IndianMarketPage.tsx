@@ -816,9 +816,9 @@ export default function IndianMarketPage() {
                 {/* NSE */}
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={{ padding: "10px 12px", fontWeight: 800, color: "#10b981" }}>NSE Equities Wallet</td>
-                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#94a3b8" }}>₹5,00,000.00</td>
-                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: nseBal > 500000 ? "#34d399" : "#64748b", fontWeight: 800 }}>
-                    {nseBal > 500000 ? `+${formatINR(nseBal - 500000)}` : "₹0.00"}
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#94a3b8" }}>₹0.00</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: nseBal > 0 ? "#34d399" : "#64748b", fontWeight: 800 }}>
+                    {nseBal > 0 ? `+${formatINR(nseBal)}` : "₹0.00"}
                   </td>
                   <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 900, color: "#fff" }}>{formatINR(nseBal)}</td>
                   <td style={{ padding: "10px 12px", textAlign: "right" }}>
@@ -829,9 +829,9 @@ export default function IndianMarketPage() {
                 {/* BSE */}
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={{ padding: "10px 12px", fontWeight: 800, color: "#c084fc" }}>BSE Equities Wallet</td>
-                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#94a3b8" }}>₹5,00,000.00</td>
-                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: bseBal > 500000 ? "#c084fc" : "#64748b", fontWeight: 800 }}>
-                    {bseBal > 500000 ? `+${formatINR(bseBal - 500000)}` : "₹0.00"}
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#94a3b8" }}>₹0.00</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: bseBal > 0 ? "#c084fc" : "#64748b", fontWeight: 800 }}>
+                    {bseBal > 0 ? `+${formatINR(bseBal)}` : "₹0.00"}
                   </td>
                   <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 900, color: "#fff" }}>{formatINR(bseBal)}</td>
                   <td style={{ padding: "10px 12px", textAlign: "right" }}>
@@ -842,9 +842,9 @@ export default function IndianMarketPage() {
                 {/* NIFTY 50 */}
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={{ padding: "10px 12px", fontWeight: 800, color: "#fbbf24" }}>NIFTY 50 F&O Wallet</td>
-                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#94a3b8" }}>₹10,00,000.00</td>
-                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: nifty50Bal > 1000000 ? "#fbbf24" : "#64748b", fontWeight: 800 }}>
-                    {nifty50Bal > 1000000 ? `+${formatINR(nifty50Bal - 1000000)}` : "₹0.00"}
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: "#94a3b8" }}>₹0.00</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", color: nifty50Bal > 0 ? "#fbbf24" : "#64748b", fontWeight: 800 }}>
+                    {nifty50Bal > 0 ? `+${formatINR(nifty50Bal)}` : "₹0.00"}
                   </td>
                   <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 900, color: "#fff" }}>{formatINR(nifty50Bal)}</td>
                   <td style={{ padding: "10px 12px", textAlign: "right" }}>

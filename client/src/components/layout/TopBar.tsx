@@ -199,7 +199,7 @@ export default function TopBar({ onMenuClick }: Props) {
                 <li>All past trade history &amp; realized P&amp;L records</li>
                 <li>All active open positions &amp; floating P&amp;L</li>
                 <li>All AI decision logs, alerts &amp; audit history</li>
-                <li>Re-seeds fresh paper wallet baseline ($20,000 USDT / ₹20,00,000 INR)</li>
+                <li>Resets paper wallet to zero baseline (0 USDT / ₹0 INR)</li>
               </ul>
             </div>
 
