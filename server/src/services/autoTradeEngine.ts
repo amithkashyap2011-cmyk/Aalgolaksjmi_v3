@@ -303,27 +303,34 @@ export async function processUser(userId: string, accountTypeArg?: "SPOT" | "FUT
     try {
       settings = await Settings.create({
         userId: validObjId,
-        autoTrade: true,
-        autoTradeSpot: true,
-        autoTradeFutures: true,
+        autoTrade: false,
+        autoTradeSpot: false,
+        autoTradeFutures: false,
         accountType: "BOTH",
         allowedSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"],
         defaultMode: "PAPER",
       });
+      console.log(`[auto] Created default settings for user ${userId} with autoTrade DISABLED. User must explicitly enable auto-trade.`);
+      return; // Do NOT run AI analysis — auto-trade is off by default
     } catch (err) {
       console.warn(`[auto] Could not create default settings for user ${userId}:`, err);
       return;
     }
   }
 
+  // Guard: If auto-trade is explicitly disabled for this account type, skip entirely
+  const accountType: "SPOT" | "FUTURES" = accountTypeArg || (settings.accountType === "BOTH" ? "FUTURES" : settings.accountType as "SPOT" | "FUTURES") || "FUTURES";
+  const perTypeField = accountType === "SPOT" ? "autoTradeSpot" : "autoTradeFutures";
+  if (settings.autoTrade === false || settings[perTypeField] === false) {
+    console.log(`[PAPER-AUTOTRADE] Auto-trade disabled for user ${userId} (${accountType}); no order evaluation performed.`);
+    return;
+  }
+
   // Record tick for reliability monitoring
   SchedulerStateManager.recordTick(userId).catch(console.error);
 
   const mode = settings.defaultMode === "BACKTEST" ? "PAPER" : settings.defaultMode as "PAPER" | "LIVE";
-  // Explicit accountType (from tick()'s composite key) takes priority —
-  // only call sites that haven't been updated to pass one yet fall back
-  // to the legacy single Settings.accountType value.
-  const accountType: "SPOT" | "FUTURES" = accountTypeArg || (settings.accountType === "BOTH" ? "FUTURES" : settings.accountType as "SPOT" | "FUTURES") || "FUTURES";
+  // accountType is already resolved above (auto-trade guard block).
 
   // 🛡️ Skip AI analysis if user has 0 balance
   const wallet = paper.getWallet(userId, mode, accountType);

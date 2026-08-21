@@ -24,8 +24,7 @@ import { Trade } from "../models/Trade.js";
 import { Alert } from "../models/Alert.js";
 import { WalletSnapshot } from "../models/WalletSnapshot.js";
 import { runSentinelAudit } from "../services/sentinelAuditor.js";
-import { Settings } from "../models/Settings.js";
-import * as autoTradeEngine from "../services/autoTradeEngine.js";
+// Settings and autoTradeEngine imports removed — deposits no longer touch auto-trading
 import { clearDashboardCache } from "./aqeaUi.js";
 
 const router = Router();
@@ -332,14 +331,34 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
 router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
   try {
     const { amount, accountType = "INDIAN_NSE", mode = "PAPER", currency = "INR" } = req.body;
-    const depositAmount = Number(amount) || 100000;
+    const depositAmount = Number(amount) || 10000;
     const userId = req.userId!;
 
-    const wallet = paper.getWallet(userId, mode, accountType);
     const currKey = currency.toUpperCase() === "INR" || accountType.startsWith("INDIAN_") ? "INR" : "USDT";
+    const wallet = paper.getWallet(userId, mode, accountType);
     const currentBal = wallet.get(currKey) ?? 0;
     const newBal = currentBal + depositAmount;
-    wallet.set(currKey, newBal);
+
+    await paper.setWalletBalance(userId, mode, currKey, newBal, accountType);
+    clearDashboardCache();
+
+    if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
+      try {
+        await WalletTransaction.create({
+          userId: new mongoose.Types.ObjectId(userId),
+          type: "DEPOSIT",
+          method: "DEBUG",
+          amount: depositAmount,
+          currency: currKey,
+          status: "COMPLETED",
+          txnRef: `TEST${Date.now()}`,
+          note: `Dummy Test Funds Deposit: +${depositAmount} ${currKey}`,
+          accountType,
+        });
+      } catch (dbErr: any) {
+        console.warn("[wallet] Failed to log test funds transaction:", dbErr.message);
+      }
+    }
 
     res.json({
       ok: true,
@@ -794,53 +813,13 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
           accountType: acctType,
         });
 
-        // Auto-enable autoTrade and register in autoTradeEngine — but only
-        // if the user hasn't explicitly turned it off. Previously this
-        // unconditionally set autoTrade: true on every deposit (including
-        // an auto-seeded starting balance), silently overriding a user's
-        // deliberate choice to pause trading — e.g. right after a hard
-        // reset, the very next deposit would flip it back on and the
-        // engine would open new positions within seconds, with no way to
-        // keep auto-trade off short of never depositing again.
-        // Checked per the deposit's OWN account type — SPOT and FUTURES are
-        // independent legs now, so a deposit into FUTURES must not
-        // re-enable SPOT (or vice versa) and must not be blocked by the
-        // other leg being explicitly off.
-        const finalAcctType: "SPOT" | "FUTURES" = acctType === "SPOT" ? "SPOT" : "FUTURES";
-        const field = finalAcctType === "SPOT" ? "autoTradeSpot" : "autoTradeFutures";
-        const existingSettings = await Settings.findOne({ userId: new mongoose.Types.ObjectId(userId) });
-        // Either signal blocks re-enable: the legacy autoTrade field only
-        // ever goes false when BOTH legs are off (routes/agent.ts's
-        // /auto/disable sets it via isEnabledAny(), hard-reset sets it
-        // alongside both per-type fields together) — so it's a safe,
-        // conservative "nothing should be trading" veto regardless of
-        // whether autoTradeFutures/autoTradeSpot's own schema default
-        // (true) makes it look "on" for a document that never explicitly
-        // touched the per-type field.
-        const explicitlyDisabled = existingSettings?.autoTrade === false || existingSettings?.[field] === false;
-
-        if (!explicitlyDisabled) {
-          await Settings.findOneAndUpdate(
-            { userId: new mongoose.Types.ObjectId(userId) },
-            {
-              $set: { autoTrade: true, [field]: true },
-              $setOnInsert: { userId: new mongoose.Types.ObjectId(userId) }
-            },
-            { upsert: true, new: true }
-          );
-          autoTradeEngine.enableUser(userId, finalAcctType);
-
-          // Trigger immediate cycle for instant reactive execution
-          autoTradeEngine.processUser(userId, finalAcctType).catch((err: any) => {
-            console.error(`[deposit] Failed to trigger immediate processUser for ${userId}:`, err);
-          });
-
-          log(`[deposit] Auto-enabled autoTrade (${finalAcctType}) and added user ${userId} to engine scan after dummy deposit.`);
-        } else {
-          log(`[deposit] User ${userId} has autoTrade explicitly disabled for ${finalAcctType} — deposit recorded, engine not re-enabled.`);
-        }
+        // NOTE: Deposit does NOT enable auto-trading. A user must
+        // explicitly enable auto-trade via POST /auto/enable (the UI
+        // toggle). This prevents the engine from opening positions
+        // merely because money was deposited.
+        log(`[deposit] PAPER deposit persisted for user ${userId} (${acctType}). Auto-trade NOT touched — requires explicit user action.`);
       } catch (dbErr: any) {
-        console.warn("[wallet] Failed to persist dummy deposit or enable auto-trade in DB:", dbErr.message);
+        console.warn("[wallet] Failed to persist dummy deposit in DB:", dbErr.message);
       }
     } else {
       console.warn("[wallet] Skipping DB transaction (Disconnected, invalid UserID, or guest user). Deposit applied to memory.");
