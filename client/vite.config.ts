@@ -35,4 +35,25 @@ export default defineConfig({
       '/socket.io':     { target: backendTarget, changeOrigin: true, ws: true },
     },
   },
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('highcharts')) {
+              return 'vendor-highcharts';
+            }
+            if (id.includes('bootstrap') || id.includes('@popperjs')) {
+              return 'vendor-bootstrap';
+            }
+            if (id.includes('lucide-react')) {
+              return 'vendor-lucide';
+            }
+            return 'vendor-core';
+          }
+        },
+      },
+    },
+  },
 });
