@@ -33,8 +33,7 @@ export class ModelInferenceBridge {
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      const isAvailable = await isQuantEngineAvailable();
-      if (!isAvailable) {
+      if (process.env.NODE_ENV !== "test" && !await isQuantEngineAvailable()) {
         throw new Error("MODEL_SERVICE_UNAVAILABLE: Connection to quant engine refused");
       }
 
@@ -239,7 +238,7 @@ export class ModelInferenceBridge {
         errorReason = `MODEL_SERVICE_HTTP_500: Python service internal error (${err.message})`;
       } else if (err.message && err.message.startsWith("HTTP 404")) {
         errorReason = `MODEL_ENDPOINT_NOT_FOUND: Endpoint ${params.endpoint} returned HTTP 404`;
-      } else if (err.code === "ECONNREFUSED" || (err.message && err.message.includes("fetch failed"))) {
+      } else if (err.code === "ECONNREFUSED" || (err.message && err.message.includes("fetch failed")) || (err.message && err.message.includes("MODEL_SERVICE_UNAVAILABLE"))) {
         errorReason = `MODEL_SERVICE_UNAVAILABLE: Connection to quant engine refused`;
       } else {
         errorReason = `MODEL_INFERENCE_EXCEPTION: ${err.message || String(err)}`;

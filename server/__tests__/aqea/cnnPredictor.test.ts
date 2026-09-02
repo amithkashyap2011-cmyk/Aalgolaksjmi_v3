@@ -83,6 +83,7 @@ jest.unstable_mockModule("../../src/config/aiEndpointRegistry.js", () => ({
 jest.unstable_mockModule("../../src/config/serviceDiscovery.js", () => ({
   getQuantEngineURL: (jest.fn() as any).mockResolvedValue("http://localhost:8000"),
   isReachable: (jest.fn() as any).mockResolvedValue(true),
+  isQuantEngineAvailable: (jest.fn() as any).mockResolvedValue(true),
   discoveryEvents: { on: jest.fn(), emit: jest.fn() }
 }));
 

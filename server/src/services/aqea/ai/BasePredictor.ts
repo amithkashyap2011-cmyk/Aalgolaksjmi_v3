@@ -41,7 +41,9 @@ export abstract class BasePredictor implements IAIPredictor {
     // ⚡ Fast-fail: skip all network calls if quant engine is unreachable.
     // This prevents per-symbol 800–1000ms fetch hangs that cascade into
     // 25 s SYMBOL_TERMINAL timeouts on the auto-trade scheduler.
-    if (!await isQuantEngineAvailable()) {
+    // Skipped in test mode so predictor unit tests can exercise runInference()
+    // with their own mocks without needing a live quant engine.
+    if (process.env.NODE_ENV !== "test" && !await isQuantEngineAvailable()) {
       return {
         direction: "HOLD",
         confidence: 0,

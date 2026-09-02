@@ -104,7 +104,8 @@ jest.unstable_mockModule("../../src/models/AIPredictionTelemetry.js", () => ({
 
 jest.unstable_mockModule("../../src/config/serviceDiscovery.js", () => ({
   getQuantEngineURL: (jest.fn() as any).mockResolvedValue("http://localhost:8000"),
-  isReachable: (jest.fn() as any).mockResolvedValue(true)
+  isReachable: (jest.fn() as any).mockResolvedValue(true),
+  isQuantEngineAvailable: (jest.fn() as any).mockResolvedValue(true)
 }));
 
 const mockValidateTrade = jest.fn().mockResolvedValue({ allowed: true, positionSize: 100, riskScore: 80, reason: "OK" }) as any;
@@ -118,7 +119,8 @@ jest.unstable_mockModule("../../src/services/aqea/riskEngine.js", () => ({
 
 jest.unstable_mockModule("../../src/config/serviceDiscovery.js", () => ({
   getQuantEngineURL: jest.fn().mockResolvedValue("http://localhost:8000"),
-  isReachable: jest.fn().mockResolvedValue(false)
+  isReachable: jest.fn().mockResolvedValue(false),
+  isQuantEngineAvailable: jest.fn().mockResolvedValue(false)
 }));
 
 jest.unstable_mockModule("../../src/services/aqea/router/RegimeRoutingService.js", () => ({

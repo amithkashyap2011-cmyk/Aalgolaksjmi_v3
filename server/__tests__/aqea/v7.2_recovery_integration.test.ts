@@ -106,7 +106,8 @@ jest.unstable_mockModule("../../src/models/AIPredictionTelemetry.js", () => ({
 
 jest.unstable_mockModule("../../src/config/serviceDiscovery.js", () => ({
   getQuantEngineURL: jest.fn().mockResolvedValue("http://localhost:8000"),
-  isReachable: jest.fn().mockResolvedValue(false)
+  isReachable: jest.fn().mockResolvedValue(false),
+  isQuantEngineAvailable: jest.fn().mockResolvedValue(false)
 }));
 
 const mockValidateTrade = jest.fn().mockResolvedValue({
