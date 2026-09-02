@@ -37,7 +37,7 @@ let paper: any, WalletTransaction: any;
 beforeAll(async () => {
   process.env.JWT_SECRET = JWT_SECRET;
   const connected = await connectIfAvailable();
-  if (!connected) return;
+  if (!connected || mongoose.connection.readyState !== 1) return;
   paper = await import("../src/services/paperState.js");
   ({ WalletTransaction } = await import("../src/models/WalletTransaction.js"));
 
@@ -48,15 +48,20 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (WalletTransaction) await WalletTransaction.deleteMany({ userId: testUserId });
+  if (WalletTransaction && mongoose.connection.readyState === 1) {
+    try { await WalletTransaction.deleteMany({ userId: testUserId }); } catch { /* ignore */ }
+  }
   await disconnectMongo();
 });
 
 beforeEach(async () => {
-  if (!WalletTransaction) return;
-  await WalletTransaction.deleteMany({ userId: testUserId });
-  await paper.setWalletBalance(testUserId, "PAPER", "USDT", 100, "FUTURES");
-  await paper.setWalletBalance(testUserId, "PAPER", "USDT", 20, "SPOT");
+  if (WalletTransaction && mongoose.connection.readyState === 1) {
+    try { await WalletTransaction.deleteMany({ userId: testUserId }); } catch { /* ignore */ }
+  }
+  if (paper) {
+    await paper.setWalletBalance(testUserId, "PAPER", "USDT", 100, "FUTURES");
+    await paper.setWalletBalance(testUserId, "PAPER", "USDT", 20, "SPOT");
+  }
 });
 
 describe("POST /wallet/transfer", () => {

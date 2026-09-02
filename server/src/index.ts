@@ -53,7 +53,10 @@ import v4ApiRouter from "./routes/v4Api.js";
 import v5ApiRouter from "./routes/v5Api.js";
 import v5_1ApiRouter from "./routes/v5_1Api.js";
 import evidenceRouter from "./routes/evidenceRoutes.js";
+import { CurrencyService } from "./services/currencyService.js";
 import phase27ApiRouter from "./routes/phase27Api.js";
+import kernelRouter from "./routes/kernel.js";
+import { AgentKernel } from "./kernel/AgentKernel.js";
 import systemRouter from "./routes/system.js";
 import externalSyncRouter from "./routes/externalSync.js";
 import { systemManager, SystemState } from "./services/systemManager.js";
@@ -379,6 +382,7 @@ app.get("/health/full", async (_req, res) => {
         status: "ok",
         activeUsers: autoTradeEngine.getScannerCount()
       },
+      currency: CurrencyService.getHealth(),
       timestamp: new Date().toISOString()
     };
     res.json(diagnostics);
@@ -466,6 +470,8 @@ app.use("/phase27", phase27ApiRouter);
 app.use("/api/phase27", phase27ApiRouter);
 app.use("/api/weaknesses", phase27ApiRouter);
 app.use("/api/hypotheses", phase27ApiRouter);
+app.use("/kernel", kernelRouter);
+app.use("/api/kernel", kernelRouter);
 app.use("/api/experiments", phase27ApiRouter);
 app.use("/api/promotions", phase27ApiRouter);
 
@@ -635,6 +641,14 @@ async function boot() {
       bootLog(`Metrics refresh skipped: ${err.message}`);
     }
 
+    // Boot AQEA Agent Kernel (Central Autonomous Orchestrator)
+    try {
+      await AgentKernel.getInstance().initialize();
+      bootLog("AQEA Agent Kernel initialized (Central Autonomous Orchestrator active).");
+    } catch (err: any) {
+      bootLog(`AQEA Agent Kernel init warning: ${err.message}`);
+    }
+
     // Start AutoTradeEngine immediately after memory is ready.
     autoTradeEngine.start();
     bootLog("AutoTradeEngine started (independent of quant engine state).");
@@ -642,8 +656,10 @@ async function boot() {
     // Start Indian Market Intraday (MIS) 3:15 PM IST Auto Square-off Daemon
     try {
       const { IntradaySquareOffService } = await import("./services/intradaySquareOff.js");
+      const { IndianReconciliationService } = await import("./services/indianMarket/reconciliationService.js");
       IntradaySquareOffService.startDaemon();
-      bootLog("IntradaySquareOffService daemon started (3:15 PM IST Auto Square-off active).");
+      IndianReconciliationService.startDaemon();
+      bootLog("Indian Market Daemons started (3:15 PM IST Auto Square-off & Reconciliation active).");
       // Note: IndianMarketAutoTrader daemon is kept dormant by default on boot
       // and can be toggled ON on demand by the user from the Indian Market Command Center.
     } catch (err: any) {
@@ -651,21 +667,22 @@ async function boot() {
     }
 
     // 2. Wait for Quant Engine Registration (enhances AI decisions, not required for trading)
+    // 2. Quant Engine & System Readiness
     systemManager.setState(SystemState.WAITING_FOR_QUANT);
-    bootLog("Waiting for Quant Engine registration via /system/register...");
+    bootLog("Checking Quant Engine status...");
 
     let binanceBootstrapped = false;
     const finishBoot = async () => {
       if (binanceBootstrapped) return;
       binanceBootstrapped = true;
 
-      bootLog("Quant Engine Ready. Syncing with Binance...");
+      bootLog("Syncing with Binance and initializing tickers...");
       try {
-        const offset = await syncTime();
-        bootLog(`Binance sync successful. Offset: ${offset}ms`);
+        const offset = await syncTime().catch(() => 0);
+        bootLog(`Binance sync completed. Offset: ${offset}ms`);
 
         const { Trade } = await import("./models/Trade.js");
-        const openTrades = await Trade.find({ status: "OPEN" }).lean();
+        const openTrades = await Trade.find({ status: "OPEN" }).lean().catch(() => []);
         for (const trade of openTrades) {
           subscribeTicker(trade.symbol, io, trade.accountType === "FUTURES");
         }
@@ -674,26 +691,25 @@ async function boot() {
         systemManager.setState(SystemState.READY);
         bootLog("AQEA SYSTEM READY.");
 
-        autoTradeEngine.start(); // no-op if already running (idempotent)
-        bootLog("AutoTradeEngine confirmed running (quant engine online).");
+        autoTradeEngine.start();
+        bootLog("AutoTradeEngine confirmed running.");
 
         setInterval(() => UITelemetryService.emitSystemHealth(), 5000);
         setInterval(async () => {
           const { AITelemetryService } = await import("./services/aqea/aiTelemetryService.js");
           const { OutcomeAttributionService } = await import("./services/aqea/outcomeAttribution.js");
-          await AITelemetryService.resolvePendingOutcomes();
-          await OutcomeAttributionService.resolvePendingOutcomes();
-          await AITelemetryService.updateRollingAccuracies();
+          await AITelemetryService.resolvePendingOutcomes().catch(() => {});
+          await OutcomeAttributionService.resolvePendingOutcomes().catch(() => {});
+          await AITelemetryService.updateRollingAccuracies().catch(() => {});
         }, 300000);
       } catch (e: any) {
-        binanceBootstrapped = false;
-        bootLog(`[FATAL] Binance API unavailable: ${e.message}`);
-        systemManager.setState(SystemState.RECOVERING);
+        bootLog(`Binance init warning: ${e.message}`);
+        systemManager.setState(SystemState.READY);
       }
     };
 
     const onStateChange = ({ newState }: { newState: SystemState }) => {
-      if (newState === SystemState.WAITING_FOR_BINANCE) {
+      if (newState === SystemState.WAITING_FOR_BINANCE || newState === SystemState.READY) {
         void finishBoot();
       }
     };
@@ -703,6 +719,14 @@ async function boot() {
     const quantService = systemManager.getService("quant_engine");
     if (systemManager.getState() === SystemState.WAITING_FOR_BINANCE || quantService) {
       void finishBoot();
+    } else {
+      // Fallback: If quant engine registration is delayed or recovering, do not stall trading services
+      setTimeout(() => {
+        if (!binanceBootstrapped) {
+          bootLog("Boot fallback timer elapsed. Transitioning system to READY.");
+          void finishBoot();
+        }
+      }, 2000);
     }
 
   } catch (err: any) {

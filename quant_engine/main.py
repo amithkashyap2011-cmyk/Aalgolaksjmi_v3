@@ -383,7 +383,8 @@ class MicrostructureRequest(BaseModel):
 @app.post("/research/predict/transformer-micro")
 def predict_transformer_micro(data: MicrostructureRequest):
     try:
-        result = transformer_predictor.predict(data.data)
+        rows = [clean_vector(r, expected_dim=20) for r in data.data]
+        result = transformer_predictor.predict(rows)
         return result
     except Exception as e:
         logger.error(f"Transformer micro error: {str(e)}")

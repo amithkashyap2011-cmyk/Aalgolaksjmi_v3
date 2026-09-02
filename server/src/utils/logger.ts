@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOG_PATH = path.join(__dirname, "../../auto_trade.log");
+const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const LOG_PATH = path.join(__moduleDir, "../../auto_trade.log");
 
 // These hand-written logs (this file's auto_trade.log, plus
 // server_crash.log written directly from index.ts's process-level error

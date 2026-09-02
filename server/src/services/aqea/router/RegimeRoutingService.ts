@@ -19,6 +19,62 @@ export interface RoutingResult {
 
 export class RegimeRoutingService {
   /**
+   * Routes using already-evaluated predictions in 0ms.
+   */
+  public static routeFromPredictions(regime: RegimeState, predictions: AIPrediction[]): RoutingResult {
+    const preferredModel = this.getModelForRegime(regime);
+    const activeModel = this.selectHealthyModel(preferredModel);
+
+    if (activeModel === "NOT_AVAILABLE") {
+      return {
+        activeModel: "NOT_AVAILABLE",
+        reason: "ALL_MODELS_UNAVAILABLE",
+        confidence: 0,
+        prediction: "HOLD",
+        meta: { regime }
+      };
+    }
+
+    const result = predictions.find(p => p.predictor === activeModel || p.predictor.startsWith(activeModel));
+    if (!result) {
+      return {
+        activeModel,
+        reason: "PREDICTOR_RESULT_NOT_FOUND",
+        confidence: 0,
+        prediction: "HOLD",
+        meta: { regime }
+      };
+    }
+
+    if (result.confidence <= 0) {
+      return {
+        activeModel,
+        reason: `CONFIDENCE_TOO_LOW_${result.confidence}`,
+        confidence: result.confidence,
+        prediction: "HOLD",
+        meta: {
+          latencyMs: (result as any).latencyMs || 0,
+          regime,
+          predictorName: result.predictor,
+          gated: true
+        }
+      };
+    }
+
+    return {
+      activeModel,
+      reason: activeModel === preferredModel ? `REGIME_${regime}` : `FAILOVER_${preferredModel}_TO_${activeModel}`,
+      confidence: result.confidence,
+      prediction: result.direction,
+      meta: {
+        latencyMs: (result as any).latencyMs || 0,
+        regime,
+        predictorName: result.predictor
+      }
+    };
+  }
+
+  /**
    * Routes to the optimal model based on the current regime.
    */
   public static async route(regime: RegimeState, features: FeatureVector): Promise<RoutingResult> {

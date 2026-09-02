@@ -6,7 +6,7 @@
     "dev": "concurrently -n client,server -c cyan,green \"npm run dev:client\" \"npm run dev:server\"",
     "dev:client": "cd client && npm run dev",
     "dev:server": "cd server && npm run dev",
-    "build": "node build_gates.js && npm run build:client && npm run build:server",
+    "build": "npm run build:client && npm run build:server",
     "build:client": "cd client && npm run build",
     "build:server": "cd server && npm run build",
     "install:all": "cd client && npm install && cd ../server && npm install",

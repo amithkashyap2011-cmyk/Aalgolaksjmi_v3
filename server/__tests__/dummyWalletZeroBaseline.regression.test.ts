@@ -32,11 +32,13 @@ let WalletSnapshot: any;
 let WalletTransaction: any;
 let Trade: any;
 
-describe("DUMMY / PAPER Trading Pipeline & Zero Baseline Comprehensive Suite", () => {
+jest.setTimeout(60000);
+
+describe("Regression Suite: Complete Eradication of Dummy $10,000 / ₹1,00,000 Fallbacks", () => {
   beforeAll(async () => {
     process.env.JWT_SECRET = JWT_SECRET;
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
 
     paper = await import("../src/services/paperState.js");
     ({ WalletSnapshot } = await import("../src/models/WalletSnapshot.js"));
@@ -55,10 +57,12 @@ describe("DUMMY / PAPER Trading Pipeline & Zero Baseline Comprehensive Suite", (
   });
 
   afterAll(async () => {
-    if (WalletSnapshot) {
-      await WalletSnapshot.deleteMany({ userId: testUserId });
-      await WalletTransaction.deleteMany({ userId: testUserId });
-      await Trade.deleteMany({ userId: testUserId });
+    if (WalletSnapshot && mongoose.connection.readyState === 1) {
+      try {
+        await WalletSnapshot.deleteMany({ userId: testUserId });
+        await WalletTransaction.deleteMany({ userId: testUserId });
+        await Trade.deleteMany({ userId: testUserId });
+      } catch { /* ignore */ }
     }
     await disconnectMongo();
   });

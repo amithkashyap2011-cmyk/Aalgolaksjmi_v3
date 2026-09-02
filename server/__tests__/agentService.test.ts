@@ -18,31 +18,59 @@ const chainMock = {
   lean: (jest.fn() as any).mockResolvedValue([]),
 };
 
-jest.unstable_mockModule("mongoose", () => ({
-  default: { connection: { readyState: 1 }, Schema: class { static Types: any = { ObjectId: "ObjectId" }; index() {} }, model: jest.fn() },
-}));
-
 const klineBars = Array.from({ length: 200 }, (_, i) => ({
   open: String(100 + i * 0.01), high: String(100 + i * 0.01 + 1),
   low: String(100 + i * 0.01 - 1), close: String(100 + i * 0.01), volume: "1000",
 }));
 
+class MockObjectId {
+  id: any;
+  constructor(id: any) { this.id = id; }
+  toString() { return this.id; }
+  static isValid() { return true; }
+}
+
+const mockConn = { readyState: 1 };
+
+jest.unstable_mockModule("mongoose", () => ({
+  default: {
+    connection: mockConn,
+    Types: { ObjectId: MockObjectId },
+    Schema: class { static Types: any = { ObjectId: "ObjectId" }; index() {} },
+    model: jest.fn()
+  },
+  connection: mockConn,
+  Types: { ObjectId: MockObjectId }
+}));
+
 const mockGetKlines = jest.fn() as any;
 const mockGetLatestFundingRate = jest.fn() as any;
+
 jest.unstable_mockModule("../src/services/binanceService.js", () => ({
   getKlines: mockGetKlines,
   getLatestFundingRate: mockGetLatestFundingRate,
+  generateSyntheticKlines: (jest.fn() as any).mockReturnValue(klineBars),
+  getKlinesWithProvenance: (jest.fn() as any).mockResolvedValue({ klines: klineBars, provenance: "LIVE_REST", isSynthetic: false }),
+  getTickerPriceSync: (jest.fn() as any).mockReturnValue(100),
+  subscribeTicker: jest.fn(),
+  unsubscribeTicker: jest.fn(),
+  getActiveSocketsInfo: (jest.fn() as any).mockReturnValue([]),
+  placeFuturesOrder: jest.fn(),
+  placeOrder: jest.fn(),
+  genClientOrderId: (jest.fn() as any).mockReturnValue("test_order_id")
 }));
 
 const mockSettingsFindOne = jest.fn() as any;
 jest.unstable_mockModule("../src/models/Settings.js", () => ({
   Settings: { findOne: mockSettingsFindOne },
+  default: { findOne: mockSettingsFindOne }
 }));
 
 const mockTradeFind = jest.fn().mockReturnValue(chainMock) as any;
 const mockTradeFindOne = jest.fn().mockReturnValue(chainMock) as any;
 jest.unstable_mockModule("../src/models/Trade.js", () => ({
   Trade: { find: mockTradeFind, findOne: mockTradeFindOne },
+  default: { find: mockTradeFind, findOne: mockTradeFindOne }
 }));
 
 const mockGetOpenPositions = jest.fn().mockReturnValue([]) as any;
@@ -93,6 +121,7 @@ describe("buildContext", () => {
     const ctx = await buildContext("BTCUSDT", "PAPER", "user123");
     expect(ctx.risk.maxDailyLoss).toBe(100);
     expect(ctx.risk.maxPositionSizePct).toBe(21);
+    expect(ctx.risk.capitalPreservationMode).toBe(true);
   });
 
   test("uses the user's saved risk config when Settings has one", async () => {
@@ -114,8 +143,9 @@ describe("buildContext", () => {
     expect(ctx.tradesToday).toBe(3);
     // The query must scope by today's start, not return all-time trades —
     // verify the find() call included a date filter, not an unfiltered query.
-    const callArgs = mockTradeFind.mock.calls[0][0] as any;
-    expect(callArgs.openedAt).toBeDefined();
+    expect(mockTradeFind).toHaveBeenCalledWith(
+      expect.objectContaining({ openedAt: expect.any(Object) }),
+    );
   });
 
   test("openPositionCount reflects paperState, not the trade history query", async () => {
@@ -127,6 +157,7 @@ describe("buildContext", () => {
   test("animalBlend is always the neutral stub — the 10-animal model no longer feeds any decision", async () => {
     const ctx = await buildContext("BTCUSDT", "PAPER", "user123");
     expect(ctx.animalBlend.score).toBe(0);
+    expect(ctx.animalBlend.contributions).toEqual({});
   });
 
   test("htfTrendBullish defaults true and is skipped when bypassHtfTrendGate is set", async () => {

@@ -7,6 +7,7 @@ import {
 import {
   getWalletBalance, getWalletTransactions, depositPaper, hardReset, enableAutoTrade, disableAutoTrade, getAutoStatus,
   withdrawUpi, withdrawCrypto, transferWallet, getP2pOffers, createP2pOffer, buyP2pOffer, allocateCapital,
+  getWalletSummary,
 } from '../lib/api';
 import { useAppStore } from '../store/useAppStore';
 import { useDashboardStore } from '../store/useDashboardStore';
@@ -54,9 +55,16 @@ const TX_COLORS: Record<string, string> = {
 type ModalType = "deposit" | "withdraw" | "transfer" | "p2p" | "allocate" | null;
 
 export default function WalletCenter() {
-  const [balances, setBalances] = useState({ spot: { usdt: 0, locked: 0, total: 0 }, futures: { usdt: 0, locked: 0, total: 0 } });
+  const [walletDomainTab, setWalletDomainTab] = useState<"ALL" | "CRYPTO" | "INDIAN">("ALL");
+  const [balances, setBalances] = useState({
+    spot:    { usdt: 0, locked: 0, total: 0 },
+    futures: { usdt: 0, locked: 0, total: 0 },
+    nse:     { inr: 0, locked: 0, total: 0 },
+    bse:     { inr: 0, locked: 0, total: 0 },
+    nifty50: { inr: 0, locked: 0, total: 0 },
+  });
   const [txns, setTxns]         = useState<any[]>([]);
-  const [loading, setLoading]   = useState(true);
+  const [loading, setLoading]   = useState(false);
   const [modal, setModal]       = useState<ModalType>(null);
   const [hideBalance, setHideBalance] = useState(false);
 
@@ -66,7 +74,8 @@ export default function WalletCenter() {
 
   // Deposit State
   const [depAmt, setDepAmt]     = useState("");
-  const [depAcc, setDepAcc]     = useState<"SPOT"|"FUTURES">("FUTURES");
+  const [depAcc, setDepAcc]     = useState<string>("FUTURES");
+  const [confirmConversion, setConfirmConversion] = useState(false);
   const [depCurrency, setDepCurrency] = useState<"USDT"|"INR">("USDT");
   const [depMsg, setDepMsg]     = useState("");
   const [depLoading, setDepLoading] = useState(false);
@@ -117,21 +126,27 @@ export default function WalletCenter() {
   const inrRate = summary?.inrRate || 85;
   const netPnl = (summary as any)?.netPnL ?? { total: 0, spot: 0, futures: 0 };
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (silent = false) => {
+    if (!silent && balances.spot.total === 0 && balances.futures.total === 0) {
+      setLoading(true);
+    }
     try {
       const mode = useAppStore.getState().mode || "PAPER";
       if (userId) fetchDashboard(userId, useAppStore.getState().accountType).catch(() => {});
-      const [s, f, tx, status] = await Promise.all([
-        getWalletBalance(mode, "SPOT").catch(() => ({ usdt: 0, lockedMargin: 0, totalBalance: 0 })),
-        getWalletBalance(mode, "FUTURES").catch(() => ({ usdt: 0, lockedMargin: 0, totalBalance: 0 })),
-        getWalletTransactions(100).catch(() => ({ transactions: [] })),
+      const [summaryRes, tx, status] = await Promise.all([
+        getWalletSummary(mode).catch(() => null),
+        getWalletTransactions(50).catch(() => ({ transactions: [] })),
         getAutoStatus().catch(() => null),
       ]);
-      setBalances({
-        spot:    { usdt: s.usdt || 0, locked: s.lockedMargin || 0, total: s.totalBalance || s.usdt || 0 },
-        futures: { usdt: f.usdt || 0, locked: f.lockedMargin || 0, total: f.totalBalance || f.usdt || 0 },
-      });
+      if (summaryRes) {
+        setBalances({
+          spot:    { usdt: summaryRes.spot?.usdt || 0, locked: summaryRes.spot?.lockedMargin || 0, total: summaryRes.spot?.totalBalance || 0 },
+          futures: { usdt: summaryRes.futures?.usdt || 0, locked: summaryRes.futures?.lockedMargin || 0, total: summaryRes.futures?.totalBalance || 0 },
+          nse:     { inr: summaryRes.nse?.inr || summaryRes.nse?.totalBalance || 0, locked: summaryRes.nse?.lockedMargin || 0, total: summaryRes.nse?.totalBalance || 0 },
+          bse:     { inr: summaryRes.bse?.inr || summaryRes.bse?.totalBalance || 0, locked: summaryRes.bse?.lockedMargin || 0, total: summaryRes.bse?.totalBalance || 0 },
+          nifty50: { inr: summaryRes.nifty50?.inr || summaryRes.nifty50?.totalBalance || 0, locked: summaryRes.nifty50?.lockedMargin || 0, total: summaryRes.nifty50?.totalBalance || 0 },
+        });
+      }
       setTxns(tx.transactions ?? []);
       if (status) {
         setSpotAutoOn(!!(status as any).spot);
@@ -140,7 +155,11 @@ export default function WalletCenter() {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [userId]);
+  useEffect(() => { 
+    load(); 
+    const interval = setInterval(() => load(true), 8000);
+    return () => clearInterval(interval);
+  }, [userId]);
 
   const loadP2pOffers = async () => {
     setP2pLoading(true);
@@ -152,7 +171,7 @@ export default function WalletCenter() {
 
   const openModal = (m: ModalType) => {
     setModal(m);
-    setDepMsg(""); setWdMsg(""); setXfMsg(""); setP2pMsg(""); setAllocMsg("");
+    setDepMsg(""); setWdMsg(""); setXfMsg(""); setP2pMsg(""); setAllocMsg(""); setConfirmConversion(false);
     if (m === "p2p") loadP2pOffers();
   };
 
@@ -160,7 +179,7 @@ export default function WalletCenter() {
     if (!depAmt || isNaN(Number(depAmt))) return;
     setDepLoading(true);
     try {
-      await depositPaper(parseFloat(depAmt), depAcc, depCurrency);
+      await depositPaper(parseFloat(depAmt), depAcc, depCurrency, confirmConversion);
       setDepMsg("Deposit successful!");
       await load(); refreshWallet();
       setTimeout(() => { setModal(null); setDepMsg(""); setDepAmt(""); }, 1400);
@@ -382,7 +401,7 @@ export default function WalletCenter() {
 
           {/* Refresh button */}
           <button
-            onClick={load}
+            onClick={() => load()}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36,
               background: CARD, border: `1px solid ${BORD}`, borderRadius: 10, color: "#94a3b8", cursor: "pointer", transition: "all 0.2s ease"
@@ -591,8 +610,109 @@ export default function WalletCenter() {
         </div>
       </div>
 
+      {/* Domain Navigation Tabs - Distinct Dual-Vault Selector */}
+      <div style={{ display: "flex", gap: 10, borderBottom: `1px solid ${BORD}`, paddingBottom: 14 }}>
+        {[
+          { id: "CRYPTO", label: "⚡ CRYPTO VAULT (USDT · 24/7 Global)", subtitle: "Binance Spot & Futures · USDT Base", color: "#fbbf24", bg: "rgba(251, 191, 36, 0.12)", border: "rgba(251, 191, 36, 0.4)" },
+          { id: "INDIAN", label: "🇮🇳 INDIAN TRADE VAULT (₹ INR · NSE/BSE/F&O)", subtitle: "Angel One / Zerodha · 100% INR Base", color: "#10b981", bg: "rgba(16, 185, 129, 0.12)", border: "rgba(16, 185, 129, 0.4)" },
+          { id: "ALL", label: "📊 CONSOLIDATED PORTFOLIO", subtitle: "Dual-Market Combined Summary", color: "#3b82f6", bg: "rgba(59, 130, 246, 0.12)", border: "rgba(59, 130, 246, 0.4)" },
+        ].map((tab) => {
+          const active = walletDomainTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setWalletDomainTab(tab.id as any)}
+              style={{
+                flex: 1,
+                padding: "12px 18px",
+                borderRadius: 14,
+                cursor: "pointer",
+                border: active ? `2px solid ${tab.color}` : "1px solid rgba(255,255,255,0.08)",
+                background: active ? tab.bg : "rgba(255,255,255,0.03)",
+                color: active ? tab.color : "var(--ds-text-muted)",
+                transition: "all 0.2s ease",
+                textAlign: "left",
+                display: "flex",
+                flexDirection: "column",
+                gap: 3,
+                boxShadow: active ? `0 4px 20px ${tab.color}22` : "none",
+              }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: "0.02em" }}>{tab.label}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, opacity: 0.8, color: active ? "#ffffff" : "var(--ds-text-muted)" }}>{tab.subtitle}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Account Cards Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 16 }}>
+        {(walletDomainTab === "ALL" || walletDomainTab === "INDIAN") && (
+          <>
+            {/* NSE Equity Card */}
+            <div style={{
+              background: CARD, border: `1px solid ${BORD}`, borderTop: "4px solid #10b981",
+              borderRadius: 16, padding: 20, display: "flex", flexDirection: "column", gap: 16, boxShadow: "0 4px 20px rgba(0, 0, 0, 0.2)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#10b981", boxShadow: "0 0 10px #10b981" }} />
+                  <span style={{ fontSize: 15, fontWeight: 900, color: "var(--ds-text)" }}>NSE Equity (CNC)</span>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#10b981", background: "rgba(16,185,129,0.1)", padding: "4px 8px", borderRadius: 6 }}>₹ INR</span>
+              </div>
+              <div style={{ background: CARD2, borderRadius: 12, padding: "16px", border: `1px solid ${BORD}` }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ds-text-muted)", textTransform: "uppercase" }}>NSE Available Cash</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: "var(--ds-text)", fontFamily: "monospace", marginTop: 4 }}>
+                  {hideBalance ? "••••••••" : `₹${balances.nse.inr.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                </div>
+              </div>
+            </div>
+
+            {/* BSE Equity Card */}
+            <div style={{
+              background: CARD, border: `1px solid ${BORD}`, borderTop: "4px solid #10b981",
+              borderRadius: 16, padding: 20, display: "flex", flexDirection: "column", gap: 16, boxShadow: "0 4px 20px rgba(0, 0, 0, 0.2)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#10b981", boxShadow: "0 0 10px #10b981" }} />
+                  <span style={{ fontSize: 15, fontWeight: 900, color: "var(--ds-text)" }}>BSE Equity (CNC)</span>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#10b981", background: "rgba(16,185,129,0.1)", padding: "4px 8px", borderRadius: 6 }}>₹ INR</span>
+              </div>
+              <div style={{ background: CARD2, borderRadius: 12, padding: "16px", border: `1px solid ${BORD}` }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ds-text-muted)", textTransform: "uppercase" }}>BSE Available Cash</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: "var(--ds-text)", fontFamily: "monospace", marginTop: 4 }}>
+                  {hideBalance ? "••••••••" : `₹${balances.bse.inr.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                </div>
+              </div>
+            </div>
+
+            {/* NIFTY50 F&O Card */}
+            <div style={{
+              background: CARD, border: `1px solid ${BORD}`, borderTop: "4px solid #8b5cf6",
+              borderRadius: 16, padding: 20, display: "flex", flexDirection: "column", gap: 16, boxShadow: "0 4px 20px rgba(0, 0, 0, 0.2)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#8b5cf6", boxShadow: "0 0 10px #8b5cf6" }} />
+                  <span style={{ fontSize: 15, fontWeight: 900, color: "var(--ds-text)" }}>NIFTY50 (F&O)</span>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#8b5cf6", background: "rgba(139,92,246,0.1)", padding: "4px 8px", borderRadius: 6 }}>₹ INR</span>
+              </div>
+              <div style={{ background: CARD2, borderRadius: 12, padding: "16px", border: `1px solid ${BORD}` }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--ds-text-muted)", textTransform: "uppercase" }}>NIFTY50 Margin Balance</div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: "var(--ds-text)", fontFamily: "monospace", marginTop: 4 }}>
+                  {hideBalance ? "••••••••" : `₹${balances.nifty50.inr.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {(walletDomainTab === "ALL" || walletDomainTab === "CRYPTO") && (
+          <>
 
         {/* Spot Account Card */}
         <div style={{
@@ -795,6 +915,8 @@ export default function WalletCenter() {
             </span>
           </div>
         </div>
+          </>
+        )}
 
       </div>
 
@@ -1132,19 +1254,60 @@ export default function WalletCenter() {
 
               {/* Destination Account */}
               <div>
-                <label style={labelStyle}>Target Account</label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {(["SPOT", "FUTURES"] as const).map((a) => (
-                    <button key={a} onClick={() => setDepAcc(a)} style={{ flex: 1, padding: "10px", borderRadius: 10, fontSize: 12, fontWeight: 800, border: "none", cursor: "pointer", background: depAcc === a ? (a === "SPOT" ? SPOT_COLOR : FUTURES_COLOR) : "rgba(255,255,255,0.05)", color: "#ffffff" }}>{a}</button>
-                  ))}
-                </div>
+                <label style={labelStyle}>Target Account & Destination</label>
+                {depCurrency === "USDT" ? (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {(["SPOT", "FUTURES"] as const).map((a) => (
+                      <button key={a} onClick={() => setDepAcc(a)} style={{ flex: 1, padding: "10px", borderRadius: 10, fontSize: 12, fontWeight: 800, border: "none", cursor: "pointer", background: depAcc === a ? (a === "SPOT" ? SPOT_COLOR : FUTURES_COLOR) : "rgba(255,255,255,0.05)", color: "#ffffff" }}>{a} (USDT)</button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "#cbd5e1", textTransform: "uppercase", letterSpacing: 0.5 }}>Indian Market (Native ₹ INR - No Conversion)</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {[
+                        { id: "INDIAN_NSE", label: "NSE Equity" },
+                        { id: "INDIAN_BSE", label: "BSE Equity" },
+                        { id: "INDIAN_NIFTY50", label: "NIFTY F&O" }
+                      ].map((item) => (
+                        <button key={item.id} onClick={() => { setDepAcc(item.id); setConfirmConversion(false); }} style={{ flex: 1, padding: "9px 4px", borderRadius: 8, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: depAcc === item.id ? "#10b981" : "rgba(255,255,255,0.05)", color: "#ffffff" }}>{item.label}</button>
+                      ))}
+                    </div>
+
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "#cbd5e1", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4 }}>Crypto (Requires Explicit INR → USDT Conversion)</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {[
+                        { id: "SPOT", label: "Crypto SPOT (USDT)" },
+                        { id: "FUTURES", label: "Crypto FUTURES (USDT)" }
+                      ].map((item) => (
+                        <button key={item.id} onClick={() => setDepAcc(item.id)} style={{ flex: 1, padding: "9px 4px", borderRadius: 8, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: depAcc === item.id ? (item.id === "SPOT" ? SPOT_COLOR : FUTURES_COLOR) : "rgba(255,255,255,0.05)", color: "#ffffff" }}>{item.label}</button>
+                      ))}
+                    </div>
+
+                    {(depAcc === "SPOT" || depAcc === "FUTURES") && depAmt && !isNaN(Number(depAmt)) && (
+                      <div style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 8, padding: 10, marginTop: 4 }}>
+                        <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 6 }}>
+                          ⚠️ INR to USDT Crypto Conversion:
+                        </div>
+                        <div style={{ fontSize: 11, color: "#cbd5e1" }}>
+                          Rate: 1 USDT = ₹{inrRate.toFixed(2)} INR<br />
+                          Credited to Crypto {depAcc}: <strong>{(Number(depAmt) / inrRate).toFixed(4)} USDT</strong>
+                        </div>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#fff", fontWeight: 700, marginTop: 8, cursor: "pointer" }}>
+                          <input type="checkbox" checked={confirmConversion} onChange={(e) => setConfirmConversion(e.target.checked)} />
+                          I confirm converting ₹{depAmt} INR to USDT for Crypto {depAcc}
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {depMsg && <div style={{ fontSize: 12, fontWeight: 700, color: depMsg.toLowerCase().includes("success") ? G : R, textAlign: "center" }}>{depMsg}</div>}
 
               <button
                 onClick={handleDeposit}
-                disabled={depLoading || !depAmt}
+                disabled={depLoading || !depAmt || (depCurrency === "INR" && (depAcc === "SPOT" || depAcc === "FUTURES") && !confirmConversion)}
                 style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: depLoading ? "#64748b" : G, color: "#ffffff", fontSize: 13, fontWeight: 900, cursor: depLoading ? "not-allowed" : "pointer", marginTop: 4 }}
               >
                 {depLoading ? "Processing..." : "Confirm Deposit"}

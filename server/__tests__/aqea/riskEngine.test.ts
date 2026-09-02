@@ -124,6 +124,9 @@ describe("AQEA Risk Engine", () => {
   const FIXED_NOW = new Date("2026-01-29T12:00:00Z");
 
   test("Reject if weekly drawdown limit exceeded (but daily alone would not breach)", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-06-18T12:00:00Z")); // Thursday
+
     const ctx: any = {
       userId, symbol, mode: "PAPER", accountType: "FUTURES",
       currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
@@ -132,8 +135,10 @@ describe("AQEA Risk Engine", () => {
     const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
     const weekStart = new Date(todayStart);
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-    const earlierThisWeek = now.getDay() === 0 ? new Date(now.getTime() - 1000) : new Date(weekStart.getTime() + 3600000);
+    const dayOfWeek = todayStart.getDay();
+    const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    weekStart.setDate(todayStart.getDate() - diffToMonday);
+    const earlierThisWeek = new Date(weekStart.getTime() + 3600000);
 
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) });
     mockTradeFind.mockReturnValueOnce({
@@ -145,16 +150,20 @@ describe("AQEA Risk Engine", () => {
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -2900, status: "CLOSED" }]) });
 
     const res = await RiskEngine.validateTrade(ctx);
+    jest.useRealTimers();
     expect(res.allowed).toBe(false);
     expect(res.reason).toBe("WEEKLY_DRAWDOWN_BREACH");
   });
 
   test("Reject if monthly drawdown limit exceeded (but weekly alone would not breach)", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-06-25T12:00:00Z")); // 4th Thursday of month
+
     const ctx: any = {
       userId, symbol, mode: "PAPER", accountType: "FUTURES",
       currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
     };
-    const threeWeeksAgo = new Date(FIXED_NOW.getTime() - 21 * 24 * 60 * 60 * 1000);
+    const threeWeeksAgo = new Date(new Date().getTime() - 21 * 24 * 60 * 60 * 1000);
 
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) });
     mockTradeFind.mockReturnValueOnce({
@@ -163,6 +172,7 @@ describe("AQEA Risk Engine", () => {
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -850, status: "CLOSED" }]) });
 
     const res = await RiskEngine.validateTrade(ctx);
+    jest.useRealTimers();
     expect(res.allowed).toBe(false);
     expect(res.reason).toBe("MONTHLY_DRAWDOWN_BREACH");
   });

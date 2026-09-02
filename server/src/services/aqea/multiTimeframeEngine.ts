@@ -35,11 +35,17 @@ export class MultiTimeframeEngine {
     "1h": 0.25,
     "4h": 0.25
   };
+  private static cache = new Map<string, { result: MultiTFResult; timestamp: number }>();
 
   /**
    * Main entry point to calculate alignment across 5 timeframes.
    */
   public static async calculateAlignment(symbol: string): Promise<MultiTFResult> {
+    const cached = this.cache.get(symbol.toUpperCase());
+    if (cached && Date.now() - cached.timestamp < 30000) {
+      return cached.result;
+    }
+
     const isIndian = !symbol.endsWith("USDT") && !symbol.endsWith("BUSD") && !symbol.endsWith("BTC") && !symbol.endsWith("ETH");
     if (isIndian) {
       return { score: 50, direction: "NEUTRAL", agreement: 3, diagnostics: [] };
@@ -77,12 +83,15 @@ export class MultiTimeframeEngine {
     // Agreement: Count how many timeframes agree with the final direction
     const agreement = diagnostics.filter(d => d.direction === finalDirection).length;
 
-    return {
+    const result: MultiTFResult = {
       score: finalScore,
       direction: finalDirection,
       agreement,
       diagnostics
     };
+
+    this.cache.set(symbol.toUpperCase(), { result, timestamp: Date.now() });
+    return result;
   }
 
   /**

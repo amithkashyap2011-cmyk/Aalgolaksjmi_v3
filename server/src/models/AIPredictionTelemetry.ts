@@ -32,7 +32,7 @@ const AIPredictionTelemetrySchema = new Schema<IAIPredictionTelemetry>({
   symbol: { type: String, required: true, index: true },
   direction: { type: String, required: true },
   confidence: { type: Number, required: true },
-  timestamp: { type: Date, required: true, index: true },
+  timestamp: { type: Date, required: true },
   
   priceAtPrediction: { type: Number },
   price15m: { type: Number },
@@ -47,6 +47,11 @@ const AIPredictionTelemetrySchema = new Schema<IAIPredictionTelemetry>({
   isCorrect: { type: Boolean },
   gradingVersion: { type: Number }
 });
+
+AIPredictionTelemetrySchema.index({ model_name: 1, isCorrect: 1, timestamp: -1 });
+AIPredictionTelemetrySchema.index({ model_name: 1, timestamp: -1 });
+AIPredictionTelemetrySchema.index({ symbol: 1, timestamp: -1 });
+AIPredictionTelemetrySchema.index({ timestamp: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
 
 export const AIPredictionTelemetry = mongoose.model<IAIPredictionTelemetry>("AIPredictionTelemetry", AIPredictionTelemetrySchema);
 

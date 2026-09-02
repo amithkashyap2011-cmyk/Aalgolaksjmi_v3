@@ -135,6 +135,16 @@ export const INDIAN_SYMBOLS: Record<string, IndianSymbolConfig> = {
     tickSize: 0.05,
     category: "LARGE_CAP",
   },
+  "TATAMOTORS": {
+    symbol: "TATAMOTORS",
+    exchange: "NSE",
+    name: "Tata Motors Ltd",
+    assetClass: "EQUITY",
+    lotSize: 500,
+    tickSize: 0.05,
+    category: "NIFTY50",
+  },
 };
 
 export const SUPPORTED_INDIAN_SYMBOLS = Object.keys(INDIAN_SYMBOLS);
+

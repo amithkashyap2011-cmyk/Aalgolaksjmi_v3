@@ -127,4 +127,31 @@ describe.each([
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.leverage).toBe(10);
   });
+
+  test("blocks when AI confidence is below 68%", () => {
+    const input = baseInput({ aqeaDecision: { ...baseInput().aqeaDecision, confidence: 60 } as any });
+    const result = evaluate(input);
+    expect(result.ok).toBe(false);
+    if (!result.ok && !result.silent) {
+      expect(result.reason).toContain("AI conviction below minimum threshold");
+    }
+  });
+
+  test("blocks counter-trend trades during opposing regime when confidence < 75%", () => {
+    const isLong = evaluate === evaluateLongEntry;
+    const opposingRegime = isLong ? "TRENDING_BEAR" : "TRENDING_BULL";
+    const input = baseInput({
+      aqeaDecision: {
+        ...baseInput().aqeaDecision,
+        confidence: 70, // >= 68% but < 75%
+        decisionPath: { ...baseInput().aqeaDecision.decisionPath, regime: opposingRegime }
+      } as any
+    });
+    const result = evaluate(input);
+    expect(result.ok).toBe(false);
+    if (!result.ok && !result.silent) {
+      expect(result.reason).toContain("Counter-trend");
+    }
+  });
 });
+

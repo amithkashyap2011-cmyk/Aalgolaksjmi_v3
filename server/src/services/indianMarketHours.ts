@@ -31,6 +31,16 @@ const NSE_HOLIDAYS_2026 = new Set<string>([
 ]);
 
 export class IndianMarketHours {
+  public static isHoliday(date: Date): boolean {
+    const utcTime = date.getTime() + date.getTimezoneOffset() * 60000;
+    const istOffset = 5.5 * 3600000;
+    const istDate = new Date(utcTime + istOffset);
+    const yyyy = istDate.getFullYear();
+    const mm = String(istDate.getMonth() + 1).padStart(2, "0");
+    const dd = String(istDate.getDate()).padStart(2, "0");
+    return NSE_HOLIDAYS_2026.has(`${yyyy}-${mm}-${dd}`);
+  }
+
   public static getSessionStatus(dateOverride?: Date): MarketSessionStatus {
     const date = dateOverride || new Date();
 

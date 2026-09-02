@@ -53,7 +53,7 @@ export interface IAqeaDecisionAttribution extends Document {
 }
 
 const AqeaDecisionAttributionSchema = new Schema<IAqeaDecisionAttribution>({
-  timestamp: { type: Date, default: Date.now, index: true },
+  timestamp: { type: Date, default: Date.now },
   symbol: { type: String, required: true, index: true },
   userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
   
@@ -98,5 +98,7 @@ const AqeaDecisionAttributionSchema = new Schema<IAqeaDecisionAttribution>({
   
   meta: { type: Schema.Types.Mixed, default: {} }
 });
+
+AqeaDecisionAttributionSchema.index({ timestamp: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
 
 export const AqeaDecisionAttribution = mongoose.model<IAqeaDecisionAttribution>("AqeaDecisionAttribution", AqeaDecisionAttributionSchema);

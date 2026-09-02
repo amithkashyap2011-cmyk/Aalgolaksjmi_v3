@@ -261,9 +261,25 @@ function getRegimeAdaptiveWeights(
   return normalized;
 }
 
+// ── In-Memory Cache for Ensemble Reports (4-second TTL for instant UI responsiveness) ──
+const ensembleReportCache = new Map<string, { report: EnsembleReport; expiresAt: number }>();
+
 export async function buildEnsembleReport(symbol: string, interval = "5m", limit = 200, userId?: string | null): Promise<EnsembleReport> {
   const normalizedSymbol = symbol.toUpperCase();
-  const klines = await binance.getKlines(normalizedSymbol, interval, undefined, undefined, limit);
+  const cacheKey = `${normalizedSymbol}:${interval}:${limit}:${userId || "anon"}`;
+  const cached = ensembleReportCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.report;
+  }
+
+  // 1. Fetch Market Data in Parallel
+  const [klines, fundingRate, openInterest, book] = await Promise.all([
+    binance.getKlines(normalizedSymbol, interval, undefined, undefined, limit),
+    binance.getLatestFundingRate(normalizedSymbol).catch(() => 0),
+    binance.getFuturesOpenInterest(normalizedSymbol).catch(() => 0),
+    binance.getOrderBook(normalizedSymbol, 20).catch(() => ({ bids: [], asks: [] }))
+  ]);
+
   if (!klines || klines.length === 0) {
     throw new Error("Market data not available for ensemble report");
   }
@@ -281,9 +297,6 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   bars.forEach((bar) => vwapCalc.update(bar));
   const vwap = vwapCalc.value ?? ind.close;
   const supertrend = computeSupertrend(bars, 10, 3);
-  const fundingRate = await binance.getLatestFundingRate(normalizedSymbol).catch(() => 0);
-  const openInterest = await binance.getFuturesOpenInterest(normalizedSymbol).catch(() => 0);
-  const book = await binance.getOrderBook(normalizedSymbol, 20).catch(() => ({ bids: [], asks: [] }));
   const orderBookImbalance = scoreOrderBookImbalance(book);
   const liquidityPulse = scoreLiquidityPulse(openInterest);
   const { regime, score: regimeScore } = detectMarketRegime(ind, vwap, openInterest, fundingRate, orderBookImbalance);
@@ -311,25 +324,25 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   const modelWeights = getRegimeAdaptiveWeights(registryWeights, regime);
   const models: ModelContribution[] = [];
 
-  // ─── Track A & B Research (Shadow Only) ───────────────
-  try {
-     // We map ensemble context to the new AQEA FeatureVector contract
-     const mockFV: any = {
-        symbol: normalizedSymbol,
-        market: { ...ind, bars },
-        regime: { state: regime, score: regimeScore * 100 },
-        orderFlow: { fundingRate, liquidationScore: liquidityPulse * 100 },
-        smartMoney: { poc: vwap },
-        execution: { positionSize: 0 }
-     };
+  // 2. Prepare Feature Vector for Research Models
+  const mockFV: any = {
+    symbol: normalizedSymbol,
+    market: { ...ind, bars },
+    regime: { state: regime, score: regimeScore * 100 },
+    orderFlow: { fundingRate, liquidationScore: liquidityPulse * 100 },
+    smartMoney: { poc: vwap },
+    execution: { positionSize: 0 }
+  };
 
-     const mambaPred = await mambaPredictor.predict(mockFV);
-     models.push(transformDLResponse(mambaPred, "mamba-v2-research", 0));
-
-     const microPred = await transformerPredictor.predict(mockFV);
-     models.push({
+  // 3. Execute all model predictions in parallel
+  const researchPromises: Promise<ModelContribution | null>[] = [
+    mambaPredictor.predict(mockFV)
+      .then(mambaPred => transformDLResponse(mambaPred, "mamba-v2-research", 0))
+      .catch(() => null),
+    transformerPredictor.predict(mockFV)
+      .then(microPred => ({
         modelName: "transformer-micro-shadow",
-        category: "MICROSTRUCTURE",
+        category: "MICROSTRUCTURE" as const,
         weight: 0,
         longProbability: microPred.probability,
         shortProbability: 1 - microPred.probability,
@@ -337,35 +350,52 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
         expectedReturn: 0,
         expectedDrawdown: 0,
         notes: `Track B Research: Microstructure outcome is ${microPred.meta?.outcome || "UNKNOWN"} (Shadow)`
-     });
-  } catch (err) {
-    console.warn("[Ensemble] Research shadow predictions failed:", err);
-  }
-  // ────────────────────────────────────────────────────────
+      }))
+      .catch(() => null)
+  ];
 
+  const activeModelPromises: Promise<ModelContribution | null>[] = [];
   for (const model of activeModels) {
     const weight = modelWeights[model.id] ?? 0;
     if (weight <= 0) continue;
 
     if (model.id === "xgboost") {
-      models.push(predictLocalClassical("XGBoost", mlFeatures, 0.01, fundingRate, volatilityScore, weight));
+      activeModelPromises.push(Promise.resolve(predictLocalClassical("XGBoost", mlFeatures, 0.01, fundingRate, volatilityScore, weight)));
     } else if (model.id === "lightgbm") {
-      models.push(predictLocalClassical("LightGBM", mlFeatures, -0.01, fundingRate, volatilityScore, weight));
+      activeModelPromises.push(Promise.resolve(predictLocalClassical("LightGBM", mlFeatures, -0.01, fundingRate, volatilityScore, weight)));
     } else if (model.id === "transformer") {
-      models.push(await predictDeepModel(bars, normalizedSymbol, interval, "transformer-v1", weight));
+      activeModelPromises.push(predictDeepModel(bars, normalizedSymbol, interval, "transformer-v1", weight).catch(() => null));
     } else if (model.id === "xlstm") {
-      models.push(await predictDeepModel(bars, normalizedSymbol, interval, "xlstm-v1", weight));
+      activeModelPromises.push(predictDeepModel(bars, normalizedSymbol, interval, "xlstm-v1", weight).catch(() => null));
     } else if (model.id === "ppo-agent") {
-      models.push(predictReinforcementModel(regimeScore, orderBookImbalance, fundingRate, weight));
+      activeModelPromises.push(Promise.resolve(predictReinforcementModel(regimeScore, orderBookImbalance, fundingRate, weight)));
     } else if (model.id === "mamba-hybrid") {
-      models.push(await predictDeepModel(bars, normalizedSymbol, interval, "mamba-hybrid", weight));
+      activeModelPromises.push(predictDeepModel(bars, normalizedSymbol, interval, "mamba-hybrid", weight).catch(() => null));
     }
   }
 
-  // Fall back when no *weighted* model contributed. The shadow research models
-  // above are always present with weight 0, so a plain `models.length === 0`
-  // check never fired — leaving the ensemble with totalWeight≈0, which produced
-  // confidence ≈ regimeScore×0.01 ("1%") and a 0/0 probability tie (NEUTRAL).
+  const selfLearningPromise = selfLearning.summarize(userId).catch(() => ({
+    retrainWeekly: false,
+    strategyDecayDetected: false,
+    regimeChangeDetected: false,
+    overfittingRisk: false,
+    notes: ["Self-learning summary unavailable."],
+  }));
+
+  const [researchResults, activeResults, selfLearningSummary] = await Promise.all([
+    Promise.all(researchPromises),
+    Promise.all(activeModelPromises),
+    selfLearningPromise
+  ]);
+
+  for (const r of researchResults) {
+    if (r) models.push(r);
+  }
+  for (const r of activeResults) {
+    if (r) models.push(r);
+  }
+
+  // Fall back when no *weighted* model contributed
   if (!models.some((m) => m.weight > 0)) {
     models.push(predictLocalClassical("XGBoost", mlFeatures, 0.01, fundingRate, volatilityScore, 1.0));
   }
@@ -378,10 +408,6 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   const expectedDrawdown = clamp(models.reduce((sum, m) => sum + m.expectedDrawdown * m.weight, 0) / totalWeight, 0.02, 0.25);
 
   const drawdownWarning = confidence < 0.45 || regime === "High Volatility";
-
-  // Directional call for the UI's "AI Signal" panel. NEUTRAL when the ensemble
-  // is unconfident or the two sides are effectively tied; otherwise the stronger
-  // probability wins. (Previously absent, so the panel always rendered "—".)
   const probEdge = Math.abs(longProbability - shortProbability);
   const signal: "LONG" | "SHORT" | "NEUTRAL" =
     confidence < 0.45 || probEdge < 0.04
@@ -391,15 +417,7 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   const maxWinProb = Math.max(longProbability, shortProbability);
   const riskSizing = computeRiskSizing(maxWinProb, Math.abs(expectedReturn), volatilityScore, drawdownWarning);
 
-  const selfLearningSummary = await selfLearning.summarize(userId).catch(() => ({
-    retrainWeekly: false,
-    strategyDecayDetected: false,
-    regimeChangeDetected: false,
-    overfittingRisk: false,
-    notes: ["Self-learning summary unavailable."],
-  }));
-
-  return {
+  const reportResult: EnsembleReport = {
     symbol: normalizedSymbol,
     interval,
     computedAt: new Date().toISOString(),
@@ -423,6 +441,10 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
     riskSizing,
     selfLearning: selfLearningSummary,
   };
+
+  // Cache for 4 seconds
+  ensembleReportCache.set(cacheKey, { report: reportResult, expiresAt: Date.now() + 4000 });
+  return reportResult;
 }
 
 function predictLocalClassical(name: string, features: MLFeatures, seed: number, fundingRate: number, volatilityScore: number, weight: number): ModelContribution {

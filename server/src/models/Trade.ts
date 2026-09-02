@@ -38,7 +38,37 @@ export interface ITrade extends Document {
   leverage: number;
   openedAt: Date;
   closedAt: Date | null;
-  accountType: "SPOT" | "FUTURES";
+  accountType: "SPOT" | "FUTURES" | "INDIAN_NSE" | "INDIAN_BSE" | "INDIAN_NIFTY50" | "INDIAN_FNO";
+  
+  // 🇮🇳 Indian Derivatives & Multi-Leg Fields
+  underlying?: string;
+  instrumentType?: "FUTURE" | "CE" | "PE" | "EQUITY" | "MULTI_LEG";
+  positionDirection?: "LONG" | "SHORT";
+  strike?: number;
+  expiry?: string;
+  tradeGroupId?: string;
+  productType?: "MIS" | "CNC" | "NRML";
+  legs?: Array<{
+    legId: string;
+    action: "BUY" | "SELL";
+    instrument: "CE" | "PE" | "FUTURE" | "EQUITY";
+    strike?: number;
+    expiry?: string;
+    quantity: number;
+    lotSize: number;
+    entryPrice?: number;
+    exitPrice?: number;
+    status: "PENDING" | "FILLED" | "CLOSED" | "FAILED";
+    pnl?: number;
+    pnlPercent?: number;
+  }>;
+  greeks?: {
+    delta?: number;
+    gamma?: number;
+    theta?: number;
+    vega?: number;
+    iv?: number;
+  };
 
   // V8.0 Institutional Fields
   qualityScore: number;
@@ -107,7 +137,18 @@ const TradeSchema = new Schema<ITrade>({
   leverage: { type: Number, default: 1 },
   openedAt: { type: Date, default: Date.now },
   closedAt: { type: Date, default: null },
-  accountType: { type: String, enum: ["SPOT", "FUTURES", "INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50"], default: "FUTURES" },
+  accountType: { type: String, enum: ["SPOT", "FUTURES", "INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"], default: "FUTURES" },
+  
+  // 🇮🇳 Indian Derivatives & Multi-Leg Fields
+  underlying: { type: String, index: true },
+  instrumentType: { type: String, enum: ["FUTURE", "CE", "PE", "EQUITY", "MULTI_LEG"] },
+  positionDirection: { type: String, enum: ["LONG", "SHORT"] },
+  strike: { type: Number },
+  expiry: { type: String },
+  tradeGroupId: { type: String, index: true },
+  productType: { type: String, default: "MIS" },
+  legs: { type: Schema.Types.Mixed, default: [] },
+  greeks: { type: Schema.Types.Mixed, default: {} },
   
   // V8.0 Institutional Fields
   qualityScore: { type: Number, default: 0 },
@@ -140,5 +181,8 @@ const TradeSchema = new Schema<ITrade>({
 
 TradeSchema.index({ userId: 1, symbol: 1, mode: 1, status: 1 });
 TradeSchema.index({ userId: 1, status: 1, mode: 1, accountType: 1 });
+TradeSchema.index({ userId: 1, mode: 1, openedAt: -1 });
+TradeSchema.index({ userId: 1, mode: 1, status: 1, openedAt: -1 });
+TradeSchema.index({ userId: 1, mode: 1, closedAt: -1 });
 
 export const Trade = mongoose.model<ITrade>("Trade", TradeSchema);

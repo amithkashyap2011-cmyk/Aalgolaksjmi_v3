@@ -68,7 +68,7 @@ export class BinanceAdapter implements ExchangeAdapter {
           lastUpdateId: 0,
         };
       }
-      const res = await fetch(`${BINANCE_API_BASE}/api/v3/depth?symbol=${symbol}&limit=${depth}`);
+      const res = await fetch(`${BINANCE_API_BASE}/api/v3/depth?symbol=${symbol}&limit=${depth}`, { signal: AbortSignal.timeout(1000) });
       if (!res.ok) {
         const text = await res.text();
         binanceService.handleRestError(res.status, text);
@@ -152,45 +152,23 @@ export class BinanceAdapter implements ExchangeAdapter {
     }
   }
 
+  private static liquidationsCache = new Map<string, { data: LiquidationEvent[]; timestamp: number }>();
+
   async getFundingRate(symbol: string): Promise<FundingRateData> {
     const start = Date.now();
     try {
-      if (binanceService.isRestBanned()) {
-        const px = (await binanceService.getTickerPrice(symbol)) || 100;
-        return {
-          symbol,
-          fundingRate: 0.0001,
-          fundingTime: Date.now(),
-          markPrice: px,
-          indexPrice: px,
-          nextFundingTime: Date.now() + 28800000,
-        };
-      }
-      const res = await fetch(`${BINANCE_FAPI_BASE}/fapi/v1/premiumIndex?symbol=${symbol}`);
-      if (!res.ok) {
-        const text = await res.text();
-        binanceService.handleRestError(res.status, text);
-        const px = (await binanceService.getTickerPrice(symbol)) || 100;
-        return {
-          symbol,
-          fundingRate: 0.0001,
-          fundingTime: Date.now(),
-          markPrice: px,
-          indexPrice: px,
-          nextFundingTime: Date.now() + 28800000,
-        };
-      }
-      const data = await res.json() as any;
+      const rate = await binanceService.getLatestFundingRate(symbol);
+      const px = (await binanceService.getTickerPrice(symbol).catch(() => 100)) || 100;
       this.lastLatencyMs = Date.now() - start;
       this.isConnected = true;
 
       return {
         symbol,
-        fundingRate: parseFloat(data.lastFundingRate || "0"),
-        fundingTime: data.nextFundingTime || Date.now(),
-        markPrice: parseFloat(data.markPrice || "0"),
-        indexPrice: parseFloat(data.indexPrice || "0"),
-        nextFundingTime: data.nextFundingTime || Date.now() + 28800000,
+        fundingRate: rate,
+        fundingTime: Date.now(),
+        markPrice: px,
+        indexPrice: px,
+        nextFundingTime: Date.now() + 28800000,
       };
     } catch (err) {
       this.lastLatencyMs = Date.now() - start;
@@ -231,16 +209,23 @@ export class BinanceAdapter implements ExchangeAdapter {
   }
 
   async getLiquidations(symbol: string, limit: number = 100): Promise<LiquidationEvent[]> {
+    const key = `${symbol.toUpperCase()}:${limit}`;
+    const cached = BinanceAdapter.liquidationsCache.get(key);
+    if (cached && Date.now() - cached.timestamp < 60000) {
+      return cached.data;
+    }
+
     const start = Date.now();
     try {
       if (binanceService.isRestBanned()) return [];
       const res = await fetch(
-        `${BINANCE_FAPI_BASE}/fapi/v1/allForceOrders?symbol=${symbol}&limit=${limit}`
+        `${BINANCE_FAPI_BASE}/fapi/v1/allForceOrders?symbol=${symbol}&limit=${limit}`,
+        { signal: AbortSignal.timeout(800) }
       );
       if (!res.ok) {
         const text = await res.text();
         binanceService.handleRestError(res.status, text);
-        return [];
+        return cached?.data ?? [];
       }
       const data = await res.json() as any;
       this.lastLatencyMs = Date.now() - start;
@@ -248,7 +233,7 @@ export class BinanceAdapter implements ExchangeAdapter {
 
       if (!Array.isArray(data)) return [];
 
-      return data.map((d: any) => ({
+      const parsed = data.map((d: any) => ({
         symbol: d.symbol,
         side: d.side as "BUY" | "SELL",
         price: parseFloat(d.price || "0"),
@@ -256,9 +241,11 @@ export class BinanceAdapter implements ExchangeAdapter {
         timestamp: d.time || Date.now(),
         exchange: this.name,
       }));
+      BinanceAdapter.liquidationsCache.set(key, { data: parsed, timestamp: Date.now() });
+      return parsed;
     } catch (err) {
       this.lastLatencyMs = Date.now() - start;
-      return []; // Graceful fallback
+      return cached?.data ?? []; // Graceful fallback
     }
   }
 

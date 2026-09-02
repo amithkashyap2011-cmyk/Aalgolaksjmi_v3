@@ -22,6 +22,7 @@ import mongoose from "mongoose";
 import fs from "node:fs";
 import { ApiKeys } from "../models/ApiKeys.js";
 import { decrypt } from "../lib/crypto.js";
+import { LiveExecutionBarrier } from "./aqea/governance/LiveExecutionBarrier.js";
 
 const AUTO_FIX_LOG = "/Users/amithks/aalgolakshmi_v3/server/auto_trade.log";
 const STATIC_BASELINE_USDT = 0; // Reset balance to safe $20K if corrupted
@@ -118,29 +119,34 @@ export async function runSentinelAudit(userId: string, mode: "PAPER" | "LIVE", a
           logAutoFix(`  -> Auto-Closing orphan trade: id=${orphan._id} side=${orphan.side} Qty=${orphan.quantity}`);
           
           if (mode === "LIVE") {
-            try {
-              const keys = await ApiKeys.findOne({ userId });
-              if (keys) {
-                const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
-                const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
-                const exitSide = orphan.side === "BUY" ? "SELL" : "BUY";
-                const formattedQty = accountType === "FUTURES"
-                  ? await binance.formatFuturesQuantity(symbol, orphan.quantity)
-                  : await binance.formatQuantity(symbol, orphan.quantity);
-                
-                logAutoFix(`  -> Placing market order to flatten orphan on exchange: Side=${exitSide} Qty=${formattedQty}`);
-                if (accountType === "FUTURES") {
-                  await binance.placeFuturesOrder(apiKey, apiSecret, {
-                    symbol, side: exitSide, type: "MARKET", quantity: formattedQty,
-                  });
-                } else {
-                  await binance.placeOrder(apiKey, apiSecret, {
-                    symbol, side: exitSide, type: "MARKET", quantity: formattedQty,
-                  });
+            const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+            if (!barrier.permitted) {
+              logAutoFix(`  -> Live execution barrier active (${barrier.reason}). Skipping live exchange orphan close.`);
+            } else {
+              try {
+                const keys = await ApiKeys.findOne({ userId });
+                if (keys) {
+                  const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
+                  const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
+                  const exitSide = orphan.side === "BUY" ? "SELL" : "BUY";
+                  const formattedQty = accountType === "FUTURES"
+                    ? await binance.formatFuturesQuantity(symbol, orphan.quantity)
+                    : await binance.formatQuantity(symbol, orphan.quantity);
+                  
+                  logAutoFix(`  -> Placing market order to flatten orphan on exchange: Side=${exitSide} Qty=${formattedQty}`);
+                  if (accountType === "FUTURES") {
+                    await binance.placeFuturesOrder(apiKey, apiSecret, {
+                      symbol, side: exitSide, type: "MARKET", quantity: formattedQty,
+                    });
+                  } else {
+                    await binance.placeOrder(apiKey, apiSecret, {
+                      symbol, side: exitSide, type: "MARKET", quantity: formattedQty,
+                    });
+                  }
                 }
+              } catch (err: any) {
+                logAutoFix(`  -> Failed to close orphan on Binance: ${err.message}. It might have been manually closed already.`);
               }
-            } catch (err: any) {
-              logAutoFix(`  -> Failed to close orphan on Binance: ${err.message}. It might have been manually closed already.`);
             }
           }
 

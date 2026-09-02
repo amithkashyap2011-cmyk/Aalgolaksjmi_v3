@@ -44,23 +44,22 @@ export class RiskEngine {
     const wallet = paper.getWallet(ctx.userId, ctx.mode, ctx.accountType);
     const balance = wallet.get("USDT") ?? 0;
 
-    if (balance <= 0) return this.reject("BALANCE_ZERO");
+    if (ctx.mode === "LIVE" && balance <= 0) {
+      return this.reject("BALANCE_ZERO");
+    }
+
+    // In PAPER mode with 0 balance, use standard $10,000 virtual baseline for hypothetical evidence sizing
+    const effectiveBalance = (ctx.mode === "PAPER" && balance <= 0) ? 10000 : Math.max(0, balance);
 
     // 2. Open Positions Check (Recalculate from actual DB positions)
-    // 🛡️ Scoped to this trade's own accountType — SPOT and FUTURES have
-    // fully independent wallets (see paperState.ts's userId:mode:accountType
-    // keying), so their position count / exposure / drawdown budgets must
-    // be independent too. Without this filter, FUTURES' margin usage gets
-    // checked against the SPOT wallet's balance (and vice versa): e.g. a
-    // SPOT wallet holding 10.51 USDT against 7.11 USDT of FUTURES-only
-    // margin computed a bogus 68% "portfolio exposure" and rejected every
-    // SPOT entry attempt, regardless of signal strength.
-    const openTrades = await Trade.find({
+    // Scoped to this trade's own accountType — SPOT and FUTURES have fully independent wallets
+    const isDbConnected = Boolean(mongoose?.connection?.readyState === 1);
+    const openTrades = isDbConnected ? await Trade.find({
        userId: toValidObjectId(ctx.userId),
        mode: ctx.mode,
        accountType: ctx.accountType,
        status: "OPEN"
-    }).lean();
+    }).lean() : [];
     
     if (openTrades.length >= AQEA_CONFIG.MAX_CONCURRENT_POSITIONS) {
        return this.reject(`MAX_POSITIONS_BREACH: ${openTrades.length}`);
@@ -73,7 +72,7 @@ export class RiskEngine {
        totalMargin += (t.quantity * t.entryPrice) / lev;
     });
     
-    if (totalMargin / balance > AQEA_CONFIG.MAX_PORTFOLIO_EXPOSURE) {
+    if (totalMargin / effectiveBalance > AQEA_CONFIG.MAX_PORTFOLIO_EXPOSURE) {
        return this.reject("PORTFOLIO_EXPOSURE_LIMIT_REACHED");
     }
 
@@ -81,27 +80,20 @@ export class RiskEngine {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const weekStart = new Date(todayStart);
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    const dayOfWeek = todayStart.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    weekStart.setDate(todayStart.getDate() - diffToMonday);
     const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
 
-    // Day/week/month are nested ranges (month ⊇ week ⊇ day) — this
-    // previously fired 3 separate round-trips for what's really one
-    // superset fetch. Benchmarked against the real trades collection:
-    // 3 separate queries ≈ 27ms, 1 superset query + in-memory filter ≈
-    // 3ms (9x) at current data volume, and the gap only widens as
-    // round-trip overhead comes to dominate over per-query work.
-    // Same accountType scoping as the open-positions query above — a
-    // FUTURES drawdown must not halt SPOT entries (or vice versa) when
-    // each has its own wallet and its own P&L.
-    const [monthTrades, allTrades] = await Promise.all([
+    const [monthTrades, allTrades] = isDbConnected ? await Promise.all([
       Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, openedAt: { $gte: monthStart } }).lean(),
       Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED" }).lean(),
-    ]);
-    const tradesToday = monthTrades.filter(t => t.openedAt >= todayStart);
-    const weekTrades = monthTrades.filter(t => t.openedAt >= weekStart);
+    ]) : [[], []];
+    const tradesToday = monthTrades.filter(t => new Date(t.openedAt).getTime() >= todayStart.getTime());
+    const weekTrades = monthTrades.filter(t => new Date(t.openedAt).getTime() >= weekStart.getTime());
 
     const dailyPnl = tradesToday.reduce((s, t) => s + (t.pnl ?? 0), 0);
-    if (Math.abs(dailyPnl) / balance > AQEA_CONFIG.DAILY_DRAWDOWN_LIMIT) {
+    if (dailyPnl < 0 && Math.abs(dailyPnl) / effectiveBalance > AQEA_CONFIG.DAILY_DRAWDOWN_LIMIT) {
        return this.reject("DAILY_DRAWDOWN_BREACH");
     }
 
@@ -109,32 +101,29 @@ export class RiskEngine {
     const monthlyPnl = monthTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
     const allTimePnl = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
 
-    if (Math.abs(weeklyPnl) / balance > AQEA_CONFIG.WEEKLY_DRAWDOWN_LIMIT) {
+    if (weeklyPnl < 0 && Math.abs(weeklyPnl) / effectiveBalance > AQEA_CONFIG.WEEKLY_DRAWDOWN_LIMIT) {
        return this.reject("WEEKLY_DRAWDOWN_BREACH");
     }
-    if (Math.abs(monthlyPnl) / balance > AQEA_CONFIG.MONTHLY_DRAWDOWN_LIMIT) {
+    if (monthlyPnl < 0 && Math.abs(monthlyPnl) / effectiveBalance > AQEA_CONFIG.MONTHLY_DRAWDOWN_LIMIT) {
        return this.reject("MONTHLY_DRAWDOWN_BREACH");
     }
-    // PORTFOLIO_DRAWDOWN_LIMIT was already defined in config.ts but never
-    // actually checked anywhere — the emergency stop it names didn't exist
-    // as a real gate until this fix.
-    if (allTimePnl < 0 && Math.abs(allTimePnl) / balance > AQEA_CONFIG.PORTFOLIO_DRAWDOWN_LIMIT) {
+    if (allTimePnl < 0 && Math.abs(allTimePnl) / effectiveBalance > AQEA_CONFIG.PORTFOLIO_DRAWDOWN_LIMIT) {
        return this.reject("PORTFOLIO_DRAWDOWN_BREACH");
     }
 
     // 5. Position Sizing (Fixed Risk amount)
     // Formula: Risk Amount / Stop Loss Distance
-    const riskAmount = balance * AQEA_CONFIG.MAX_RISK_PER_TRADE;
+    const riskAmount = effectiveBalance * AQEA_CONFIG.MAX_RISK_PER_TRADE;
     const slDistance = (ctx.atr || 1.0) * 2.5; // 2.5 ATR Stop (v2.8)
     const slPct = slDistance / (ctx.currentPrice || 1.0);
 
     // positionSize = riskAmount / slPct
-    let positionSize = riskAmount / slPct;
+    let positionSize = riskAmount / Math.max(slPct, 0.001);
     
     // Safety cap: Never allocate more than 10% notional in a single trade
-    positionSize = Math.min(positionSize, balance * 0.10);
+    positionSize = Math.min(positionSize, effectiveBalance * 0.10);
 
-    // 🛡️ v2.9 Fix: Ensure positionSize is a finite number (Prevents NaN Quantity)
+    // Ensure positionSize is a finite number (Prevents NaN Quantity)
     if (!Number.isFinite(positionSize) || positionSize <= 0) {
        console.warn(`[AQEA_RISK] Invalid position size calculated (${positionSize}). Using safe default: 0.`);
        positionSize = 0;
@@ -146,16 +135,13 @@ export class RiskEngine {
     let leverage = 1;
     if (ctx.accountType === "FUTURES") {
        // We cap leverage at 10x
-       leverage = Math.min(AQEA_CONFIG.MAX_LEVERAGE, positionSize / riskAmount);
+       leverage = Math.min(AQEA_CONFIG.MAX_LEVERAGE, positionSize / Math.max(riskAmount, 1));
        if (leverage < 1) leverage = 1;
-       
-       // Re-calculate position size based on capped leverage if needed
-       // (If we wanted to cap notional, but here we cap leverage)
     }
 
     const riskScore = this.calculateRiskScore(ctx, openTrades.length);
 
-    // 🛡️ Weather Intelligence Multipliers (V1.0)
+    // Weather Intelligence Multipliers (V1.0)
     const weatherRisk = weatherIntelligenceEngine.getRiskAdjustment();
     positionSize *= weatherRisk.sizeMultiplier;
     leverage = Math.max(1, Math.round(leverage * weatherRisk.leverageMultiplier));

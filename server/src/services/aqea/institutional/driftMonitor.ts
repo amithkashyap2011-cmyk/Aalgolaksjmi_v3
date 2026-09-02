@@ -23,18 +23,33 @@ export interface DriftReport {
 }
 
 export class DriftMonitor {
+  private static cache = new Map<string, { report: DriftReport; timestamp: number }>();
+
   /**
    * Tracks model decay by comparing recent vs historical accuracy.
    */
   public static async calculateDrift(userId: string): Promise<DriftReport> {
+    const cached = this.cache.get(userId);
+    if (cached && Date.now() - cached.timestamp < 60000) {
+      return cached.report;
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+      return {
+        score: 0,
+        status: "HEALTHY",
+        components: { cnnDrift: 0, ppoDrift: 0, mambaDrift: 0, transformerDrift: 0, ofDrift: 0, smDrift: 0 }
+      };
+    }
+
     const objId = toValidObjectId(userId);
     
     // Exclude TA-fallback trades (AI engine was offline) — they must not score any model.
     const attributable = { "meta.aiAttributable": { $ne: false } };
 
     // 1. CNN Accuracy Drift
-    const recentCNN = await AqeaTradeAnalytics.find({ userId: objId, "aiPredictions.predictor": "CNN_1D_V1", ...attributable }).sort({ timestamp: -1 }).limit(100).lean();
-    const histCNN = await AqeaTradeAnalytics.find({ userId: objId, "aiPredictions.predictor": "CNN_1D_V1", ...attributable }).sort({ timestamp: -1 }).skip(500).limit(500).lean();
+    const recentCNN = await AqeaTradeAnalytics.find({ userId: objId, "aiPredictions.predictor": "CNN_1D_V1", ...attributable }).sort({ timestamp: -1 }).limit(100).lean().catch(() => []);
+    const histCNN = await AqeaTradeAnalytics.find({ userId: objId, "aiPredictions.predictor": "CNN_1D_V1", ...attributable }).sort({ timestamp: -1 }).skip(500).limit(500).lean().catch(() => []);
     const cnnDrift = this.compareAccuracy(recentCNN, histCNN);
 
     // 2. Mamba Accuracy Drift
@@ -44,8 +59,8 @@ export class DriftMonitor {
     const transformerDrift = 12; // Mock until enough data collected
 
     // 4. Order Flow / Smart Money Agreement Drift
-    const recentPerf = await AqeaPerformance.find({ userId: objId }).sort({ timestamp: -1 }).limit(100).lean();
-    const histPerf = await AqeaPerformance.find({ userId: objId }).sort({ timestamp: -1 }).skip(500).limit(500).lean();
+    const recentPerf = await AqeaPerformance.find({ userId: objId }).sort({ timestamp: -1 }).limit(100).lean().catch(() => []);
+    const histPerf = await AqeaPerformance.find({ userId: objId }).sort({ timestamp: -1 }).skip(500).limit(500).lean().catch(() => []);
     const agreementDrift = this.compareAgreement(recentPerf, histPerf);
 
     // 5. PPO Reward Drift
@@ -58,7 +73,7 @@ export class DriftMonitor {
     if (globalDrift > 60) status = "CRITICAL";
     else if (globalDrift > 30) status = "WARNING";
 
-    return {
+    const report: DriftReport = {
       score: globalDrift,
       status,
       components: {
@@ -70,6 +85,9 @@ export class DriftMonitor {
         smDrift: agreementDrift
       }
     };
+
+    this.cache.set(userId, { report, timestamp: Date.now() });
+    return report;
   }
 
   private static compareAccuracy(recent: any[], hist: any[]): number {

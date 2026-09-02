@@ -1,4 +1,4 @@
-import { connectIfAvailable, disconnectMongo } from "./helpers/mongoTestHelper.js";
+import { connectIfAvailable, disconnectMongo, skipIfNoMongo } from "./helpers/mongoTestHelper.js";
 /*
  * ─── Regression test: deposit NEVER enables or triggers autoTrade ──
  *
@@ -6,7 +6,7 @@ import { connectIfAvailable, disconnectMongo } from "./helpers/mongoTestHelper.j
  * - A successful PAPER deposit must ONLY update wallet balances/transactions/snapshots.
  * - It must NOT automatically enable auto-trade, register in engine, or trigger processUser.
  */
-import { jest } from "@jest/globals";
+import { describe, test, expect, beforeAll, afterAll, beforeEach, jest } from "@jest/globals";
 import express from "express";
 import request from "supertest";
 import mongoose from "mongoose";
@@ -14,10 +14,10 @@ import jwt from "jsonwebtoken";
 
 jest.setTimeout(45000);
 
-global.fetch = jest.fn().mockResolvedValue({
+(global as any).fetch = (jest.fn() as any).mockResolvedValue({
   ok: true,
   json: async () => ({ rates: { INR: 84.5 }, INR: 84.5 })
-}) as any;
+});
 
 jest.unstable_mockModule("../src/services/binanceService.js", () => ({
   getTickerPrice: (jest.fn() as any).mockResolvedValue(50000),
@@ -50,19 +50,20 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (Settings) await Settings.deleteMany({ userId: testUserId });
+  if (Settings && mongoose?.connection?.readyState === 1) await Settings.deleteMany({ userId: testUserId });
   await disconnectMongo();
 });
 
 beforeEach(async () => {
   jest.clearAllMocks();
-  if (!Settings) return;
+  if (!Settings || mongoose?.connection?.readyState !== 1) return;
   await Settings.deleteMany({ userId: testUserId });
   await paper.setWalletBalance(testUserId, "PAPER", "USDT", 0, "FUTURES");
 });
 
 describe("REGRESSION: /wallet/deposit/paper must NOT enable or trigger autoTrade", () => {
   test("when autoTrade was explicitly disabled, a deposit does NOT re-enable it or trigger the engine", async () => {
+    if (skipIfNoMongo()) return;
     await Settings.create({ userId: testUserId, autoTrade: false, autoTradeFutures: false, autoTradeSpot: false });
 
     const res = await request(app)
@@ -82,6 +83,7 @@ describe("REGRESSION: /wallet/deposit/paper must NOT enable or trigger autoTrade
   }, 15000);
 
   test("when autoTrade was never set (new user), a deposit does NOT enable it", async () => {
+    if (skipIfNoMongo()) return;
     const res = await request(app)
       .post("/wallet/deposit/paper")
       .set("Authorization", `Bearer ${token}`)
@@ -97,6 +99,7 @@ describe("REGRESSION: /wallet/deposit/paper must NOT enable or trigger autoTrade
   }, 15000);
 
   test("deposit preserves existing balance update without touching autoTrade", async () => {
+    if (skipIfNoMongo()) return;
     const res = await request(app)
       .post("/wallet/deposit/paper")
       .set("Authorization", `Bearer ${token}`)

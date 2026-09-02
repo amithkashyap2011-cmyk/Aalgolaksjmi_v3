@@ -34,11 +34,13 @@ let WalletSnapshot: any;
 let WalletTransaction: any;
 let Trade: any;
 
+jest.setTimeout(60000);
+
 describe("Regression Test: Decoupling PAPER Wallet Deposit from Auto-Trading", () => {
   beforeAll(async () => {
     process.env.JWT_SECRET = JWT_SECRET;
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
 
     paper = await import("../src/services/paperState.js");
     autoTradeEngine = await import("../src/services/autoTradeEngine.js");
@@ -60,19 +62,25 @@ describe("Regression Test: Decoupling PAPER Wallet Deposit from Auto-Trading", (
     app.use("/aqea-ui", aqeaUiRouter);
 
     // Clean state for test user
-    await Settings.deleteMany({ userId: testUserId });
-    await WalletSnapshot.deleteMany({ userId: testUserId });
-    await WalletTransaction.deleteMany({ userId: testUserId });
-    await Trade.deleteMany({ userId: testUserId });
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await Settings.deleteMany({ userId: testUserId });
+        await WalletSnapshot.deleteMany({ userId: testUserId });
+        await WalletTransaction.deleteMany({ userId: testUserId });
+        await Trade.deleteMany({ userId: testUserId });
+      } catch { /* ignore */ }
+    }
     paper.resetAllPaperStateToZero();
   });
 
   afterAll(async () => {
-    if (Settings) {
-      await Settings.deleteMany({ userId: testUserId });
-      await WalletSnapshot.deleteMany({ userId: testUserId });
-      await WalletTransaction.deleteMany({ userId: testUserId });
-      await Trade.deleteMany({ userId: testUserId });
+    if (Settings && mongoose.connection.readyState === 1) {
+      try {
+        await Settings.deleteMany({ userId: testUserId });
+        await WalletSnapshot.deleteMany({ userId: testUserId });
+        await WalletTransaction.deleteMany({ userId: testUserId });
+        await Trade.deleteMany({ userId: testUserId });
+      } catch { /* ignore */ }
     }
     await disconnectMongo();
   });

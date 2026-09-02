@@ -247,6 +247,20 @@ export async function getWalletBalance(mode: string, accountType: string = "FUTU
   }>(`/wallet/balance?mode=${mode}&accountType=${accountType}&sid=${(window as any)._aalgo_session || "unknown"}`);
 }
 
+export interface WalletSummaryResponse {
+  spot: any;
+  futures: any;
+  nse: any;
+  bse: any;
+  nifty50: any;
+  inrRate: number;
+  timestamp: number;
+}
+
+export async function getWalletSummary(mode: string) {
+  return request<WalletSummaryResponse>(`/wallet/summary?mode=${mode}&sid=${(window as any)._aalgo_session || "unknown"}`);
+}
+
 export async function getWalletTransactions(limit = 50, skip = 0) {
   return request<{ transactions: any[]; total: number }>(
     `/wallet/transactions?limit=${limit}&skip=${skip}`,
@@ -299,10 +313,15 @@ export async function resetWallet(mode = "PAPER") {
   });
 }
 
-export async function depositPaper(amount: number, accountType: string = "FUTURES", currency: string = "USDT") {
-  return request<{ message: string; newBalance: number; mode: string }>("/wallet/deposit/paper", {
+export async function depositPaper(
+  amount: number,
+  accountType: string = "FUTURES",
+  currency: string = "USDT",
+  confirmConversion: boolean = false
+) {
+  return request<{ message: string; newBalance: number; currency?: string; accountType?: string; mode: string }>("/wallet/deposit/paper", {
     method: "POST",
-    body: JSON.stringify({ amount, accountType, currency }),
+    body: JSON.stringify({ amount, accountType, currency, confirmConversion }),
   });
 }
 

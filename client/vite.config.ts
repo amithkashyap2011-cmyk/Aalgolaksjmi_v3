@@ -6,7 +6,6 @@ const backendTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:999
 
 export default defineConfig({
   plugins: [react()],
-  esbuild: false,
   test: {
     globals: true,
     environment: 'jsdom',
@@ -26,6 +25,8 @@ export default defineConfig({
       '/agent':         { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
       '/wallet':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
       '/models':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/platform':      { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
+      '/ai-timeline':   { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
       '/system':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
       '/health':        { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
       '/indian-market': { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },

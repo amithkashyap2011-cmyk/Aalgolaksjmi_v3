@@ -91,7 +91,25 @@ export class SystemManager extends EventEmitter {
   }
 
   public heartbeat(name: string, health: any): boolean {
-    const service = this.services.get(name);
+    let service = this.services.get(name);
+    if (!service && name === "quant_engine") {
+      const portFile = path.join(findQuantEngineDir(), "runtime", "port.json");
+      let url = process.env.QUANT_URL || "http://127.0.0.1:8000";
+      if (fs.existsSync(portFile)) {
+        try {
+          const { port } = JSON.parse(fs.readFileSync(portFile, "utf8"));
+          if (port) url = `http://127.0.0.1:${port}`;
+        } catch {}
+      }
+      this.registerService({
+        name: "quant_engine",
+        url,
+        version: "2.0.0",
+        health: health || { status: "Online" }
+      });
+      service = this.services.get(name);
+    }
+
     if (service) {
       service.lastHeartbeat = Date.now();
       service.health = health;
@@ -100,7 +118,6 @@ export class SystemManager extends EventEmitter {
       return true;
     } else {
       console.warn(`[SystemManager] Heartbeat received for unknown service: ${name}. Rejecting.`);
-      // Service MUST register via /register to provide its URL. No fallbacks allowed.
       return false;
     }
   }

@@ -8,6 +8,7 @@
  */
 import { Trade } from "../models/Trade.js";
 import { WalletSnapshot } from "../models/WalletSnapshot.js";
+import { WalletTransaction } from "../models/WalletTransaction.js";
 import mongoose from "mongoose";
 import { toValidObjectId } from "../utils/mongoUtils.js";
 
@@ -55,7 +56,7 @@ export interface PaperPosition {
   tradeId: string; // Mongo _id of the Trade doc
   sl?: number;
   tp?: number;
-  accountType: "SPOT" | "FUTURES";
+  accountType: "SPOT" | "FUTURES" | "INDIAN_NSE" | "INDIAN_BSE" | "INDIAN_NIFTY50" | "INDIAN_FNO" | string;
   meta?: any;
 }
 
@@ -203,10 +204,6 @@ export async function debitWalletAndCreateTrade<T>(
   debitAmount: number,
   createTradeFn: (session: mongoose.ClientSession) => Promise<T>,
 ): Promise<T> {
-  if (mongoose.connection.readyState !== 1) {
-    throw new Error("MongoDB not connected — cannot atomically open a trade");
-  }
-
   const userObjId = toValidObjectId(userId);
 
   // Serialized per wallet key — see withWalletLock's comment for why the
@@ -216,6 +213,14 @@ export async function debitWalletAndCreateTrade<T>(
     const w = getWallet(userId, mode, accountType);
     const current = w.get("USDT") ?? 0;
     const newBalance = current - debitAmount;
+
+    if (mongoose.connection.readyState !== 1) {
+      // In-memory fallback for testing / disconnected mode
+      const tradeDoc = await createTradeFn(undefined as any);
+      w.set("USDT", newBalance);
+      log(`Wallet ${userId}:${mode} debited ${debitAmount.toFixed(4)} -> ${newBalance.toFixed(4)} (in-memory)`);
+      return tradeDoc;
+    }
 
     let session: mongoose.ClientSession | null = null;
     let trade!: T;
@@ -337,8 +342,54 @@ export async function setWalletBalance(userId: string, mode: string, asset: stri
   }
 }
 
+/**
+ * Ensures a PAPER wallet has genuine simulated initial capital for paper execution.
+ * LIVE mode wallets are strictly untouched (returns 0).
+ * Audits and persists every simulated deposit via WalletTransaction.
+ */
+export async function ensurePaperWalletFunded(
+  userId: string,
+  mode: "PAPER" | "LIVE",
+  accountType: string = "FUTURES",
+  defaultStartingBalance?: number
+): Promise<number> {
+  if (mode !== "PAPER") return 0; // Strictly PAPER mode only — LIVE capital untouched!
+  const isIndian = accountType.startsWith("INDIAN_");
+  const currency = isIndian ? "INR" : "USDT";
+  const defaultBalance = defaultStartingBalance ?? (isIndian ? 500000 : 10000);
+  const wallet = getWallet(userId.toString(), mode, accountType);
+  const current = wallet.get(currency) ?? 0;
+  if (current <= 0) {
+    await setWalletBalance(userId, mode, currency, defaultBalance, accountType);
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await WalletTransaction.create({
+          userId: toValidObjectId(userId),
+          type: "DEPOSIT",
+          method: "SYSTEM",
+          amount: defaultBalance,
+          currency,
+          status: "COMPLETED",
+          txnRef: `SYS_INIT_${Date.now()}`,
+          note: `Auditable Paper Simulation Initial Deposit: +${defaultBalance} ${currency}`,
+          accountType,
+        });
+        log(`[paper-state] Seeded PAPER wallet for ${userId}:${mode}:${accountType} with +${defaultBalance} ${currency} (audited)`);
+      } catch (err: any) {
+        log(`[paper-state] Failed to persist initial funding transaction for ${userId}: ${err.message}`);
+      }
+    }
+    return defaultBalance;
+  }
+  return current;
+}
+
 /* ── Hydration from Database on boot ─────────────────── */
 export async function hydrate(): Promise<void> {
+  if (mongoose.connection.readyState !== 1) {
+    log(`[HYDRATE] Skipped: MongoDB not connected (readyState=${mongoose.connection.readyState})`);
+    return;
+  }
   log(`hydrating memory positions & wallets from MongoDB...`);
   
   // 1. Restore Wallets
@@ -363,8 +414,10 @@ export async function hydrate(): Promise<void> {
 
   // 2. Restore Open Positions (LIVE and PAPER)
   // ☢️ GHOST VAPORIZER: Clear out any corrupted or ghost money trades
-  const openTrades = await Trade.find({ status: "OPEN" }).lean();
+  const openTrades = await Trade.find({ status: "OPEN" }).sort({ openedAt: -1 }).lean();
   let posCount = 0;
+  const seenKeys = new Set<string>();
+
   for (const t of openTrades) {
     if (!t.userId) continue;
     if (!t.leverage || t.leverage < 1 || (t.quantity * t.entryPrice) > 100000) {
@@ -372,7 +425,18 @@ export async function hydrate(): Promise<void> {
       await Trade.deleteOne({ _id: t._id });
       continue;
     }
-    
+
+    const key = posKey(t.userId.toString(), t.symbol, t.mode, t.accountType || "FUTURES");
+    if (seenKeys.has(key)) {
+      log(`[HYDRATE] Detected duplicate open trade for ${key}, closing duplicate tradeId=${t._id}`);
+      await Trade.updateOne(
+        { _id: t._id },
+        { $set: { status: "CLOSED", closedAt: new Date(), exitReason: "DUPLICATE_OPEN_TRADE_CLEANUP", pnl: 0 } }
+      );
+      continue;
+    }
+    seenKeys.add(key);
+
     setPosition(t.userId.toString(), t.symbol, t.mode, {
       userId: t.userId.toString(),
       symbol: t.symbol,

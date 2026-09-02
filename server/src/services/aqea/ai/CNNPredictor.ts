@@ -20,7 +20,7 @@ export class CNNPredictor extends BasePredictor {
   public async isHealthy(): Promise<boolean> {
     try {
       const url = await buildEndpointUrl(AI_ENDPOINTS.MODEL_HEALTH);
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(800) });
       if (!res.ok) {
         this.checkpointLoaded = false;
         return false;
@@ -117,7 +117,8 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(1000)
       });
 
       if (!res.ok) {

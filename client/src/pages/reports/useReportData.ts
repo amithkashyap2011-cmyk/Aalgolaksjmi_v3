@@ -58,45 +58,35 @@ export function useReportData(): ReportData {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     const safe = <T,>(p: Promise<T>): Promise<T | null> => p.then((r) => r).catch(() => null);
+    const arr = (v: any, ...keys: string[]): any[] => {
+      if (Array.isArray(v)) return v;
+      for (const k of keys) if (Array.isArray(v?.[k])) return v[k];
+      return [];
+    };
 
-    Promise.allSettled([
-      safe(api.getTradeHistory(mode, 200, 0)),
-      safe(api.getWalletTransactions(200, 0)),
-      safe(api.getWalletBalance(mode)),
-      safe(api.getAlerts()),
-      safe(api.getModels()),
-      safe(api.getCurrentWeights()),
-      safe(api.getCurrentAnimalWeights()),
-      safe(api.getRiskOrchestration()),
-      safe(api.getSpectralRegime()),
-      safe(api.getAITimeline(undefined, 100)),
-      safe(api.getSentimentMatrix()),
-    ]).then((res) => {
-      if (!alive) return;
-      const val = (i: number): any => (res[i].status === "fulfilled" ? (res[i] as PromiseFulfilledResult<any>).value : null);
-      const arr = (v: any, ...keys: string[]): any[] => {
-        if (Array.isArray(v)) return v;
-        for (const k of keys) if (Array.isArray(v?.[k])) return v[k];
-        return [];
-      };
-      setTrades(arr(val(0), "trades", "history", "data"));
-      setWalletTx(arr(val(1), "transactions", "data"));
-      setWallet(val(2));
-      setAlerts(arr(val(3), "alerts", "data"));
-      setModels(arr(val(4), "models"));
-      setStrategyWeights(val(5)?.weights ?? val(5) ?? null);
-      setAnimalWeights(val(6)?.weights ?? val(6) ?? null);
-      setRisk(val(7));
-      setSpectral(val(8));
-      setAiTimeline(arr(val(9), "timeline", "events", "data"));
-      setSentiment(val(10));
-      setRefreshedAt(new Date());
-      setLoading(false);
-    });
+    // Progressive individual resolvers for ultra-fast UI rendering
+    safe(api.getTradeHistory(mode, 200, 0)).then(res => { if (alive && res) setTrades(arr(res, "trades", "history", "data")); });
+    safe(api.getWalletTransactions(200, 0)).then(res => { if (alive && res) setWalletTx(arr(res, "transactions", "data")); });
+    safe(api.getWalletBalance(mode)).then(res => { if (alive && res) setWallet(res); });
+    safe(api.getAlerts()).then(res => { if (alive && res) setAlerts(arr(res, "alerts", "data")); });
+    safe(api.getModels()).then(res => { if (alive && res) setModels(arr(res, "models")); });
+    safe(api.getCurrentWeights()).then(res => { if (alive && res) setStrategyWeights((res as any)?.weights ?? res ?? null); });
+    safe(api.getCurrentAnimalWeights()).then(res => { if (alive && res) setAnimalWeights((res as any)?.weights ?? res ?? null); });
+    safe(api.getRiskOrchestration()).then(res => { if (alive && res) setRisk(res); });
+    safe(api.getSpectralRegime()).then(res => { if (alive && res) setSpectral(res); });
+    safe(api.getAITimeline(undefined, 100)).then(res => { if (alive && res) setAiTimeline(arr(res, "timeline", "events", "data")); });
+    safe(api.getSentimentMatrix()).then(res => { if (alive && res) setSentiment(res); });
 
-    return () => { alive = false; };
+    // Mark ready swiftly
+    const timer = setTimeout(() => {
+      if (alive) {
+        setRefreshedAt(new Date());
+        setLoading(false);
+      }
+    }, 150);
+
+    return () => { alive = false; clearTimeout(timer); };
   }, [mode, tick]);
 
   const positions = (storePositions && storePositions.length ? storePositions : appPositions) || [];

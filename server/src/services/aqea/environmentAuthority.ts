@@ -7,7 +7,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export class EnvironmentAuthority {
   /**
@@ -32,7 +32,7 @@ export class EnvironmentAuthority {
    * Project Anchor Authority
    */
   public static getProjectRoot(): string {
-    return path.resolve(__dirname, "..", "..", "..");
+    return path.resolve(moduleDir, "..", "..", "..");
   }
 
   /**

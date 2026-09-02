@@ -177,7 +177,20 @@ describe("AQEA Phase 5C: PPO Execution Authority", () => {
 
     if (PredictorRegistry) {
       if (PredictorRegistry.getPredictor) jest.spyOn(PredictorRegistry, "getPredictor").mockImplementation((name: string) => name === "PPO" ? mockPPOPredictor as any : null);
-      if (PredictorRegistry.getAllPredictions) jest.spyOn(PredictorRegistry, "getAllPredictions").mockImplementation(() => Promise.resolve([mockPrediction]));
+      if (PredictorRegistry.getAllPredictions) {
+        jest.spyOn(PredictorRegistry, "getAllPredictions").mockImplementation(async () => {
+          const ppoRes = await mockPPOPredictor.predict();
+          return [
+            mockPrediction,
+            {
+              predictor: "PPO_EXEC_V1",
+              direction: ppoRes.direction,
+              confidence: ppoRes.confidence,
+              meta: ppoRes.meta
+            }
+          ];
+        });
+      }
       if (PredictorRegistry.getAuthorizedPredictions) jest.spyOn(PredictorRegistry, "getAuthorizedPredictions").mockImplementation(() => Promise.resolve([mockPrediction]));
     }
 
@@ -187,6 +200,7 @@ describe("AQEA Phase 5C: PPO Execution Authority", () => {
     
     mockGetWallet.mockReturnValue(new Map([["USDT", 10000]]));
     mockValidateTrade.mockResolvedValue({ allowed: true, positionSize: 100, riskScore: 90 });
+    (AQEA_CONFIG as any).PPO_EXECUTION_AUTHORITY = true;
     
     mockPPOPredictor.predict.mockResolvedValue({
       direction: "HOLD",

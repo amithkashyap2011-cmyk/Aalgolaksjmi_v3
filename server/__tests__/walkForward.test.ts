@@ -7,7 +7,7 @@ import { ReportExporter } from "../src/services/analytics/reportExporter.js";
 describe("Part B: Institutional Walk-Forward & Partitioning Engine", () => {
   beforeAll(async () => {
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
   });
 
   afterAll(async () => {

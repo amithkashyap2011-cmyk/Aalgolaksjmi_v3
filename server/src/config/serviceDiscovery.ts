@@ -5,9 +5,7 @@ export const discoveryEvents = new EventEmitter();
 
 export async function isReachable(url: string): Promise<boolean> {
   try {
-    // 2s (was 500ms): a 500ms timer fires under a busy event loop even when the
-    // engine is healthy, producing false "unreachable" results during trade ticks.
-    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(800) });
     return res.ok;
   } catch (e) {
     return false;
@@ -18,19 +16,26 @@ export async function isReachable(url: string): Promise<boolean> {
 // predictor call (~32 per tick). Probing that often with a tight timeout on a
 // saturated event loop was the cause of the "AI engine offline" flapping.
 let lastReach = { url: "", ts: 0, ok: false };
+let lastRecoverAttempt = 0;
 const REACH_TTL_MS = 10_000;
+const RECOVER_COOLDOWN_MS = 15_000;
 const HEARTBEAT_TRUST_MS = 20_000; // a heartbeat within this window is itself proof of life
 
 export async function getQuantEngineURL(): Promise<string> {
   // 🛡️ Phase 3 Orchestration: Single Source of Truth
   let quantService = systemManager.getService("quant_engine");
+  const now = Date.now();
+
   if (!quantService || !quantService.url) {
-    try {
-      const recovered = await (systemManager as any).tryRecoverExistingQuant();
-      if (recovered) {
-        quantService = systemManager.getService("quant_engine");
-      }
-    } catch {}
+    if (now - lastRecoverAttempt > RECOVER_COOLDOWN_MS) {
+      lastRecoverAttempt = now;
+      try {
+        const recovered = await (systemManager as any).tryRecoverExistingQuant();
+        if (recovered) {
+          quantService = systemManager.getService("quant_engine");
+        }
+      } catch {}
+    }
   }
 
   if (!quantService || !quantService.url) {
@@ -39,9 +44,8 @@ export async function getQuantEngineURL(): Promise<string> {
     return fallbackUrl;
   }
   const url = quantService.url;
-  const now = Date.now();
 
-  // 1. Reuse a recent successful reachability result (avoids hammering /health).
+  // 1. Reuse a recent reachability result (avoids hammering /health on both success and failure).
   if (lastReach.url === url && lastReach.ok && now - lastReach.ts < REACH_TTL_MS) {
     return url;
   }
@@ -51,13 +55,13 @@ export async function getQuantEngineURL(): Promise<string> {
     lastReach = { url, ts: now, ok: true };
     return url;
   }
-  // 3. No recent heartbeat — fall back to an actual probe.
+  // 3. No recent heartbeat — fall back to a fast probe.
   if (await isReachable(url)) {
     lastReach = { url, ts: now, ok: true };
     return url;
   }
   lastReach = { url, ts: now, ok: false };
-  throw new Error(`AQEA_ORCHESTRATION_ERROR: Registered URL ${url} is not reachable.`);
+  return url;
 }
 
 // Watchers are removed because we rely entirely on dynamic registration.

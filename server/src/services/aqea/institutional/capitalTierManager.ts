@@ -29,15 +29,16 @@ export class CapitalTierManager {
     let riskPerTrade = 0.005; // 0.50%
     
     // Performance Gating for Scaling
-    const isPerformanceStable = await this.verifyPerformanceHurdles(userId, mode);
-
-    if (isPerformanceStable) {
-      if (equity >= 50000) {
-        tier = 3;
-        riskPerTrade = 0.01; // 1.00%
-      } else if (equity >= 10000) {
-        tier = 2;
-        riskPerTrade = 0.0075; // 0.75%
+    if (equity >= 10000) {
+      const isPerformanceStable = await this.verifyPerformanceHurdles(userId, mode);
+      if (isPerformanceStable) {
+        if (equity >= 50000) {
+          tier = 3;
+          riskPerTrade = 0.01; // 1.00%
+        } else {
+          tier = 2;
+          riskPerTrade = 0.0075; // 0.75%
+        }
       }
     }
 
@@ -54,11 +55,12 @@ export class CapitalTierManager {
    * Requirements: PF > 1.80, Sharpe > 1.70, DD < 5%
    */
   private static async verifyPerformanceHurdles(userId: string, mode: string): Promise<boolean> {
+    if (mongoose.connection.readyState !== 1) return false;
     const trades = await Trade.find({
       userId: toValidObjectId(userId),
       mode,
       status: "CLOSED"
-    }).sort({ closedAt: -1 }).limit(500).lean();
+    }).sort({ closedAt: -1 }).limit(500).lean().catch(() => []);
 
     if (trades.length < 100) return false; // Insufficient data for scaling
 

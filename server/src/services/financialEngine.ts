@@ -35,27 +35,8 @@ export const SENTINEL_REASONS = new Set([
   "SENTINEL_LIQUIDATION",
 ]);
 
-// ─── Account type domain classification ─────────────────────────────────────
-export const INDIAN_ACCOUNT_TYPES = new Set([
-  "INDIAN_NSE",
-  "INDIAN_BSE",
-  "INDIAN_NIFTY50",
-  "INDIAN_FNO",
-  "INDIAN_EQUITY",
-]);
-
-import { SUPPORTED_INDIAN_SYMBOLS } from "../config/indianSymbols.js";
-
-export function isIndianTrade(t: any): boolean {
-  if (!t) return false;
-  if (t.accountType && INDIAN_ACCOUNT_TYPES.has(t.accountType)) return true;
-  if (t.symbol && SUPPORTED_INDIAN_SYMBOLS.includes(t.symbol)) return true;
-  return false;
-}
-
-export function isCryptoTrade(t: any): boolean {
-  return !INDIAN_ACCOUNT_TYPES.has(t.accountType);
-}
+import { INDIAN_ACCOUNT_TYPES, isIndianTrade, isCryptoTrade } from "./indianMarket/indianPricing.js";
+export { INDIAN_ACCOUNT_TYPES, isIndianTrade, isCryptoTrade };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

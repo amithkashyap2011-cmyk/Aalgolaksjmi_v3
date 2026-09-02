@@ -18,6 +18,19 @@ interface CacheEntry<T> {
 export class AnalyticsCache {
   private static cache = new Map<string, CacheEntry<any>>();
   private static DEFAULT_TTL = 300_000; // 5 minutes
+  private static MAX_ENTRIES = 500;
+
+  /**
+   * Periodic eviction of expired entries to prevent memory accumulation over days.
+   */
+  private static cleanupExpired(): void {
+    const now = Date.now();
+    for (const [k, v] of this.cache.entries()) {
+      if (v.expiry <= now) {
+        this.cache.delete(k);
+      }
+    }
+  }
 
   /**
    * Retrieves cached performance metrics or fetches and caches them.
@@ -35,6 +48,14 @@ export class AnalyticsCache {
     const metrics = await (PerformanceMonitorService as any).calculateRollingMetrics(userId, symbol);
     PlatformTelemetry.recordLatency("dbLatencyMs", Date.now() - start);
     
+    if (this.cache.size >= this.MAX_ENTRIES) {
+      this.cleanupExpired();
+      if (this.cache.size >= this.MAX_ENTRIES) {
+        const firstKey = this.cache.keys().next().value;
+        if (firstKey) this.cache.delete(firstKey);
+      }
+    }
+
     this.cache.set(key, {
       data: metrics,
       expiry: Date.now() + this.DEFAULT_TTL
@@ -62,6 +83,9 @@ export class AnalyticsCache {
    */
   public static update(userId: string, symbol: string, data: any): void {
     const key = `perf:${userId}:${symbol}`;
+    if (this.cache.size >= this.MAX_ENTRIES) {
+      this.cleanupExpired();
+    }
     this.cache.set(key, {
       data,
       expiry: Date.now() + this.DEFAULT_TTL

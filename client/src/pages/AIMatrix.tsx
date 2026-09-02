@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { useDashboardStore } from '../store/useDashboardStore';
-import { Zap, Brain, RefreshCw, Edit2, Share2, X, Check, RotateCcw, GraduationCap, Clock, AlertTriangle, TrendingUp } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Zap, Brain, RefreshCw, Edit2, Share2, X, Check, RotateCcw, GraduationCap, Clock, AlertTriangle, TrendingUp, Cpu } from 'lucide-react';
 import * as api from '../lib/api';
+import { useDashboardStore } from '../store/useDashboardStore';
+import AgentKernelDashboard from '../components/kernel/AgentKernelDashboard';
 
 const BG = "var(--ds-bg)", CARD = "var(--ds-surface)", CARD2 = "var(--ds-surface-2)", BORD = "var(--ds-border)";
 const G = "var(--ds-buy)", R = "var(--ds-sell)", B = "var(--ds-primary)", A = "var(--ds-warning)", P = "var(--ds-accent)";
@@ -445,7 +446,8 @@ function ContinuousLearningPanel({ training, selectedMarketDomain }: { training:
 /* ── Main page ── */
 export default function AIMatrix() {
   const { status } = useDashboardStore();
-  const [selectedMarketDomain, setSelectedMarketDomain] = useState<"ALL" | "INDIAN" | "CRYPTO">("INDIAN");
+  const [selectedMarketDomain, setSelectedMarketDomain] = useState<"ALL" | "INDIAN" | "CRYPTO">("ALL");
+  const [activeMainTab, setActiveMainTab] = useState<"KERNEL" | "MODELS">("KERNEL");
   const [models, setModels]     = useState<any[]>([]);
   const [weights, setWeights]   = useState<Record<string, number>>({});
   const [ensemble, setEnsemble] = useState<any>(null);
@@ -623,6 +625,61 @@ export default function AIMatrix() {
         </div>
       </div>
 
+      {/* ─── Top Master Navigation Tabs (Kernel vs Models) ─── */}
+      <div style={{ display: "flex", gap: 10, background: CARD, border: `1px solid ${BORD}`, borderRadius: 12, padding: "6px" }}>
+        <button
+          onClick={() => setActiveMainTab("KERNEL")}
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            padding: "10px",
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 800,
+            cursor: "pointer",
+            border: "none",
+            background: activeMainTab === "KERNEL" ? "linear-gradient(135deg, #387ed1, #1d4ed8)" : "transparent",
+            color: activeMainTab === "KERNEL" ? "#fff" : "var(--ds-text-faint)",
+            boxShadow: activeMainTab === "KERNEL" ? "0 4px 12px rgba(56,126,209,0.3)" : "none",
+            transition: "all 0.15s ease",
+          }}
+        >
+          <Cpu size={16} />
+          <span>AQEA AGENT KERNEL (CENTRAL ORCHESTRATOR)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveMainTab("MODELS")}
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            padding: "10px",
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 800,
+            cursor: "pointer",
+            border: "none",
+            background: activeMainTab === "MODELS" ? "linear-gradient(135deg, #a855f7, #6366f1)" : "transparent",
+            color: activeMainTab === "MODELS" ? "#fff" : "var(--ds-text-faint)",
+            boxShadow: activeMainTab === "MODELS" ? "0 4px 12px rgba(168,85,247,0.3)" : "none",
+            transition: "all 0.15s ease",
+          }}
+        >
+          <Brain size={16} />
+          <span>AI ENSEMBLE & MODEL WEIGHTS</span>
+        </button>
+      </div>
+
+      {activeMainTab === "KERNEL" ? (
+        <AgentKernelDashboard />
+      ) : (
+        <>
       {/* 🌐 Market Domain Selector Segmented Switch */}
       <div style={{ background: CARD, border: `1px solid ${BORD}`, borderRadius: 12, padding: "8px 12px", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -923,6 +980,8 @@ export default function AIMatrix() {
           ))}
         </div>
       </div>
+      </>
+      )}
 
       {/* Edit modal */}
       {editModel && (

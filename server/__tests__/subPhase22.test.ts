@@ -12,7 +12,7 @@ import { ReplayEngine } from "../src/services/execution/replayEngine.js";
 describe("Phase 22 Modular Sub-Phase Verification Suite (22.1 — 22.4)", () => {
   beforeAll(async () => {
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
   });
 
   afterAll(async () => {

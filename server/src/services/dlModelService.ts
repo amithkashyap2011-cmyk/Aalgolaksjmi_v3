@@ -22,7 +22,7 @@
 export const DL_SERVICE_URL: string = process.env.DL_SERVICE_URL ?? "";
 
 /** HTTP request timeout in milliseconds. */
-export const DL_TIMEOUT_MS: number = Number(process.env.DL_TIMEOUT_MS) || 5000;
+export const DL_TIMEOUT_MS: number = Number(process.env.DL_TIMEOUT_MS) || 1500;
 
 /* ════════════════════════════════════════════════════════
  *  Input: a sliding window of recent bar features
@@ -40,6 +40,9 @@ export interface SequenceBar {
   ema9?: number;
   ema21?: number;
   macdHist?: number;
+  atr?: number;
+  imbalance?: number;
+  cvd?: number;
 }
 
 /**
@@ -440,7 +443,7 @@ export function predictSequenceLocalxLSTM(input: SequenceInput): DLPrediction {
   };
 }
 
-export async function predictSequence(input: SequenceInput, endpointPath = "/predict"): Promise<DLPrediction> {
+export async function predictSequence(input: SequenceInput, endpointPath = "/research/predict/transformer-micro"): Promise<DLPrediction> {
   const validation = validateSequenceInput(input);
   if (!validation.valid) {
     console.warn(`[dl] invalid input: ${validation.error} — local transformer fallback`);
@@ -469,10 +472,14 @@ export async function predictSequence(input: SequenceInput, endpointPath = "/pre
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DL_TIMEOUT_MS);
+    const payload = endpointPath.includes("transformer-micro")
+      ? { data: input.window.map(b => [b.open, b.high, b.low, b.close, b.volume, b.rsi ?? 50, b.macdHist ?? 0, b.atr ?? 0, b.imbalance ?? 0, b.cvd ?? 0]) }
+      : input;
+
     const res = await fetch(serviceUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     clearTimeout(timer);

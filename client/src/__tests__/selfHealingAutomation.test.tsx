@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import React from "react";
 import DashboardPage from "../pages/DashboardPage";
@@ -102,15 +102,19 @@ describe("Self-Healing Test Automation & Visual Verification", { timeout: 15000 
     expect(dashboardDiv).toBeDefined();
   });
 
-  test("Visual Testing: Indian Market page theme rendering & buttons", () => {
-    const { container } = render(
-      <MemoryRouter initialEntries={["/indian-market"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <IndianMarketPage />
-      </MemoryRouter>
-    );
+  test("Visual Testing: Indian Market page theme rendering & buttons", async () => {
+    let container: HTMLElement;
+    await act(async () => {
+      const res = render(
+        <MemoryRouter initialEntries={["/indian-market"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <IndianMarketPage />
+        </MemoryRouter>
+      );
+      container = res.container;
+    });
 
     // Self-heal button finding
-    const scanBtn = SelfHealingLocator.findElement(container, [
+    const scanBtn = SelfHealingLocator.findElement(container!, [
       { type: "id", value: "broken-scan-btn-id" },
       { type: "text", value: "Scan" },
       { type: "class", value: "btn" }

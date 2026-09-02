@@ -46,7 +46,7 @@ router.get("/health", async (_req, res) => {
       const url = `${baseUrl}${path}`;
       try {
         console.log(`[PROXY] Attempting fetch: ${url}`);
-        const engineRes = await fetch(url, { signal: AbortSignal.timeout(2000) });
+        const engineRes = await fetch(url, { signal: AbortSignal.timeout(8000) });
         if (engineRes.ok) {
           const data = await engineRes.json();
           return res.json(data);
@@ -264,10 +264,12 @@ router.get("/matrix-stats", async (req, res) => {
   }
 });
 
-/* ── List all models ── */
+/* ── List all models with in-memory caching ── */
+let modelsCache: { data: any; expiresAt: number; userId: string } | null = null;
+
 router.get("/", async (req: AuthRequest, res) => {
   try {
-    let userId = req.userId;
+    let userId = req.userId || "";
     if (!userId && req.headers.authorization?.startsWith("Bearer ")) {
       try {
         const payload = jwt.verify(
@@ -276,6 +278,10 @@ router.get("/", async (req: AuthRequest, res) => {
         ) as { sub: string };
         userId = payload.sub;
       } catch {}
+    }
+
+    if (modelsCache && modelsCache.expiresAt > Date.now() && modelsCache.userId === userId) {
+      return res.json(modelsCache.data);
     }
 
     // Copy before overlaying — getAllModels() hands back registry-internal objects
@@ -331,7 +337,9 @@ router.get("/", async (req: AuthRequest, res) => {
     );
 
     const weights = registry.getEnsembleWeights();
-    res.json({ models, normalizedWeights: weights });
+    const result = { models, normalizedWeights: weights };
+    modelsCache = { data: result, expiresAt: Date.now() + 5000, userId };
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

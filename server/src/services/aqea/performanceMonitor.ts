@@ -101,28 +101,44 @@ export class PerformanceMonitorService {
     }
   }
 
+  private static metricsCache = new Map<string, { metrics: any; timestamp: number }>();
+
   /**
    * Calculates rolling statistical metrics for the Shadow Mode validation.
    */
   public static async calculateRollingMetrics(userId: string, symbol: string) {
+    const defaultMetrics = { profitFactor: 0, sharpe: 0, sortino: 0, drawdown: 0, winRate: 0, expectancy: 0, agreementRate: 0 };
+    const cacheKey = `${userId}:${symbol}`;
+    const cached = this.metricsCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < 60_000) {
+      return cached.metrics;
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+      return defaultMetrics;
+    }
     const objId = toValidObjectId(userId);
     
-    // 1. Agreement Rate
-    const totalComparisons = await AqeaPerformance.countDocuments({ userId: objId, symbol });
-    const agreements = await AqeaPerformance.countDocuments({ userId: objId, symbol, agreement: true });
-    const agreementRate = totalComparisons > 0 ? (agreements / totalComparisons) : 0;
+    try {
+      // 1. Agreement Rate
+      const [totalComparisons, agreements, shadowTrades] = await Promise.all([
+        AqeaPerformance.countDocuments({ userId: objId, symbol }).maxTimeMS(1000).catch(() => 0),
+        AqeaPerformance.countDocuments({ userId: objId, symbol, agreement: true }).maxTimeMS(1000).catch(() => 0),
+        AqeaTradeAnalytics.find({ 
+          userId: objId, 
+          symbol, 
+          decision: "EXIT", 
+          exitReason: { $ne: "" } 
+        }).limit(100).maxTimeMS(1000).lean().catch(() => [])
+      ]);
 
-    // 2. AQEA Shadow Performance (from analytics)
-    const shadowTrades = await AqeaTradeAnalytics.find({ 
-      userId: objId, 
-      symbol, 
-      decision: "EXIT", 
-      exitReason: { $ne: "" } 
-    }).limit(100).lean();
+      const agreementRate = totalComparisons > 0 ? (agreements / totalComparisons) : 0;
 
-    if (shadowTrades.length < 5) {
-      return { profitFactor: 0, sharpe: 0, sortino: 0, drawdown: 0, winRate: 0, expectancy: 0, agreementRate };
-    }
+      if (!shadowTrades || shadowTrades.length < 5) {
+        const res = { profitFactor: 0, sharpe: 0, sortino: 0, drawdown: 0, winRate: 0, expectancy: 0, agreementRate };
+        this.metricsCache.set(cacheKey, { metrics: res, timestamp: Date.now() });
+        return res;
+      }
 
     const pnls = shadowTrades.map(t => (t as any).outcomeFeatures?.profit || 0);
     const wins = pnls.filter(p => p > 0);
@@ -139,7 +155,7 @@ export class PerformanceMonitorService {
     const stdDev = Math.sqrt(variance);
     const sharpe = stdDev > 0 ? (avgPnl / stdDev) * Math.sqrt(252) : 0; // Annualized proxy
 
-    return {
+    const result = {
       profitFactor: parseFloat(profitFactor.toFixed(2)),
       sharpe: parseFloat(sharpe.toFixed(2)),
       sortino: 0, // Placeholder
@@ -148,5 +164,11 @@ export class PerformanceMonitorService {
       expectancy: parseFloat(avgPnl.toFixed(4)),
       agreementRate: parseFloat((agreementRate * 100).toFixed(2))
     };
+
+    this.metricsCache.set(cacheKey, { metrics: result, timestamp: Date.now() });
+    return result;
+  } catch (err) {
+    return defaultMetrics;
   }
+}
 }

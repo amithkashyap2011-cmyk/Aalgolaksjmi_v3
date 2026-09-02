@@ -1,11 +1,11 @@
 {
-  "last_promoted_f1": 0.3420315909719574,
-  "last_promoted_at": "2026-08-05T08:55:17.004635+00:00",
-  "last_attempt_at": "2026-08-05T23:29:15.247754+00:00",
-  "last_attempt_f1": 0.32712737886808213,
-  "last_attempt_accuracy": 0.3302896725440806,
+  "last_promoted_f1": 0.404426090179721,
+  "last_promoted_at": "2026-09-02T04:28:57.438214+00:00",
+  "last_attempt_at": "2026-09-02T04:28:57.438348+00:00",
+  "last_attempt_f1": 0.404426090179721,
+  "last_attempt_accuracy": 0.4077455919395466,
   "rows_trained": 37768,
   "rows_validated": 9528,
-  "last_attempt_promoted": false,
+  "last_attempt_promoted": true,
   "input_version": 2
 }

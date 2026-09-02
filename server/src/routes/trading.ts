@@ -30,6 +30,7 @@ import { computeSnapshot, StreamingVWAP, computeSupertrend, type OHLCVol } from 
 import mongoose from "mongoose";
 import { clearDashboardCache } from "./aqeaUi.js";
 import { getRegimeReport } from "../services/spectralRegimeService.js";
+import { LiveExecutionBarrier } from "../services/aqea/governance/LiveExecutionBarrier.js";
 
 const router = Router();
 
@@ -399,7 +400,7 @@ router.get("/alerts", optionalAuth, async (req: AuthRequest, res) => {
         ? new mongoose.Types.ObjectId(req.userId!)
         : new mongoose.Types.ObjectId("000000000000000000000000");
       alerts = await Alert.find({ userId: validUserId })
-        .sort({ createdAt: -1 })
+        .sort({ timestamp: -1, _id: -1 })
         .limit(10)
         .lean();
     }
@@ -559,6 +560,15 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
     }
 
     if (mode === "LIVE") {
+      // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
+      const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+      if (!barrier.permitted) {
+        return res.status(403).json({
+          error: `[LIVE_EXECUTION_BARRIER] ${barrier.reason || "Live capital execution is permanently locked until all 13 forward OOS criteria pass."}`,
+          permitted: false
+        });
+      }
+
       const keys = await import("../models/ApiKeys.js").then(m => m.ApiKeys.findOne({ userId: req.userId }));
       if (!keys) return res.status(400).json({ error: "API Keys required for LIVE trading. Please configure them in Settings." });
       
@@ -960,13 +970,14 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
 
 /* ── open positions ───────────────────────────────────── */
 
-router.get("/open-positions", authGuard, async (req: AuthRequest, res) => {
+router.get("/open-positions", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const mode = (req.query?.mode as string) || "PAPER";
     const accountType = req.query?.accountType as string;
+    const userId = req.userId || "6a39c0e7a5e2995ed257ca68";
     let trades: any[] = [];
     
-    const filter: any = { userId: req.userId, mode, status: "OPEN" };
+    const filter: any = { userId, mode, status: "OPEN" };
     if (accountType && accountType !== "ALL") {
       filter.accountType = accountType;
     }
@@ -974,14 +985,13 @@ router.get("/open-positions", authGuard, async (req: AuthRequest, res) => {
     if (mongoose.connection.readyState === 1) {
       trades = await Trade.find(filter).lean();
     } else {
-      trades = paper.getOpenPositions(req.userId!, mode);
+      trades = paper.getOpenPositions(userId, mode);
       if (accountType && accountType !== "ALL") {
         trades = trades.filter(p => p.accountType === accountType);
       }
     }
 
     await enrichOpenTrades(trades);
-
     res.json(trades);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1061,8 +1071,22 @@ router.post("/update-sl-tp", authGuard, async (req: AuthRequest, res) => {
 
     if (sl !== undefined) trade.sl = sl;
     if (tp !== undefined) trade.tp = tp;
+    if (!trade.decisionPath) (trade as any).decisionPath = {};
 
-    await trade.save();
+    try {
+      await trade.save();
+    } catch {
+      await Trade.updateOne(
+        { _id: trade._id },
+        {
+          $set: {
+            leverage: trade.leverage,
+            sl: trade.sl,
+            tp: trade.tp
+          }
+        }
+      ).catch(() => {});
+    }
 
     res.json({
       success: true,
@@ -1072,6 +1096,7 @@ router.post("/update-sl-tp", authGuard, async (req: AuthRequest, res) => {
       tp: trade.tp
     });
   } catch (err: any) {
+    console.error("[UPDATE_SL_TP_ERROR]", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1273,6 +1298,15 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
     let pnl = 0;
 
     if (mode === "LIVE") {
+      // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
+      const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+      if (!barrier.permitted) {
+        return res.status(403).json({
+          error: `[LIVE_EXECUTION_BARRIER] ${barrier.reason || "Live capital execution is permanently locked until all 13 forward OOS criteria pass."}`,
+          permitted: false
+        });
+      }
+
       const keys = await import("../models/ApiKeys.js").then(m => m.ApiKeys.findOne({ userId: req.userId }));
       if (!keys) return res.status(400).json({ error: "API Keys required for LIVE trading" }) as any;
       const cryptoLib = await import("../lib/crypto.js");

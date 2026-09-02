@@ -202,7 +202,12 @@ class CNNPredictor:
         return {
             "direction": directions[idx],
             "probability": float(probs[idx]),
-            "confidence": confidence
+            "confidence": confidence,
+            "probs": {
+                "LONG": round(float(probs[0]), 4),
+                "SHORT": round(float(probs[1]), 4),
+                "HOLD": round(float(probs[2]), 4)
+            }
         }
 
     def debug_predict(self, ohlcv_latest, indicators_latest):

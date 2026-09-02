@@ -4,6 +4,20 @@ import sys
 import os
 from pathlib import Path
 
+# Limit thread count to prevent 1000%+ CPU starvation on multi-core systems
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
+os.environ["NUMEXPR_NUM_THREADS"] = "2"
+
+try:
+    import torch
+    torch.set_num_threads(2)
+    torch.set_num_interop_threads(2)
+except Exception:
+    pass
+
 # Without a root-logger config, every INFO log from module loggers
 # (TrainingScheduler, TrainCNN, TrainPPO, DataPipeline...) is silently
 # dropped — the continuous-learning loop looked dead in PM2 logs even

@@ -1,5 +1,5 @@
 
-process.env.MONGO_URI = "mongodb://localhost:27017/test";
+process.env.MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/aalgolakshmi_test";
 process.env.API_GATEWAY_URL = "http://localhost:8080";
 process.env.MAMBA_SERVICE_URL = "http://localhost:5555";
 process.env.PATCHTST_SERVICE_URL = "http://localhost:5556";

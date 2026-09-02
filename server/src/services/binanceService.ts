@@ -31,7 +31,7 @@ const FUTURES_BASE = process.env.BINANCE_FUTURES_BASE_URL_OVERRIDE || "https://f
 // Declared here (not near its first use further down) because `syncTime()`
 // below is invoked synchronously at module load — a declaration positioned
 // after that call site would be in its temporal dead zone at call time.
-const REST_TIMEOUT_MS = 10_000;
+const REST_TIMEOUT_MS = 2_500;
 
 /* Cache for synchronous lookups */
 const priceCache = new Map<string, number>();
@@ -416,6 +416,14 @@ export async function placeFuturesOrder(
     reduceOnly?: boolean;
   },
 ): Promise<any> {
+  // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
+  // Guarantees no live capital order can execute while LIVE_PROMOTION_BLOCKED === true
+  const { LiveExecutionBarrier } = await import("./aqea/governance/LiveExecutionBarrier.js");
+  const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+  if (!barrier.permitted) {
+    throw new Error(`[LIVE_EXECUTION_BARRIER] Binance Futures order rejected: ${barrier.reason || "Live trading is blocked"}`);
+  }
+
   const binanceSymbol = toBinanceSymbol(params.symbol, true);
   let finalQuantity = params.quantity;
   if (binanceSymbol === "1000SHIBUSDT") {
@@ -464,6 +472,235 @@ export interface Kline {
   close: string;
   volume: string;
   closeTime: number;
+  // P0.1 Provenance fields — always set; isSynthetic=true means NEVER use for forward-OOS evidence
+  isSynthetic?: boolean;
+  dataProvenance?: "LIVE_REST" | "LIVE_WEBSOCKET" | "CACHED_LIVE" | "SYNTHETIC" | "UNKNOWN";
+  receivedTimestamp?: number;
+}
+
+/**
+ * Maximum age in ms for cached live klines before they are considered stale.
+ * Cached-live data beyond this threshold must be treated as STALE (not CACHED_LIVE).
+ * Using 120s to match existing cache TTL, but the provenance will be STALE if exceeded.
+ */
+export const STALE_MARKET_DATA_MS = 120_000;
+
+/**
+ * Result of getKlines that includes provenance information.
+ */
+export interface KlinesWithProvenance {
+  klines: Kline[];
+  provenance: "LIVE_REST" | "LIVE_WEBSOCKET" | "CACHED_LIVE" | "SYNTHETIC" | "UNKNOWN";
+  isSynthetic: boolean;
+  sourceTimestamp: number;    // Timestamp of the most recent candle's openTime
+  receivedTimestamp: number;  // When this data was returned
+  expiresAt: number;
+}
+
+/* ── In-Memory Kline & Funding Rate Caches ──────────────── */
+interface CachedKlines {
+  klines: Kline[];
+  lastUpdated: number;
+}
+
+const klineCache = new Map<string, CachedKlines>(); // Key: "BTCUSDT:5m"
+const klineInFlight = new Map<string, Promise<Kline[]>>();
+const fundingRateCache = new Map<string, { rate: number; timestamp: number }>();
+
+const lastAcceptedEventTimestamp = new Map<string, number>();
+
+export function updateKlineCache(symbol: string, interval: string, kline: Kline): void {
+  const key = `${symbol.toUpperCase()}:${interval}`;
+
+  // 1. Malformed OHLCV & NaN/Infinity check
+  const o = parseFloat(kline.open);
+  const h = parseFloat(kline.high);
+  const l = parseFloat(kline.low);
+  const c = parseFloat(kline.close);
+  const v = parseFloat(kline.volume);
+
+  if (
+    !Number.isFinite(o) || o <= 0 ||
+    !Number.isFinite(h) || h <= 0 ||
+    !Number.isFinite(l) || l <= 0 ||
+    !Number.isFinite(c) || c <= 0 ||
+    !Number.isFinite(v) || v < 0 ||
+    h < l || h < o || h < c || l > o || l > c ||
+    !kline.openTime || kline.openTime <= 0
+  ) {
+    console.warn(`[binance-ws] Rejected malformed/impossible OHLCV candle for ${key}: o=${kline.open} h=${kline.high} l=${kline.low} c=${kline.close}`);
+    return;
+  }
+
+  // 2. Out-of-order event check
+  const lastAccepted = lastAcceptedEventTimestamp.get(key) || 0;
+  if (kline.closeTime && kline.closeTime < lastAccepted) {
+    console.warn(`[binance-ws] Rejected out-of-order candle for ${key}: closeTime=${kline.closeTime} < lastAccepted=${lastAccepted}`);
+    return;
+  }
+  if (kline.closeTime) {
+    lastAcceptedEventTimestamp.set(key, Math.max(lastAccepted, kline.closeTime));
+  }
+
+  // 3. Mark live WS provenance
+  kline.isSynthetic = false;
+  kline.dataProvenance = "LIVE_WEBSOCKET";
+  kline.receivedTimestamp = Date.now();
+
+  let entry = klineCache.get(key);
+  if (!entry) {
+    entry = { klines: [kline], lastUpdated: Date.now() };
+    klineCache.set(key, entry);
+    return;
+  }
+  entry.lastUpdated = Date.now();
+  const arr = entry.klines;
+  if (arr.length === 0) {
+    arr.push(kline);
+    return;
+  }
+  const last = arr[arr.length - 1];
+  if (last.openTime === kline.openTime) {
+    arr[arr.length - 1] = kline;
+  } else if (kline.openTime > last.openTime) {
+    arr.push(kline);
+    if (arr.length > 500) arr.shift();
+  }
+}
+
+/**
+ * Generates synthetic baseline candles for diagnostic/non-trading purposes only.
+ *
+ * P0.1 CRITICAL RULE: All synthetic candles are tagged isSynthetic=true.
+ * These MUST NEVER enter genuine forward-OOS evidence.
+ * They MUST NEVER increment N_forward_oos, N_eff, NetEV, Brier, ECE, FDR, or ESS.
+ * Statistical quarantine is enforced by ForwardTelemetryStore.recordDecision().
+ */
+export function generateSyntheticKlines(symbol: string, count = 200): Kline[] {
+  const currentPrice = getTickerPriceSync(symbol) || (symbol.toUpperCase().includes("BTC") ? 65000 : 100);
+  const now = Date.now();
+  const klines: Kline[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const openTime = now - i * 5 * 60 * 1000;
+    const variation = (Math.sin(i / 5) * 0.002);
+    const p = currentPrice * (1 + variation);
+    klines.push({
+      openTime,
+      open: String(p * 0.999),
+      high: String(p * 1.002),
+      low: String(p * 0.998),
+      close: String(p),
+      volume: "1000",
+      closeTime: openTime + 5 * 60 * 1000 - 1,
+      // P0.1: Mandatory provenance tags on every synthetic candle
+      isSynthetic: true,
+      dataProvenance: "SYNTHETIC",
+      receivedTimestamp: now
+    });
+  }
+  return klines;
+}
+
+/**
+ * Returns getKlines result with full provenance context.
+ * Use this when the caller needs to know whether the data is genuine.
+ */
+export async function getKlinesWithProvenance(
+  symbol: string,
+  interval: string,
+  startTime?: number,
+  endTime?: number,
+  limit = 500,
+): Promise<KlinesWithProvenance> {
+  const receivedTimestamp = Date.now();
+  const key = `${symbol.toUpperCase()}:${interval}`;
+
+  // Cache-first: check if we have fresh cached data
+  if (!startTime && !endTime) {
+    const cached = klineCache.get(key);
+    const cacheAge = cached ? receivedTimestamp - cached.lastUpdated : Infinity;
+    if (cached && cached.klines.length >= Math.min(limit, 20) && cacheAge < STALE_MARKET_DATA_MS && !isRestBanned()) {
+      const sliced = cached.klines.slice(-limit).map(k => ({
+        ...k,
+        isSynthetic: k.isSynthetic === true,
+        dataProvenance: k.isSynthetic ? ("SYNTHETIC" as const) : ("CACHED_LIVE" as const),
+        receivedTimestamp: cached.lastUpdated
+      }));
+      const hasSynthetic = sliced.some(k => k.isSynthetic);
+      return {
+        klines: sliced,
+        provenance: hasSynthetic ? "SYNTHETIC" : "CACHED_LIVE",
+        isSynthetic: hasSynthetic,
+        sourceTimestamp: sliced.length > 0 ? sliced[sliced.length - 1].openTime : 0,
+        receivedTimestamp: cached.lastUpdated,
+        expiresAt: cached.lastUpdated + STALE_MARKET_DATA_MS
+      };
+    }
+  }
+
+  // If REST is banned and no valid cache, return synthetic with explicit provenance
+  if (isRestBanned()) {
+    const cached = klineCache.get(key);
+    if (cached && cached.klines.length > 0) {
+      const cacheAge = receivedTimestamp - cached.lastUpdated;
+      const provenance = cacheAge < STALE_MARKET_DATA_MS ? "CACHED_LIVE" : "UNKNOWN";
+      const sliced = cached.klines.slice(-limit).map(k => ({
+        ...k,
+        isSynthetic: provenance !== "CACHED_LIVE" || k.isSynthetic === true,
+        dataProvenance: provenance as "CACHED_LIVE" | "UNKNOWN",
+        receivedTimestamp: cached.lastUpdated
+      }));
+      return {
+        klines: sliced,
+        provenance,
+        isSynthetic: provenance !== "CACHED_LIVE",
+        sourceTimestamp: sliced.length > 0 ? sliced[sliced.length - 1].openTime : 0,
+        receivedTimestamp: cached.lastUpdated,
+        expiresAt: cached.lastUpdated + STALE_MARKET_DATA_MS
+      };
+    }
+    // No cache AND REST banned — synthetic fallback
+    const synth = generateSyntheticKlines(symbol, limit);
+    return {
+      klines: synth,
+      provenance: "SYNTHETIC",
+      isSynthetic: true,
+      sourceTimestamp: synth.length > 0 ? synth[synth.length - 1].openTime : 0,
+      receivedTimestamp,
+      expiresAt: receivedTimestamp // Expired immediately
+    };
+  }
+
+  // Live REST fetch
+  try {
+    const klines = await getKlines(symbol, interval, startTime, endTime, limit);
+    // Check if these are synthetic (they would be tagged)
+    const hasSynthetic = klines.some(k => k.isSynthetic === true);
+    const sourceTimestamp = klines.length > 0 ? klines[klines.length - 1].openTime : 0;
+    return {
+      klines: klines.map(k => ({
+        ...k,
+        isSynthetic: k.isSynthetic === true,
+        dataProvenance: k.isSynthetic ? ("SYNTHETIC" as const) : ("LIVE_REST" as const),
+        receivedTimestamp
+      })),
+      provenance: hasSynthetic ? "SYNTHETIC" : "LIVE_REST",
+      isSynthetic: hasSynthetic,
+      sourceTimestamp,
+      receivedTimestamp,
+      expiresAt: receivedTimestamp + STALE_MARKET_DATA_MS
+    };
+  } catch {
+    const synth = generateSyntheticKlines(symbol, limit);
+    return {
+      klines: synth,
+      provenance: "SYNTHETIC",
+      isSynthetic: true,
+      sourceTimestamp: synth.length > 0 ? synth[synth.length - 1].openTime : 0,
+      receivedTimestamp,
+      expiresAt: receivedTimestamp
+    };
+  }
 }
 
 export async function getKlines(
@@ -473,19 +710,117 @@ export async function getKlines(
   endTime?: number,
   limit = 500,
 ): Promise<Kline[]> {
-  const params = new URLSearchParams({ symbol, interval, limit: String(limit) });
-  if (startTime) params.set("startTime", String(startTime));
-  if (endTime) params.set("endTime", String(endTime));
-  const raw: unknown[][] = await publicGet(`/api/v3/klines?${params}`);
-  return raw.map((k) => ({
-    openTime: k[0] as number,
-    open: k[1] as string,
-    high: k[2] as string,
-    low: k[3] as string,
-    close: k[4] as string,
-    volume: k[5] as string,
-    closeTime: k[6] as number,
-  }));
+  const key = `${symbol.toUpperCase()}:${interval}`;
+
+  // 1. Cache-first lookup for real-time polling (no explicit historical timestamp bounds)
+  if (!startTime && !endTime) {
+    const cached = klineCache.get(key);
+    // If cached bars exist and are reasonably fresh (< 120s)
+    if (cached && cached.klines.length >= Math.min(limit, 20) && (Date.now() - cached.lastUpdated < 120_000 || isRestBanned())) {
+      // Sync latest candle with live WebSocket ticker price if available
+      const latestPrice = getTickerPriceSync(symbol);
+      if (latestPrice && cached.klines.length > 0) {
+        const lastBar = cached.klines[cached.klines.length - 1];
+        lastBar.close = String(latestPrice);
+        if (latestPrice > parseFloat(lastBar.high)) lastBar.high = String(latestPrice);
+        if (latestPrice < parseFloat(lastBar.low)) lastBar.low = String(latestPrice);
+      }
+      return cached.klines.slice(-limit);
+    }
+  }
+
+  // 2. Circuit breaker active fallback
+  if (isRestBanned()) {
+    const cached = klineCache.get(key);
+    if (cached && cached.klines.length > 0) {
+      const cacheAge = Date.now() - cached.lastUpdated;
+      const provenance = cacheAge < STALE_MARKET_DATA_MS ? "CACHED_LIVE" : "UNKNOWN";
+      return cached.klines.slice(-limit).map(k => ({
+        ...k,
+        isSynthetic: k.isSynthetic === true || provenance === "UNKNOWN",
+        dataProvenance: provenance as "CACHED_LIVE" | "UNKNOWN",
+        receivedTimestamp: cached.lastUpdated
+      }));
+    }
+    // No cache at all — must return synthetic, explicitly tagged
+    return generateSyntheticKlines(symbol, limit);
+  }
+
+  // 3. In-flight request deduplication
+  const inFlightKey = `${key}:${startTime || 0}:${endTime || 0}:${limit}`;
+  if (klineInFlight.has(inFlightKey)) {
+    return klineInFlight.get(inFlightKey)!;
+  }
+
+  const fetchPromise = (async () => {
+    const binanceSymbol = toBinanceSymbol(symbol, false);
+    const params = new URLSearchParams({ symbol: binanceSymbol, interval, limit: String(limit) });
+    if (startTime) params.set("startTime", String(startTime));
+    if (endTime) params.set("endTime", String(endTime));
+
+    try {
+      const raw: unknown[][] = await publicGet(`/api/v3/klines?${params}`);
+      const is1000Shib = binanceSymbol === "1000SHIBUSDT";
+      const klines: Kline[] = raw.map((k) => {
+        let open = parseFloat(k[1] as string);
+        let high = parseFloat(k[2] as string);
+        let low = parseFloat(k[3] as string);
+        let close = parseFloat(k[4] as string);
+        let volume = parseFloat(k[5] as string);
+        if (is1000Shib) {
+          open /= 1000;
+          high /= 1000;
+          low /= 1000;
+          close /= 1000;
+          volume *= 1000;
+        }
+        return {
+          openTime: k[0] as number,
+          open: String(open),
+          high: String(high),
+          low: String(low),
+          close: String(close),
+          volume: String(volume),
+          closeTime: k[6] as number,
+        };
+      });
+
+      // Tag all live REST klines with provenance
+      klines.forEach(k => {
+        k.isSynthetic = false;
+        k.dataProvenance = "LIVE_REST";
+        k.receivedTimestamp = Date.now();
+      });
+
+      if (!startTime && !endTime) {
+        klineCache.set(key, { klines, lastUpdated: Date.now() });
+      }
+      return klines;
+    } catch (err: any) {
+      // Graceful degradation on REST error: prefer stale cache over synthetic
+      const cached = klineCache.get(key);
+      if (cached && cached.klines.length > 0) {
+        // Tag stale cache klines as UNKNOWN if beyond freshness window
+        const cacheAge = Date.now() - cached.lastUpdated;
+        const provenance = cacheAge < STALE_MARKET_DATA_MS ? "CACHED_LIVE" : "UNKNOWN";
+        return cached.klines.slice(-limit).map(k => ({
+          ...k,
+          isSynthetic: k.isSynthetic === true || provenance === "UNKNOWN",
+          dataProvenance: provenance as "CACHED_LIVE" | "UNKNOWN",
+          receivedTimestamp: cached.lastUpdated
+        }));
+      }
+      // Last resort: synthetic fallback — always tagged isSynthetic=true
+      return generateSyntheticKlines(symbol, limit);
+    }
+  })();
+
+  klineInFlight.set(inFlightKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    klineInFlight.delete(inFlightKey);
+  }
 }
 
 export async function getFuturesOpenInterest(symbol: string): Promise<number> {
@@ -507,7 +842,13 @@ export async function getFuturesOpenInterest(symbol: string): Promise<number> {
 }
 
 export async function getLatestFundingRate(symbol: string): Promise<number> {
-  if (isRestBanned()) return 0.0001;
+  const upper = symbol.toUpperCase();
+  const cached = fundingRateCache.get(upper);
+  if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) {
+    return cached.rate;
+  }
+
+  if (isRestBanned()) return cached?.rate ?? 0.0001;
   const binanceSymbol = toBinanceSymbol(symbol, true);
   const params = new URLSearchParams({ symbol: binanceSymbol, limit: "1" });
   try {
@@ -515,12 +856,14 @@ export async function getLatestFundingRate(symbol: string): Promise<number> {
     if (!res.ok) {
       const errText = await res.text();
       handleRestError(res.status, errText);
-      return 0.0001;
+      return cached?.rate ?? 0.0001;
     }
     const data = await res.json() as Array<{ fundingRate: string }>;
-    return data?.[0]?.fundingRate ? parseFloat(data[0].fundingRate) : 0.0001;
+    const rate = data?.[0]?.fundingRate ? parseFloat(data[0].fundingRate) : 0.0001;
+    fundingRateCache.set(upper, { rate, timestamp: Date.now() });
+    return rate;
   } catch {
-    return 0.0001;
+    return cached?.rate ?? 0.0001;
   }
 }
 
@@ -659,6 +1002,14 @@ export async function placeOrder(
     clientOrderId?: string;
   },
 ): Promise<OrderResult> {
+  // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
+  // Guarantees no live capital order can execute while LIVE_PROMOTION_BLOCKED === true
+  const { LiveExecutionBarrier } = await import("./aqea/governance/LiveExecutionBarrier.js");
+  const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+  if (!barrier.permitted) {
+    throw new Error(`[LIVE_EXECUTION_BARRIER] Binance Spot order rejected: ${barrier.reason || "Live trading is blocked"}`);
+  }
+
   const body: Record<string, string> = {
     symbol: params.symbol,
     side: params.side,
@@ -909,6 +1260,8 @@ function getStreamsForSymbol(binanceSymbol: string): string[] {
     `${lower}@miniTicker`,
     `${lower}@depth5`,
     `${lower}@aggTrade`,
+    `${lower}@kline_5m`,
+    `${lower}@kline_1h`,
   ];
 }
 
@@ -1001,7 +1354,7 @@ function handleMessage(cs: CombinedSocket, raw: Buffer | string): void {
       }
 
       signalBus.emitSignal({
-        type: SignalType.PRICE_TICK, // Using PRICE_TICK for now, could be improved
+        type: SignalType.PRICE_TICK,
         symbol: ourSymbol,
         data: { price, qty, isBuyerMaker: data.m, isFutures },
         timestamp: data.E
@@ -1016,6 +1369,35 @@ function handleMessage(cs: CombinedSocket, raw: Buffer | string): void {
         isBuyerMaker: data.m,
         isFutures,
       });
+    }
+    // 4. Live Kline Streams (5m & 1h)
+    else if (stream.includes("@kline_")) {
+      const k = data.k;
+      if (k) {
+        const interval = k.i;
+        let open = parseFloat(k.o);
+        let high = parseFloat(k.h);
+        let low = parseFloat(k.l);
+        let close = parseFloat(k.c);
+        let volume = parseFloat(k.v);
+        if (is1000Shib) {
+          open /= 1000;
+          high /= 1000;
+          low /= 1000;
+          close /= 1000;
+          volume *= 1000;
+        }
+        const klineObj: Kline = {
+          openTime: k.t,
+          open: String(open),
+          high: String(high),
+          low: String(low),
+          close: String(close),
+          volume: String(volume),
+          closeTime: k.T
+        };
+        updateKlineCache(ourSymbol, interval, klineObj);
+      }
     }
   } catch (err: any) {
     console.error(`[binance-ws] Frame parse error on combined ${cs.isFutures ? "futures" : "spot"}:`, err.message);

@@ -19,7 +19,7 @@ export class PPOExecutionPredictor extends BasePredictor {
   public async isHealthy(): Promise<boolean> {
     try {
       const url = await buildEndpointUrl(AI_ENDPOINTS.MODEL_HEALTH);
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(800) });
       if (!res.ok) {
         this.checkpointLoaded = false;
         return false;
@@ -52,7 +52,8 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
       headers: { "Content-Type": "application/json" },
       // symbol lets the quant engine's replay buffer join this state with
       // the realized next-bar return when training PPO on real states.
-      body: JSON.stringify({ state_vector: stateVector, symbol: features.symbol })
+      body: JSON.stringify({ state_vector: stateVector, symbol: features.symbol }),
+      signal: AbortSignal.timeout(1000)
     });
 
     if (!res.ok) {

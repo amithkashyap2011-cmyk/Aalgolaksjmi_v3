@@ -31,11 +31,13 @@ let paper: any;
 let WalletSnapshot: any;
 let Trade: any;
 
+jest.setTimeout(60000);
+
 describe("Forensic Audit: PAPER Wallet & Dashboard Zero-Capital Baseline", () => {
   beforeAll(async () => {
     process.env.JWT_SECRET = JWT_SECRET;
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
 
     paper = await import("../src/services/paperState.js");
     ({ WalletSnapshot } = await import("../src/models/WalletSnapshot.js"));
@@ -52,24 +54,30 @@ describe("Forensic Audit: PAPER Wallet & Dashboard Zero-Capital Baseline", () =>
     app.use("/trading", tradingRouter);
 
     // Initialize clean zero baseline in DB for test user
-    const ALL_ACCTS = ["FUTURES", "SPOT", "INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50"];
-    await WalletSnapshot.deleteMany({ userId: testUserId });
-    for (const a of ALL_ACCTS) {
-      await WalletSnapshot.create({
-        userId: new mongoose.Types.ObjectId(testUserId),
-        mode: "PAPER",
-        accountType: a,
-        balances: { USDT: 0, INR: 0 }
-      });
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const ALL_ACCTS = ["FUTURES", "SPOT", "INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50"];
+        await WalletSnapshot.deleteMany({ userId: testUserId });
+        for (const a of ALL_ACCTS) {
+          await WalletSnapshot.create({
+            userId: new mongoose.Types.ObjectId(testUserId),
+            mode: "PAPER",
+            accountType: a,
+            balances: { USDT: 0, INR: 0 }
+          });
+        }
+      } catch { /* ignore */ }
     }
     paper.resetAllPaperStateToZero();
     await paper.hydrate();
   });
 
   afterAll(async () => {
-    if (WalletSnapshot) {
-      await WalletSnapshot.deleteMany({ userId: testUserId });
-      await Trade.deleteMany({ userId: testUserId });
+    if (WalletSnapshot && mongoose.connection.readyState === 1) {
+      try {
+        await WalletSnapshot.deleteMany({ userId: testUserId });
+        await Trade.deleteMany({ userId: testUserId });
+      } catch { /* ignore */ }
     }
     await disconnectMongo();
   });

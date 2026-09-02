@@ -1140,11 +1140,10 @@ export default function SettingsPage() {
                   <div className="fade-in" style={{ maxWidth: "720px" }}>
                      <div className="d-flex align-items-center gap-3 mb-2">
                         <Layout size={20} className="text-primary" />
-                        <h4 className="text-dark font-bold tracking-tight m-0">AI Model Control</h4>
+                        <h4 className="text-dark font-bold tracking-tight m-0">AI Model Governance & Admin Permissions</h4>
                      </div>
                      <p className="text-xs text-secondary mb-4">
-                        Enable or disable each AI model in the ensemble. Disabled models are removed from voting and
-                        their weight is redistributed. Choices persist across restarts.
+                        Admin permissions allow models to participate in autonomous governance. Permitted models are evaluated continuously by AQEA for empirical performance, regime fit, and calibration before active deployment.
                      </p>
 
                      {modelsError && (
@@ -1153,8 +1152,8 @@ export default function SettingsPage() {
 
                      {/* AQEA Voting Layers */}
                      <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-financial mb-4">
-                        <div className="text-sm font-black text-dark uppercase tracking-tight mb-1">AQEA Voting Layers</div>
-                        <p className="text-xs text-indigo-600 m-0 font-bold mb-2">ENABLE/DISABLE EACH SIGNAL LAYER THAT FEEDS THE FINAL SCORE</p>
+                        <div className="text-sm font-black text-dark uppercase tracking-tight mb-1">Autonomous Governance Permissions</div>
+                        <p className="text-xs text-indigo-600 m-0 font-bold mb-2">ALLOW/DISALLOW SIGNAL LAYERS IN AUTONOMOUS CONTROL-PLANE ENSEMBLE</p>
 
                         {/* Microstructure */}
                         <div className="d-flex justify-content-between align-items-center py-2 border-top border-indigo-100">

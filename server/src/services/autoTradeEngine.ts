@@ -45,11 +45,16 @@ import { OutcomeAttributionService } from "./aqea/outcomeAttribution.js";
 import * as tradeGovernor from "./aqea/tradeGovernor.js";
 import { PaperTradingMonitorService } from "./aqea/paperMonitor.js";
 import { UnifiedSizingEngine } from "./aqea/unifiedSizingEngine.js";
+import { LiveExecutionBarrier } from "./aqea/governance/LiveExecutionBarrier.js";
+import { SchedulerAccounting } from "./aqea/dataProvenance.js";
+import { ForwardTelemetryStore } from "./aqea/ensemble/ForwardTelemetryStore.js";
+import { AgentKernel } from "../kernel/AgentKernel.js";
 
 async function safeCreateAlert(data: { userId: any; severity: "GREEN" | "AMBER" | "RED"; symbol: string; title: string; message: string }) {
   try {
+    if (mongoose.connection.readyState !== 1) return;
     const validUserId = toValidObjectId(data.userId);
-    await Alert.create({ ...data, userId: validUserId });
+    Alert.create({ ...data, userId: validUserId }).catch(err => console.warn("[Alert] Failed to save alert:", err));
   } catch (err) {
     console.warn("[Alert] Failed to save alert:", err);
   }
@@ -88,6 +93,7 @@ const peakPrices = new Map<string, number>();
 
 /** Cooldown timers per symbol/user. */
 const cooldowns = new Map<string, number>();
+const activeProcessingKeys = new Set<string>();
 
 /* ── Public API ───────────────────────────────────────── */
 
@@ -241,57 +247,90 @@ export function stop(): void {
   }
 }
 
+let globalTickSequence = 0;
+
 /* ── Core tick — runs once per interval ───────────────── */
 
 async function tick(): Promise<void> {
   const start = Date.now();
-  console.log(`[TRACE] TICK_START count=${autoEnabledUsers.size}`);
+  const tickId = ++globalTickSequence;
+  SchedulerAccounting.recordTickScheduled();
+  SchedulerAccounting.recordTickStarted(tickId);
+  console.log(`[TRACE] TICK_START tickId=${tickId} activeUsers=${autoEnabledUsers.size}`);
 
-  // 🛡️ Weather Intelligence Engine Update (V1.0)
-  try {
-    await weatherIntelligenceEngine.update();
-    const miningStress = weatherIntelligenceEngine.getMiningStress();
-
-    // ⚠️ Miner-impact alt-data has NO real data source wired yet. Previously a block of
-    // fabricated metrics (hashRate 640.5, difficulty 83.5, reserves 1.8M, …) was fed into
-    // MinerImpactEngine to produce a weatherAlpha that could flip the regime to
-    // WEATHER_STRESS — i.e. fake numbers influencing real buy/sell decisions. Until a live
-    // miner feed exists, weatherAlpha is held neutral (0) so the decision is driven only by
-    // real market data. Re-enable by sourcing minerCtx from a real provider.
-    const weatherAlpha = 0;
-    weatherIntelligenceEngine.setWeatherAlpha(weatherAlpha);
-
-    UITelemetryService.emitWeatherIntelligence({
-      weatherStress: miningStress,
-      minerPressure: 0,
-      hashRateTrend: 0,
-      difficultyTrend: 0,
-      weatherAlpha,
-      effectiveAlpha: weatherIntelligenceEngine.getWeatherAlpha(),
-      enabled: weatherIntelligenceEngine.isEnabled(),
-      influence: weatherIntelligenceEngine.getInfluence(),
-      riskAdjustment: weatherIntelligenceEngine.getRiskAdjustment()
-    });
-
-    console.log(`[wie-v8] Weather Alpha held neutral (no live miner feed). Mining Stress: ${miningStress.toFixed(2)}`);
-  } catch (e) {
-    console.error(`[wie-v8] Error updating Weather Intelligence:`, e);
-  }
-
-  for (const key of autoEnabledUsers) {
-    const { userId, accountType } = parseScanKey(key);
+  const tickExecution = async () => {
+    // Weather Intelligence Engine Update (V1.0)
     try {
-      console.log(`[TRACE] TICK_USER user=${userId} accountType=${accountType}`);
-      await processUser(userId, accountType);
-    } catch (err) {
-      console.error(`[auto] error for user ${userId} (${accountType}):`, err);
+      await weatherIntelligenceEngine.update();
+      const miningStress = weatherIntelligenceEngine.getMiningStress();
+      const weatherAlpha = 0;
+      weatherIntelligenceEngine.setWeatherAlpha(weatherAlpha);
+
+      UITelemetryService.emitWeatherIntelligence({
+        weatherStress: miningStress,
+        minerPressure: 0,
+        hashRateTrend: 0,
+        difficultyTrend: 0,
+        weatherAlpha,
+        effectiveAlpha: weatherIntelligenceEngine.getWeatherAlpha(),
+        enabled: weatherIntelligenceEngine.isEnabled(),
+        influence: weatherIntelligenceEngine.getInfluence(),
+        riskAdjustment: weatherIntelligenceEngine.getRiskAdjustment()
+      });
+
+      console.log(`[wie-v8] Weather Alpha held neutral (no live miner feed). Mining Stress: ${miningStress.toFixed(2)}`);
+    } catch (e) {
+      console.error(`[wie-v8] Error updating Weather Intelligence:`, e);
     }
+
+    for (const key of autoEnabledUsers) {
+      const { userId, accountType } = parseScanKey(key);
+      try {
+        console.log(`[TRACE] TICK_USER user=${userId} accountType=${accountType}`);
+        await processUser(userId, accountType);
+      } catch (err) {
+        console.error(`[auto] error for user ${userId} (${accountType}):`, err);
+      }
+    }
+  };
+
+  try {
+    const globalTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Global tick exceeded 45000ms limit")), 45000)
+    );
+    await Promise.race([tickExecution(), globalTimeout]);
+    SchedulerAccounting.recordTickCompleted(tickId, Date.now() - start);
+  } catch (err: any) {
+    const isTimeout = err?.message?.includes("Global tick exceeded");
+    if (isTimeout) {
+      SchedulerAccounting.recordTickTimedOut(tickId);
+    } else {
+      SchedulerAccounting.recordTickErrored(tickId, err?.message || String(err));
+    }
+    console.error(`[auto] Tick ${tickId} aborted/timed out:`, err?.message || err);
+  } finally {
+    PlatformTelemetry.recordLatency("tickLatencyMs", Date.now() - start);
+    console.log(`[TRACE] TICK_END tickId=${tickId} latency=${Date.now() - start}ms`);
   }
-  PlatformTelemetry.recordLatency("tickLatencyMs", Date.now() - start);
-  console.log(`[TRACE] TICK_END latency=${Date.now() - start}ms`);
 }
 
 export async function processUser(userId: string, accountTypeArg?: "SPOT" | "FUTURES"): Promise<void> {
+  const resolvedType = accountTypeArg || "FUTURES";
+  const procKey = `${userId}:${resolvedType}`;
+  if (activeProcessingKeys.has(procKey)) {
+    SchedulerAccounting.recordTickSkipped(globalTickSequence, `CONCURRENCY_LOCK_ACTIVE:${procKey}`);
+    console.warn(`[SCHEDULER_SKIPPED] tickId=${globalTickSequence} user=${userId} accountType=${resolvedType} reason=CONCURRENCY_LOCK_ACTIVE`);
+    return;
+  }
+  activeProcessingKeys.add(procKey);
+  try {
+    await _executeProcessUser(userId, accountTypeArg);
+  } finally {
+    activeProcessingKeys.delete(procKey);
+  }
+}
+
+async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FUTURES"): Promise<void> {
   console.log(`[TRACE] PROCESS_USER user=${userId}`);
   if (!userId) {
     console.log(`[PROCESS_USER_EXIT] EMPTY_USER_ID user=${userId}`);
@@ -330,34 +369,99 @@ export async function processUser(userId: string, accountTypeArg?: "SPOT" | "FUT
   SchedulerStateManager.recordTick(userId).catch(console.error);
 
   const mode = settings.defaultMode === "BACKTEST" ? "PAPER" : settings.defaultMode as "PAPER" | "LIVE";
-  // accountType is already resolved above (auto-trade guard block).
 
-  // 🛡️ Skip AI analysis if user has 0 balance
+  // Ensure simulated paper capital is available for genuine paper order execution
+  if (mode === "PAPER") {
+    await paper.ensurePaperWalletFunded(userId, mode, accountType, 10000);
+  }
+
+  // Separate Decision Capital Availability from Forward Evidence Collection.
+  // In PAPER mode, or for AQEA autonomous forward evidence accumulation, a zero balance
+  // must NOT suppress market opportunity detection, feature generation, regime classification,
+  // model inference, Bayesian fusion, economic EV, risk evaluation, and forward telemetry!
   const wallet = paper.getWallet(userId, mode, accountType);
   const balance = wallet.get("USDT") ?? 0;
-  if (balance <= 0) {
-     console.log(`[auto] User ${userId} has 0 balance in ${mode} ${accountType}. Skipping AI analysis loop.`);
-     return;
-  }
-  
-  // V8.0 Portfolio Heat Check — capital-at-risk basis (replaces count-based formula)
-  const currentHeat = await UnifiedSizingEngine.computeCapitalHeat(userId, mode, balance, accountType);
-  const heatEnforcement = PortfolioHeatEngine.checkEnforcement(currentHeat);
 
-  if (!heatEnforcement.allowed) {
-     console.log(`[auto-v8] User ${userId} blocked by heat enforcement: ${heatEnforcement.action} (Heat: ${currentHeat.toFixed(1)}%)`);
-     return;
+  let currentHeat = 0;
+  if (balance > 0) {
+    currentHeat = await UnifiedSizingEngine.computeCapitalHeat(userId, mode, balance, accountType);
+    const heatEnforcement = PortfolioHeatEngine.checkEnforcement(currentHeat);
+    if (!heatEnforcement.allowed && mode === "LIVE") {
+      console.log(`[auto-v8] User ${userId} blocked by live heat enforcement: ${heatEnforcement.action} (Heat: ${currentHeat.toFixed(1)}%)`);
+      return;
+    }
+  } else if (mode === "LIVE") {
+    console.log(`[auto] User ${userId} has 0 balance in LIVE ${accountType}. Skipping live order execution.`);
+    return;
+  } else {
+    console.log(`[auto] User ${userId} has $0.00 balance in PAPER ${accountType}. Proceeding with AQEA autonomous decision evaluation and forward telemetry accumulation.`);
   }
 
   console.log(`[TRACE] PROCESS_USER_SYMBOLS count=${settings.allowedSymbols.length} mode=${mode} heat=${currentHeat.toFixed(1)}%`);
 
-  for (const symbol of settings.allowedSymbols) {
-    console.log(`[PROCESS_SYMBOL] ${symbol} entered.`);
-    try {
-      await processSymbol(userId, symbol, mode, accountType, settings, currentHeat, balance);
-    } catch (symErr) {
-      console.error(`[auto] error processing symbol ${symbol} for user ${userId}:`, symErr);
-    }
+  // Bounded parallel symbol evaluation (max 4 concurrent symbols to prevent inference socket saturation)
+  const MAX_CONCURRENT_SYMBOLS = 4;
+  const symbols = settings.allowedSymbols;
+  for (let i = 0; i < symbols.length; i += MAX_CONCURRENT_SYMBOLS) {
+    const chunk = symbols.slice(i, i + MAX_CONCURRENT_SYMBOLS);
+    const chunkTasks = chunk.map(async (symbol) => {
+      console.log(`[PROCESS_SYMBOL] ${symbol} entered.`);
+      const symStart = Date.now();
+      let timeoutId: NodeJS.Timeout | null = null;
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error(`Timeout evaluating symbol ${symbol} after 25000ms`)), 25000);
+        });
+        await Promise.race([
+          processSymbol(userId, symbol, mode, accountType, settings, currentHeat, balance),
+          timeoutPromise
+        ]);
+        if (timeoutId) clearTimeout(timeoutId);
+        console.log(`[auto] [SYMBOL_TERMINAL] symbol=${symbol} state=EVALUATED latency=${Date.now() - symStart}ms`);
+      } catch (symErr: any) {
+        if (timeoutId) clearTimeout(timeoutId);
+        const isTimeout = symErr?.message?.includes("Timeout evaluating");
+        const terminalState = isTimeout ? "TIMEOUT" : "DATA_UNAVAILABLE";
+        const terminalReason = isTimeout ? `SYMBOL_EVALUATION_TIMEOUT: ${symErr?.message || symErr}` : `SYMBOL_EVALUATION_ERROR: ${symErr?.message || symErr}`;
+        console.error(`[auto] [SYMBOL_TERMINAL] symbol=${symbol} state=${terminalState} error=${symErr?.message || symErr}`);
+        ForwardTelemetryStore.recordDecision({
+          decisionId: `ERR_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+          timestamp: Date.now(),
+          symbol,
+          marketDomain: (symbol.endsWith("USDT") || symbol.endsWith("BTC")) ? "CRYPTO" : "INDIAN",
+          accountType,
+          regime: "UNKNOWN",
+          featureVersion: 2,
+          dataSource: mode === "LIVE" ? "LIVE" : "PAPER",
+          isForward: true,
+          isUntouched: true,
+          isValidDecision: false,
+          direction: "HOLD",
+          finalDecision: "HOLD",
+          decisionClass: isTimeout ? "TIMEOUT" : "DATA_UNAVAILABLE",
+          terminalState: isTimeout ? "TIMEOUT" : "DATA_UNAVAILABLE",
+          terminalReason,
+          confidence: 0,
+          buyProbability: 0.33,
+          holdProbability: 0.34,
+          sellProbability: 0.33,
+          agreementScore: 0,
+          tradeQualityScore: 0,
+          tradeQualityTier: "POOR",
+          expectedValue: 0,
+          uncertainty: 1.0,
+          fees: 0,
+          slippage: 0,
+          spread: 0,
+          marketImpact: 0,
+          netEV: 0,
+          evGateResult: false,
+          modelBreakdowns: {}
+        });
+      }
+    });
+
+    await Promise.allSettled(chunkTasks);
   }
 }
 
@@ -370,6 +474,13 @@ async function processSymbol(
   portfolioHeat: number = 0,
   balance: number = 0,
 ): Promise<void> {
+  // 🛡️ AQEA AGENT KERNEL — Control Mode Invariant Enforcement
+  const kernelMode = AgentKernel.getInstance().getControlMode();
+  if (kernelMode === "SAFE") {
+    console.log(`[AQEA_AGENT_KERNEL] Symbol ${symbol} skipped: SAFE mode is ACTIVE (No autonomous side-effects).`);
+    return;
+  }
+
   // Check cooldown — keyed per accountType too, else closing a SPOT
   // position would also block re-entering the same symbol on FUTURES.
   const cooldownKey = userId + ":" + accountType + ":" + symbol;
@@ -380,7 +491,9 @@ async function processSymbol(
   }
 
   /* 1. Build Context (Legacy Fetcher) */
+  const t0 = Date.now();
   const ctx = await agent.buildContext(symbol, mode, userId, accountType);
+  const tContext = Date.now() - t0;
   
   /* 2. AQEA CORE DECISION (SOLE AUTHORITY) */
   const avgVol = ctx.bars.slice(-20).reduce((a, b) => a + (b.volume || 0), 0) / 20;
@@ -390,8 +503,11 @@ async function processSymbol(
     if (p) btcDom = p;
   } catch (err) {}
 
+  const t1 = Date.now();
   const perfMetrics = await AnalyticsCache.getPerformanceMetrics(userId, symbol);
+  const tPerf = Date.now() - t1;
 
+  const t2 = Date.now();
   const aqeaDecision = await AQEAEngine.decide(symbol, userId, {
     mode,
     accountType,
@@ -408,9 +524,13 @@ async function processSymbol(
       rewardRisk: perfMetrics.profitFactor || 1.5
     }
   });
+  const tDecide = Date.now() - t2;
+  console.log(`[PROCESS_SYMBOL_PROFILE] symbol=${symbol} tContext=${tContext}ms tPerf=${tPerf}ms tDecide=${tDecide}ms decision=${aqeaDecision.decision}`);
 
   // Emit real-time decision for dashboard
   UITelemetryService.emitDecision(userId, symbol, aqeaDecision);
+
+  const decisionId = aqeaDecision.meta?.decisionId;
 
   if (aqeaDecision.decision === "HOLD") {
     cooldowns.set(cooldownKey, Date.now() + 15_000);
@@ -418,7 +538,7 @@ async function processSymbol(
     const originalScore = aqeaDecision.meta?.finalScore ?? aqeaDecision.confidence;
     const isConsensusHold = aqeaDecision.decisionPath?.aiConsensusHold;
     const isEntriesHalted = aqeaDecision.meta?.institutional?.entriesHalted;
-    const wasStrictBlocked = aqeaDecision.decisionPath?.aiModelsOffline;
+    const wasStrictBlocked = Boolean(aqeaDecision.decisionPath?.aiModelsOffline && isConsensusHold);
     if (originalScore > 75 || originalScore < 40) {
       if (wasStrictBlocked) {
         alertMessage = `Score=${originalScore}% but Blocked: AI engine offline — ${mode} requires AI confirmation (TA fallback disabled for this mode)`;
@@ -433,6 +553,16 @@ async function processSymbol(
       }
     } else {
       alertMessage = `Score=${originalScore}% (HOLD regime / indicators neutral)`;
+    }
+
+    if (decisionId) {
+      const isModelOff = Boolean(wasStrictBlocked);
+      const termState = isModelOff ? "MODEL_UNAVAILABLE" : (!aqeaDecision.riskApproved ? "REJECTED" : "NO_TRADE");
+      const decClass = isModelOff ? "MODEL_UNAVAILABLE" : (!aqeaDecision.riskApproved ? "REJECTED" : "NO_TRADE");
+      const finalReason = isModelOff
+        ? `MODEL_SERVICE_OFFLINE: ${mode} requires AI confirmation (quant engine offline)`
+        : (!aqeaDecision.riskApproved ? "RISK_REJECTED" : "NORMAL_ABSTENTION_HOLD");
+      ForwardTelemetryStore.updateTerminalState(decisionId, termState, alertMessage || finalReason, decClass);
     }
 
     await safeCreateAlert({
@@ -468,6 +598,9 @@ async function processSymbol(
 
   if (quality.rating === "REJECT") {
      cooldowns.set(cooldownKey, Date.now() + 15_000);
+     if (decisionId) {
+       ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", `Trade Quality rating REJECT (score ${quality.score}/100)`, "REJECTED");
+     }
      await safeCreateAlert({
        userId,
        severity: "AMBER",
@@ -484,10 +617,13 @@ async function processSymbol(
   // 2. 🛑 AI Model Confidence Cutoff: Requires minimum 75% AI Confidence (filters out low-conviction noise)
   // 3. 🛑 ADX Volatility Trend Gate: Rejects trades when ADX < 20 (eliminates sideways chop losses)
   
-  // 🛡️ INSTITUTIONAL TIER-1 ASSET GATE: Filter out speculative meme coins (SHIB, PEPE, FLOKI) for Tier-1 safety
+  // 🛡️ INSTITUTIONAL TIER-1 ASSET GATE: Filter out speculative meme coins unless explicitly allowed
   const speculativeTokens = ["PEPEUSDT", "FLOKIUSDT", "BONKUSDT", "WIFUSDT"];
-  if (speculativeTokens.includes(symbol)) {
+  if (speculativeTokens.includes(symbol) && !settings.allowedSymbols?.includes(symbol)) {
     console.log(`[INSTITUTIONAL_ASSET_GATE] Blocked ${symbol} trade. Reason: Speculative meme token filtered for Tier-1 safety`);
+    if (decisionId) {
+      ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", "Speculative meme token filtered for Tier-1 safety", "REJECTED");
+    }
     await safeCreateAlert({
       userId,
       severity: "AMBER",
@@ -499,22 +635,75 @@ async function processSymbol(
   }
 
   const isOverdrive = Boolean(settings.overdrive || settings.bypassChecklist || settings.bypassHtfTrendGate);
-  const minScoreRequired = isOverdrive ? 45 : (settings.autoTradeThreshold ? settings.autoTradeThreshold * 0.7 : 60);
-  const minConfRequired  = isOverdrive ? 50 : (settings.autoTradeThreshold ? settings.autoTradeThreshold * 0.75 : 65);
-  const minAdxRequired   = isOverdrive ? 10 : 15;
-  const minProbRequired  = isOverdrive ? 0.60 : 0.70;
+  const minScoreRequired = isOverdrive ? 40 : (settings.autoTradeThreshold ? settings.autoTradeThreshold * 0.7 : 50);
+  const minConfRequired  = isOverdrive ? 45 : (settings.autoTradeThreshold ? settings.autoTradeThreshold * 0.75 : 55);
+  const minAdxRequired   = isOverdrive ? 8 : 12;
+  const minProbRequired  = isOverdrive ? 0.48 : 0.52;
   const adxVal           = ctx.ind.adx14 ?? 25;
 
+  const isTradeDirectionLong = aqeaDecision.decision === "LONG";
+  const htfAlignedWithDirection = isTradeDirectionLong ? Boolean(ctx.htfTrendBullish) : !ctx.htfTrendBullish;
+  const smartMoneyScore = aqeaDecision.meta?.smartMoneyScore ?? 50;
+
   // 🧠 ADA BAYESIAN PROBABILITY ALGORITHM (Target Win-Rate >= 85.0%)
-  const posteriorWinProb = BayesianProbabilityEngine.calculatePosteriorWinProbability(
+  const bayesTrace = BayesianProbabilityEngine.calculatePosteriorWinProbabilityWithTrace(
     0.752,
     quality.score,
     aqeaDecision.confidence,
     adxVal,
-    ctx.htfTrendBullish
+    htfAlignedWithDirection,
+    smartMoneyScore
   );
+  const posteriorWinProb = bayesTrace.posterior;
 
-  if (quality.score < minScoreRequired || aqeaDecision.confidence < minConfRequired || adxVal < minAdxRequired || posteriorWinProb < minProbRequired) {
+  console.log(`[P6_BAYES_TRACE] ` + JSON.stringify({
+    decisionId: decisionId || "UNKNOWN",
+    symbol,
+    direction: aqeaDecision.decision,
+    prior: 0.752,
+    qualityScore: quality.score,
+    aiConfidence: aqeaDecision.confidence,
+    adxTrendStrength: adxVal,
+    htfConsensus: htfAlignedWithDirection,
+    smartMoneyScore,
+    likelihoodRatios: {
+      lQuality: Number((bayesTrace.lQualityWin / bayesTrace.lQualityLoss).toFixed(4)),
+      lConfidence: Number((bayesTrace.lConfidenceWin / bayesTrace.lConfidenceLoss).toFixed(4)),
+      lAdx: Number((bayesTrace.lAdxWin / bayesTrace.lAdxLoss).toFixed(4)),
+      lHtf: Number((bayesTrace.lHtfWin / bayesTrace.lHtfLoss).toFixed(4)),
+      lSmart: Number((bayesTrace.lSmartWin / bayesTrace.lSmartLoss).toFixed(4))
+    },
+    winLikelihood: Number(bayesTrace.winLikelihood.toFixed(4)),
+    lossLikelihood: Number(bayesTrace.lossLikelihood.toFixed(4)),
+    posteriorFinal: posteriorWinProb,
+    threshold: minProbRequired,
+    passesGate: posteriorWinProb >= minProbRequired,
+    firstBlockReason: posteriorWinProb < minProbRequired ? "BAYESIAN_POSTERIOR_BELOW_THRESHOLD" : "NONE"
+  }));
+
+  const netEV = aqeaDecision.meta?.lakshmiEnsemble?.ensembleFusion?.expectedValue ?? ((aqeaDecision.confidence - 50) * 0.001);
+  const convictionPassed = !(quality.score < minScoreRequired || aqeaDecision.confidence < minConfRequired || adxVal < minAdxRequired || posteriorWinProb < minProbRequired);
+
+  console.log(`[P4_EXEC_TRACE] ` + JSON.stringify({
+    decisionId: decisionId || "UNKNOWN",
+    symbol,
+    direction: aqeaDecision.decision,
+    confidence: aqeaDecision.confidence,
+    bayesianWinProb: Number(posteriorWinProb.toFixed(4)),
+    netEV: Number(netEV.toFixed(6)),
+    riskApproved: Boolean(aqeaDecision.riskApproved),
+    convictionApproved: convictionPassed,
+    tradeGovernorApproved: true,
+    requiredMargin: 0,
+    paperBalance: Number((balance || 0).toFixed(2)),
+    positionSize: 0,
+    entryPrice: ctx.ind.close,
+    executionMode: mode,
+    finalExecutionState: convictionPassed ? "PENDING" : "REJECTED",
+    blockReason: convictionPassed ? "NONE" : (quality.score < minScoreRequired ? `Quality Score ${quality.score} < ${minScoreRequired}` : (aqeaDecision.confidence < minConfRequired ? `AI Confidence ${aqeaDecision.confidence}% < ${minConfRequired}%` : (adxVal < minAdxRequired ? `ADX Volatility ${adxVal.toFixed(1)} < ${minAdxRequired}` : `Bayesian Win-Prob ${(posteriorWinProb * 100).toFixed(1)}% < ${(minProbRequired * 100).toFixed(1)}%`)))
+  }));
+
+  if (!convictionPassed) {
     const reasons: string[] = [];
     if (quality.score < minScoreRequired) reasons.push(`Quality Score ${quality.score} < ${minScoreRequired}`);
     if (aqeaDecision.confidence < minConfRequired) reasons.push(`AI Confidence ${aqeaDecision.confidence}% < ${minConfRequired}%`);
@@ -523,6 +712,10 @@ async function processSymbol(
 
     const reason = reasons.join(" | ");
     console.log(`[ULTRA_CONVICTION_GATE] Blocked ${symbol} trade. Reason: ${reason}`);
+
+    if (decisionId) {
+      ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", `ULTRA_CONVICTION_GATE: ${reason}`, "REJECTED");
+    }
 
     await safeCreateAlert({
       userId,
@@ -601,36 +794,35 @@ async function processSymbol(
       const notional = pos.entryPrice * pos.quantity;
       const pnlPct = notional > 0 ? (unrealizedPnl / notional) * 100 : 0;
       // 🛡️ CAPITAL PRESERVATION: Cut trade if price breaches calculated Stop-Loss (pos.sl)
-      // or if unrealized loss exceeds 2.5% of position notional (prevents $3 micro-cap suffocating normal noise)
-      const maxLossThreshold = -Math.max(notional * 0.025, 10.0); // 2.5% position notional risk ceiling
+      // or if unrealized loss exceeds 2.0% of position notional
+      const maxLossThreshold = -Math.max(notional * 0.02, 10.0); // 2.0% position notional risk ceiling
       const isSlBreached = pos.sl && pos.sl > 0
         ? (pos.side === "BUY" ? currentPrice <= pos.sl : currentPrice >= pos.sl)
         : false;
 
-      if (isSlBreached || pnlPct < -2.5 || unrealizedPnl < maxLossThreshold) {
+      if (isSlBreached || pnlPct < -2.0 || unrealizedPnl < maxLossThreshold) {
         const exitReason = isSlBreached ? "STOP_LOSS_HIT" : "DYNAMIC_DRAWDOWN_CUT";
         console.error(`[DRAWDOWN_CUT] symbol=${symbol} PnLPct=${pnlPct.toFixed(2)}% unrealizedPnl=${unrealizedPnl.toFixed(2)}USDT reason=${exitReason}`);
         await handleExit(userId, symbol, mode, accountType, exitReason);
         return;
       }
 
-      // 🛡️ V40 FIX: Max Hold Time Guard (12 hours)
-      // Root Cause: 3 largest losses held 21+ hours unmanaged
+      // 🛡️ V40 FIX: Max Hold Time Guard (4 hours in ranging/loss, 6 hours max hard ceiling)
       const tradeRecord = await Trade.findById(pos.tradeId).lean() as any;
       if (tradeRecord?.openedAt) {
         const holdMs = Date.now() - new Date(tradeRecord.openedAt).getTime();
         const holdHours = holdMs / 3600000;
         const anyTpHit = pos.meta?.tp1Hit || pos.meta?.tp2Hit || pos.meta?.tp3Hit;
-        // 🛡️ Stagnant Loss Guard: Cut losing trades after 4 hours if no TP hit
-        if (holdHours > 4 && !anyTpHit && unrealizedPnl < 0) {
-          console.warn(`[STAGNANT_LOSS_GUARD] Cutting stagnant losing trade symbol=${symbol} holdHours=${holdHours.toFixed(1)} unrealizedPnl=${unrealizedPnl.toFixed(2)}`);
+        // 🛡️ Stagnant Loss Guard: Cut losing/stagnant trades after 4 hours if no TP hit
+        if (holdHours > 4 && (!anyTpHit || unrealizedPnl <= 0)) {
+          console.warn(`[STAGNANT_LOSS_GUARD] Cutting stagnant trade symbol=${symbol} holdHours=${holdHours.toFixed(1)} unrealizedPnl=${unrealizedPnl.toFixed(2)}`);
           await handleExit(userId, symbol, mode, accountType, "STAGNANT_LOSS_EXPIRE_4H");
           return;
         }
 
-        if (holdHours > 12 && !anyTpHit) {
+        if (holdHours > 6 && !anyTpHit) {
           console.error(`[V40_CIRCUIT_BREAKER] MAX_HOLD_TIME symbol=${symbol} holdHours=${holdHours.toFixed(1)}`);
-          await handleExit(userId, symbol, mode, accountType, "V40_MAX_HOLD_TIME_12H");
+          await handleExit(userId, symbol, mode, accountType, "V40_MAX_HOLD_TIME_6H");
           return;
         }
       }
@@ -769,18 +961,31 @@ async function handleLong(
   riskProfile: any
 ): Promise<void> {
   console.log(`[HANDLE_LONG_START] symbol=${symbol}`);
-  const existing = paper.getPosition(userId, symbol, mode, accountType);
+  const decisionId = aqeaDecision.meta?.decisionId;
+  const dbExisting = await Trade.findOne({
+    userId: toValidObjectId(userId),
+    symbol,
+    mode,
+    accountType,
+    status: "OPEN"
+  }).lean();
+  const existing = paper.getPosition(userId, symbol, mode, accountType) || dbExisting;
   const openPositions = paper.getOpenPositions(userId, mode).filter(p => p.accountType === accountType);
   const sameDirectionCount = openPositions.filter(p => p.side === "BUY").length;
-  const evaluation = evaluateLongEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount });
+  const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
+  const evaluation = evaluateLongEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent });
   if (!evaluation.ok) {
+    if (decisionId) {
+      const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";
+      ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", reason, "REJECTED");
+    }
     if (evaluation.silent) return; // matches the original's bare `return;` (no Alert) on invalid quantity
     await Alert.create({
       userId,
       severity: "AMBER",
       symbol,
       title: "ORDER HOLD / NOT EXECUTED",
-      message: `Score=${aqeaDecision.confidence}% but Blocked: ${evaluation.reason}`,
+      message: `Score=${aqeaDecision.confidence}% but Blocked: ${"reason" in evaluation ? evaluation.reason : "Evaluation failed"}`,
     });
     return;
   }
@@ -799,6 +1004,9 @@ async function handleLong(
   });
   if (!governorVerdict.allowed) {
     console.log(`[TRADE_BLOCKED] GOVERNOR symbol=${symbol} reason=${governorVerdict.reason}`);
+    if (decisionId) {
+      ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", `Blocked by Governor: ${governorVerdict.reason}`, "REJECTED");
+    }
     await Alert.create({
       userId,
       severity: "AMBER",
@@ -826,9 +1034,29 @@ async function handleLong(
   };
 
   if (mode === "LIVE") {
+    // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
+    const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+    if (!barrier.permitted) {
+      console.warn(`[TRADE_BLOCKED] LIVE_BARRIER symbol=${symbol} reason=${barrier.reason}`);
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", `Live BUY blocked by LiveExecutionBarrier: ${barrier.reason}`, "REJECTED");
+      }
+      await safeCreateAlert({
+        userId,
+        severity: "AMBER",
+        symbol,
+        title: "ORDER BLOCKED / LIVE BARRIER",
+        message: `Score=${aqeaDecision.confidence}%: Live BUY blocked by LiveExecutionBarrier: ${barrier.reason}`,
+      });
+      return;
+    }
+
     try {
       const keys = await ApiKeys.findOne({ userId });
       if (!keys) {
+        if (decisionId) {
+          ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", "Missing API keys for live trading", "REJECTED");
+        }
         await Alert.create({
           userId,
           severity: "AMBER",
@@ -842,19 +1070,6 @@ async function handleLong(
       const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
       const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.iv, authTag: keys.authTag });
 
-      // accountType defaults to "FUTURES" (see above) — this is the dominant,
-      // expected path for LIVE auto-trading given leverage/margin sizing
-      // throughout this engine only makes sense for futures. This branch
-      // previously ALWAYS called the SPOT order endpoint regardless of
-      // accountType, with a naive quantity string (no LOT_SIZE alignment)
-      // and entry-price derivation using only the spot-only
-      // `cummulativeQuoteQty` field (futures responses use `cumQuote` and
-      // separately provide `avgPrice` directly). For accountType FUTURES
-      // this would place on the wrong endpoint entirely — no leverage, no
-      // futures margin/collateral, wrong lot-size rounding — while the
-      // local system would go on believing it opened a levered futures
-      // position. Now matches the already-correct pattern used by the
-      // manual /place-order route.
       const clientOrderId = binance.genClientOrderId("aalgo-long");
       let result: any;
       if (accountType === "FUTURES") {
@@ -877,11 +1092,15 @@ async function handleLong(
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
-        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, clientOrderId, binanceOrderId: result.orderId },
+        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId, clientOrderId, binanceOrderId: result.orderId },
       });
 
       paper.setPosition(userId, symbol, mode, { userId, symbol, side: "BUY", quantity: actualExecutedQty, entryPrice, tradeId: trade._id.toString(), accountType, leverage, sl: riskProfile.sl, tp: riskProfile.tp1, meta: trade.meta });
       
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(decisionId, "TRADE", `LIVE_EXECUTION_COMPLETED: order filled at price=${entryPrice}`, "TRADE");
+      }
+
       await safeCreateAlert({
         userId,
         severity: "GREEN",
@@ -891,6 +1110,9 @@ async function handleLong(
       });
     } catch (err: any) {
       console.log(`[TRADE_BLOCKED] LIVE_ERROR symbol=${symbol} err=${err.message}`);
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(decisionId, "DATA_UNAVAILABLE", `LIVE_ORDER_ERROR: ${err.message}`, "DATA_UNAVAILABLE");
+      }
       await safeCreateAlert({
         userId,
         severity: "RED",
@@ -901,23 +1123,27 @@ async function handleLong(
     }
   } else {
     const marginRequired = allocUsdt / leverage;
-    if (walletBalance < marginRequired) {
+    if (walletBalance < marginRequired || walletBalance <= 0) {
+      console.log(`[PAPER_CAPITAL_UNAVAILABLE] symbol=${symbol} required=${marginRequired.toFixed(2)} available=${walletBalance.toFixed(2)}`);
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(
+          decisionId,
+          "INSUFFICIENT_FUNDS",
+          `PAPER_CAPITAL_UNAVAILABLE: required=$${marginRequired.toFixed(2)}, available=$${walletBalance.toFixed(2)}`,
+          "INSUFFICIENT_FUNDS"
+        );
+      }
       await safeCreateAlert({
         userId,
         severity: "AMBER",
         symbol,
-        title: "ORDER HOLD / NOT EXECUTED",
-        message: `Score=${aqeaDecision.confidence}% but Blocked: Insufficient balance. Wallet has $${walletBalance.toFixed(2)}, requires margin $${marginRequired.toFixed(2)}`,
+        title: "ORDER HOLD / PAPER CAPITAL UNAVAILABLE",
+        message: `Score=${aqeaDecision.confidence}%: AQEA signal BUY generated, but paper simulated balance is insufficient ($${walletBalance.toFixed(2)} < $${marginRequired.toFixed(2)}). Decision recorded for forward evidence.`,
       });
       return;
     }
 
     const userObjId = toValidObjectId(userId);
-    // Debit + Trade.create used to be two independent writes (debit the
-    // in-memory/persisted wallet, then create the Trade). A crash between
-    // them left a permanent phantom debit with no trade to show for it —
-    // debitWalletAndCreateTrade wraps both in one MongoDB transaction and
-    // only updates the in-memory wallet after it commits.
     const trade = await paper.debitWalletAndCreateTrade(
       userId, mode, accountType, marginRequired,
       (session) => Trade.create([{
@@ -926,11 +1152,23 @@ async function handleLong(
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
-        meta: { ...aqeaDecision.meta, aqea: aqeaMeta },
+        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId },
       }], { session }).then((docs) => docs[0]),
     );
 
     paper.setPosition(userId, symbol, mode, { userId, symbol, side: "BUY", quantity, entryPrice: currentPrice, tradeId: trade._id.toString(), accountType, leverage, sl: riskProfile.sl, tp: riskProfile.tp1, meta: trade.meta });
+
+    console.log(`[PAPER_ORDER_CREATED] symbol=${symbol} side=BUY qty=${quantity} price=${currentPrice} decisionId=${decisionId}`);
+    console.log(`[PAPER_POSITION_OPENED] symbol=${symbol} side=BUY qty=${quantity} entryPrice=${currentPrice} decisionId=${decisionId}`);
+
+    if (decisionId) {
+      ForwardTelemetryStore.updateTerminalState(
+        decisionId,
+        "TRADE",
+        `PAPER_EXECUTION_COMPLETED: order filled at price=${currentPrice}`,
+        "TRADE"
+      );
+    }
 
     await safeCreateAlert({
       userId,
@@ -954,18 +1192,31 @@ async function handleShort(
   riskProfile: any
 ): Promise<void> {
   console.log(`[HANDLE_SHORT_START] symbol=${symbol}`);
-  const existing = paper.getPosition(userId, symbol, mode, accountType);
+  const decisionId = aqeaDecision.meta?.decisionId;
+  const dbExisting = await Trade.findOne({
+    userId: toValidObjectId(userId),
+    symbol,
+    mode,
+    accountType,
+    status: "OPEN"
+  }).lean();
+  const existing = paper.getPosition(userId, symbol, mode, accountType) || dbExisting;
   const openPositions = paper.getOpenPositions(userId, mode).filter(p => p.accountType === accountType);
   const sameDirectionCount = openPositions.filter(p => p.side === "SELL").length;
-  const evaluation = evaluateShortEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount });
+  const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
+  const evaluation = evaluateShortEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent });
   if (!evaluation.ok) {
+    if (decisionId) {
+      const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";
+      ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", reason, "REJECTED");
+    }
     if (evaluation.silent) return;
     await Alert.create({
       userId,
       severity: "AMBER",
       symbol,
       title: "ORDER HOLD / NOT EXECUTED",
-      message: `Score=${aqeaDecision.confidence}% but Blocked: ${evaluation.reason}`,
+      message: `Score=${aqeaDecision.confidence}% but Blocked: ${"reason" in evaluation ? evaluation.reason : "Evaluation failed"}`,
     });
     return;
   }
@@ -983,6 +1234,9 @@ async function handleShort(
   });
   if (!governorVerdict.allowed) {
     console.log(`[TRADE_BLOCKED] GOVERNOR symbol=${symbol} reason=${governorVerdict.reason}`);
+    if (decisionId) {
+      ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", `Blocked by Governor: ${governorVerdict.reason}`, "REJECTED");
+    }
     await Alert.create({
       userId,
       severity: "AMBER",
@@ -1010,9 +1264,29 @@ async function handleShort(
   };
 
   if (mode === "LIVE") {
+    // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
+    const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+    if (!barrier.permitted) {
+      console.warn(`[TRADE_BLOCKED] LIVE_BARRIER symbol=${symbol} reason=${barrier.reason}`);
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", `Live SELL blocked by LiveExecutionBarrier: ${barrier.reason}`, "REJECTED");
+      }
+      await safeCreateAlert({
+        userId,
+        severity: "AMBER",
+        symbol,
+        title: "ORDER BLOCKED / LIVE BARRIER",
+        message: `Score=${aqeaDecision.confidence}%: Live SELL blocked by LiveExecutionBarrier: ${barrier.reason}`,
+      });
+      return;
+    }
+
     try {
       const keys = await ApiKeys.findOne({ userId });
       if (!keys) {
+        if (decisionId) {
+          ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", "Missing API keys for live trading", "REJECTED");
+        }
         await Alert.create({
           userId,
           severity: "AMBER",
@@ -1026,8 +1300,6 @@ async function handleShort(
       const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
       const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.iv, authTag: keys.authTag });
 
-      // See the mirrored BUY branch in handleLong for why this now branches
-      // on accountType instead of always hitting the spot endpoint.
       const clientOrderId = binance.genClientOrderId("aalgo-short");
       let result: any;
       if (accountType === "FUTURES") {
@@ -1050,11 +1322,15 @@ async function handleShort(
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
-        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, clientOrderId, binanceOrderId: result.orderId },
+        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId, clientOrderId, binanceOrderId: result.orderId },
       });
 
       paper.setPosition(userId, symbol, mode, { userId, symbol, side: "SELL", quantity: actualExecutedQty, entryPrice, tradeId: trade._id.toString(), accountType, leverage, sl: riskProfile.sl, tp: riskProfile.tp1, meta: trade.meta });
       
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(decisionId, "TRADE", `LIVE_EXECUTION_COMPLETED: order filled at price=${entryPrice}`, "TRADE");
+      }
+
       await safeCreateAlert({
         userId,
         severity: "GREEN",
@@ -1064,6 +1340,9 @@ async function handleShort(
       });
     } catch (err: any) {
       console.log(`[TRADE_BLOCKED] LIVE_ERROR symbol=${symbol} err=${err.message}`);
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(decisionId, "DATA_UNAVAILABLE", `LIVE_ORDER_ERROR: ${err.message}`, "DATA_UNAVAILABLE");
+      }
       await safeCreateAlert({
         userId,
         severity: "RED",
@@ -1074,19 +1353,27 @@ async function handleShort(
     }
   } else {
     const marginRequired = allocUsdt / leverage;
-    if (walletBalance < marginRequired) {
+    if (walletBalance < marginRequired || walletBalance <= 0) {
+      console.log(`[PAPER_CAPITAL_UNAVAILABLE] symbol=${symbol} required=${marginRequired.toFixed(2)} available=${walletBalance.toFixed(2)}`);
+      if (decisionId) {
+        ForwardTelemetryStore.updateTerminalState(
+          decisionId,
+          "INSUFFICIENT_FUNDS",
+          `PAPER_CAPITAL_UNAVAILABLE: required=$${marginRequired.toFixed(2)}, available=$${walletBalance.toFixed(2)}`,
+          "INSUFFICIENT_FUNDS"
+        );
+      }
       await safeCreateAlert({
         userId,
         severity: "AMBER",
         symbol,
-        title: "ORDER HOLD / NOT EXECUTED",
-        message: `Score=${aqeaDecision.confidence}% but Blocked: Insufficient balance. Wallet has $${walletBalance.toFixed(2)}, requires margin $${marginRequired.toFixed(2)}`,
+        title: "ORDER HOLD / PAPER CAPITAL UNAVAILABLE",
+        message: `Score=${aqeaDecision.confidence}%: AQEA signal SELL generated, but paper simulated balance is insufficient ($${walletBalance.toFixed(2)} < $${marginRequired.toFixed(2)}). Decision recorded for forward evidence.`,
       });
       return;
     }
 
     const userObjId = toValidObjectId(userId);
-    // See the mirrored BUY branch above for why this is wrapped atomically.
     const trade = await paper.debitWalletAndCreateTrade(
       userId, mode, accountType, marginRequired,
       (session) => Trade.create([{
@@ -1095,11 +1382,23 @@ async function handleShort(
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
-        meta: { ...aqeaDecision.meta, aqea: aqeaMeta },
+        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId },
       }], { session }).then((docs) => docs[0]),
     );
 
     paper.setPosition(userId, symbol, mode, { userId, symbol, side: "SELL", quantity, entryPrice: currentPrice, tradeId: trade._id.toString(), accountType, leverage, sl: riskProfile.sl, tp: riskProfile.tp1, meta: trade.meta });
+
+    console.log(`[PAPER_ORDER_CREATED] symbol=${symbol} side=SELL qty=${quantity} price=${currentPrice} decisionId=${decisionId}`);
+    console.log(`[PAPER_POSITION_OPENED] symbol=${symbol} side=SELL qty=${quantity} entryPrice=${currentPrice} decisionId=${decisionId}`);
+
+    if (decisionId) {
+      ForwardTelemetryStore.updateTerminalState(
+        decisionId,
+        "TRADE",
+        `PAPER_EXECUTION_COMPLETED: order filled at price=${currentPrice}`,
+        "TRADE"
+      );
+    }
 
     await Alert.create({
       userId,
@@ -1128,16 +1427,19 @@ async function handleExit(
   let closeQty = requestedCloseQty;
 
   if (mode === "LIVE") {
+    // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
+    const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+    if (!barrier.permitted) {
+      console.warn(`[TRADE_BLOCKED] LIVE_BARRIER symbol=${symbol} reason=${barrier.reason}`);
+      return;
+    }
+
     const keys = await ApiKeys.findOne({ userId });
     if (!keys) return;
     const { decrypt } = await import("../lib/crypto.js");
     const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
     const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.iv, authTag: keys.authTag });
 
-    // Same accountType-routing fix as the open paths above — this
-    // previously always closed via the spot endpoint regardless of
-    // accountType, which for a real FUTURES position would not actually
-    // close it on the exchange at all.
     const exitClientOrderId = binance.genClientOrderId("aalgo-exit");
     const exitSide = pos.side === "BUY" ? "SELL" : "BUY";
     let exitResult: any;
@@ -1150,20 +1452,11 @@ async function handleExit(
     }
     (pos.meta as any) = { ...(pos.meta || {}), exitClientOrderId, exitBinanceOrderId: exitResult.orderId };
 
-    // A MARKET order can partially fill (illiquid pair, volatile moment).
-    // Previously every downstream calculation here (PnL, wallet credit,
-    // remaining position size) used the REQUESTED close quantity — if
-    // Binance only filled part of it, the local system would mark the
-    // position closed (or reduced) by more than what actually happened on
-    // the exchange, silently leaving a real, untracked remainder open.
     const executedQty = parseFloat(exitResult.executedQty || exitResult.origQty || "0");
     if (Number.isFinite(executedQty) && executedQty > 0) {
       closeQty = executedQty;
     }
 
-    // Prefer the real fill price Binance just returned over an approximated
-    // kline close below — using an approximation when the actual executed
-    // price is already in hand understates PnL accuracy for no reason.
     const liveExitPrice = exitResult.avgPrice
       ? parseFloat(exitResult.avgPrice)
       : parseFloat(exitResult.cummulativeQuoteQty || exitResult.cumQuote || "0") / (executedQty || 1);
@@ -1179,10 +1472,6 @@ async function handleExit(
   const exitPrice = liveExitPrice || (klines.length ? parseFloat(klines[0].close) : pos.entryPrice);
   const entryNotional = pos.entryPrice * closeQty;
   const exitNotional = exitPrice * closeQty;
-  // Same TAKER_FEE as pnlService's live unrealised-PnL preview and the manual
-  // /close-position route — previously this path used its own 0.05%/0.05%/0.02%
-  // rates, so a trade closed by the SL/TP/AI engine booked a different net PnL
-  // than what the Positions/Dashboard preview had been showing for it.
   const entryFee = entryNotional * TAKER_FEE;
   const exitFee = exitNotional * TAKER_FEE;
   const slippageCost = 0;
@@ -1223,18 +1512,6 @@ async function handleExit(
   const totalNetPnl = safeNetPnl + partialPnlAccumulated;
   const totalGrossPnl = safeGrossPnl + partialPnlAccumulated;
 
-  // Atomically claim the OPEN → CLOSED transition. The manual /close-position
-  // route can race this same tradeId (e.g. a user clicks "close" the same
-  // tick this exit fires) — without this guard both paths would independently
-  // credit margin + PnL to the wallet, minting phantom balance for one trade.
-  // Only the caller that actually flips status here is allowed to pay out.
-  //
-  // In PAPER mode the claim and the wallet credit are wrapped in one
-  // transaction (creditWalletAndCloseTrade) — previously these were two
-  // independent writes (Trade → CLOSED, then a separate wallet credit), and
-  // a crash in between left a trade permanently CLOSED with its margin+PnL
-  // never paid out, invisible to hydrate() since it only restores OPEN
-  // trades. LIVE mode has no internal wallet to credit, so it just claims.
   const closeFields = {
     exitPrice: safeExitPrice, pnl: totalNetPnl, grossPnl: totalGrossPnl,
     feeCost: Number.isFinite(feeCost) ? feeCost : 0,
@@ -1258,4 +1535,35 @@ async function handleExit(
   }
 
   paper.removePosition(userId, symbol, mode, accountType);
+  console.log(`[PAPER_POSITION_CLOSED] symbol=${symbol} side=${pos.side} qty=${closeQty} exitPrice=${safeExitPrice} netPnl=${totalNetPnl.toFixed(4)} reason=${reason}`);
+
+  // 🛡️ Resolve outcome in ForwardTelemetryStore if decisionId exists
+  const decId = (pos.meta as any)?.decisionId || (existingTrade?.meta as any)?.decisionId || (existingTrade?.meta as any)?.aqea?.decisionPath?.decisionId;
+  if (decId) {
+    try {
+      const entryTs = existingTrade?.createdAt ? new Date(existingTrade.createdAt).getTime() : (Date.now() - 60000);
+      const exitTs = Date.now();
+      const realizedReturn = (pos.entryPrice > 0 && closeQty > 0) ? totalNetPnl / (pos.entryPrice * closeQty) : 0;
+      ForwardTelemetryStore.resolveOutcome(decId, {
+        resolvedTimestamp: exitTs,
+        entryTimestamp: entryTs,
+        entryPrice: pos.entryPrice,
+        exitTimestamp: exitTs,
+        exitPrice: safeExitPrice,
+        realizedDirection: pos.side === "BUY" ? "LONG" : "SHORT",
+        realizedReturn,
+        realizedPnL: totalNetPnl,
+        outcome: totalNetPnl > 0 ? "WIN" : (totalNetPnl < 0 ? "LOSS" : "BREAKEVEN"),
+        directionCorrect: totalNetPnl > 0,
+        fees: feeCost,
+        slippage: slippageCost,
+        holdingDurationMs: Math.max(1, exitTs - entryTs),
+        mfe: 0,
+        mae: 0
+      });
+      console.log(`[OUTCOME_RESOLVED] decisionId=${decId} outcome=${totalNetPnl > 0 ? "WIN" : (totalNetPnl < 0 ? "LOSS" : "BREAKEVEN")} pnl=${totalNetPnl.toFixed(4)}`);
+    } catch (resErr) {
+      console.warn(`[auto] Failed to resolve forward outcome for ${decId}:`, resErr);
+    }
+  }
 }

@@ -84,10 +84,13 @@ export type ExecMode = "AUTO" | "MANUAL";
 export interface Position {
   id: string;
   symbol: string;
-  side: "BUY" | "SELL";
+  side: "BUY" | "SELL" | "LONG" | "SHORT" | string;
   qty: number;
   entry: number;
+  markPrice?: number;
+  margin?: number;
   pnl: number;
+  unrealisedPnlPct?: number;
   strategy?: string;
   sl?: number;
   tp?: number;
@@ -148,19 +151,33 @@ export interface SpectralRegimeReport {
 /* ── Store shape ──────────────────────────────────────── */
 
 // Helper to map backend format (quantity/entryPrice) to UI format (qty/entry)
-const mapBackendPosition = (p: any): Position => ({
-  id: p._id || p.id,
-  symbol: p.symbol,
-  side: p.side,
-  qty: p.quantity ?? p.qty ?? 0,
-  entry: p.entryPrice ?? p.entry ?? 0,
-  pnl: p.pnl ?? 0,
-  strategy: p.strategy,
-  sl: p.sl,
-  tp: p.tp,
-  leverage: p.leverage || 1,
-  accountType: p.accountType,
-});
+const mapBackendPosition = (p: any): Position => {
+  const entry = p.entryPrice ?? p.entry ?? 0;
+  const qty = p.quantity ?? p.qty ?? 0;
+  const lev = p.leverage ? Number(p.leverage) : 1;
+  const notional = entry * qty;
+  const margin = p.margin ?? (lev > 0 ? notional / lev : notional);
+  const markPrice = p.markPrice ?? p.currentPrice ?? entry;
+  const pnl = p.pnl ?? p.unrealisedPnl ?? 0;
+  const unrealisedPnlPct = p.unrealisedPnlPct ?? (margin > 0 ? (pnl / margin) * 100 : 0);
+
+  return {
+    id: p._id || p.id || p.tradeId,
+    symbol: p.symbol,
+    side: p.side,
+    qty,
+    entry,
+    markPrice,
+    margin,
+    pnl,
+    unrealisedPnlPct,
+    strategy: p.strategy,
+    sl: p.sl,
+    tp: p.tp,
+    leverage: lev,
+    accountType: p.accountType,
+  };
+};
 
 const isAuthError = (err: any) => {
   const message = err?.message?.toString().toLowerCase() ?? "";
@@ -1484,12 +1501,45 @@ function setupSocketListeners(
         // Ensure robust fallbacks for fields
         const entry = pos.entry ?? (pos as any).entryPrice ?? 0;
         const qty = pos.qty ?? (pos as any).quantity ?? 0;
+        const lev = pos.leverage ? Number(pos.leverage) : 1;
+        const isLong = pos.side === "BUY" || pos.side === "LONG";
 
-        const pnl = pos.side === "BUY"
+        const grossPnl = isLong
           ? (price - entry) * qty
           : (entry - price) * qty;
 
-        return { ...pos, pnl: +pnl.toFixed(4) };
+        const isFutures = pos.accountType === "FUTURES" || (!pos.accountType && data.isFutures);
+        const entryFee = isFutures ? entry * qty * 0.0004 : 0;
+        const exitFee = isFutures ? price * qty * 0.0004 : 0;
+        const netPnl = isFutures ? (grossPnl - entryFee - exitFee) : grossPnl;
+
+        const notional = entry * qty;
+        const margin = lev > 0 ? notional / lev : notional;
+        const pnlPct = margin > 0 ? (netPnl / margin) * 100 : 0;
+
+        // 🛡️ Forensic position telemetry trace on live tick
+        console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
+          symbol: pos.symbol,
+          side: isLong ? "LONG" : "SHORT",
+          quantity: qty,
+          entryPrice: entry,
+          markPrice: price,
+          leverage: lev,
+          notional: Number(notional.toFixed(4)),
+          margin: Number(margin.toFixed(4)),
+          unrealizedPnl: Number(netPnl.toFixed(4)),
+          pnlPercent: Number(pnlPct.toFixed(4)),
+          timestamp: Date.now(),
+          source: "FRONTEND_SOCKET_TICK"
+        })}`);
+
+        return { 
+          ...pos, 
+          markPrice: price,
+          pnl: +netPnl.toFixed(4),
+          margin: +margin.toFixed(4),
+          unrealisedPnlPct: +pnlPct.toFixed(4)
+        };
       });
 
       const tickerData = { ...st.tickerData, [data.symbol]: data };

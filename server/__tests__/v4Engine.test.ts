@@ -13,7 +13,7 @@ import { ContinuousLearningService } from "../src/services/v4/continuousLearning
 describe("AAlgolakshmi V4 Institutional Quantitative Engine (15 Modules)", () => {
   beforeAll(async () => {
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
   });
 
   afterAll(async () => {

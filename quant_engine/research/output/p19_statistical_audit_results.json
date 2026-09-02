@@ -1,0 +1,321 @@
+{
+  "dataset_audit": {
+    "total_bars_per_symbol": 14919,
+    "test_partition_bars": 2175,
+    "bar_level_signals_count": 21,
+    "bar_level_win_rate_pct": 100.0,
+    "independent_trade_episodes_count": 9,
+    "independent_trade_win_rate_pct": 33.33,
+    "effective_sample_size_factor": 0.429
+  },
+  "statistical_confidence_intervals": {
+    "sample_size": 9,
+    "wins": 3,
+    "losses": 6,
+    "win_rate_point_pct": 33.33,
+    "wilson_ci_95": [
+      12.06,
+      64.58
+    ],
+    "clopper_pearson_ci_95": [
+      7.49,
+      70.07
+    ],
+    "bootstrap_ci_95_win_rate": [
+      11.11,
+      66.67
+    ],
+    "bootstrap_ci_95_net_ev": [
+      -0.0854,
+      0.0402
+    ]
+  },
+  "economics": {
+    "profit_factor": 0.53,
+    "avg_net_ev_pct": -0.0264,
+    "max_drawdown_pct": 0.18,
+    "friction_floor_bps": 15
+  },
+  "precision_coverage_frontier": [
+    {
+      "confidence_threshold": 0.5,
+      "independent_trades_count": 14,
+      "trade_coverage_pct": 7.72,
+      "win_rate_pct": 21.43,
+      "profit_factor": 0.33,
+      "net_ev_pct": -0.0402,
+      "max_drawdown_pct": 0.29,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.55,
+      "independent_trades_count": 13,
+      "trade_coverage_pct": 7.17,
+      "win_rate_pct": 23.08,
+      "profit_factor": 0.38,
+      "net_ev_pct": -0.0348,
+      "max_drawdown_pct": 0.25,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.6,
+      "independent_trades_count": 13,
+      "trade_coverage_pct": 7.17,
+      "win_rate_pct": 23.08,
+      "profit_factor": 0.38,
+      "net_ev_pct": -0.0348,
+      "max_drawdown_pct": 0.25,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.65,
+      "independent_trades_count": 11,
+      "trade_coverage_pct": 6.07,
+      "win_rate_pct": 27.27,
+      "profit_factor": 0.53,
+      "net_ev_pct": -0.0231,
+      "max_drawdown_pct": 0.17,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.7,
+      "independent_trades_count": 10,
+      "trade_coverage_pct": 5.52,
+      "win_rate_pct": 20.0,
+      "profit_factor": 0.37,
+      "net_ev_pct": -0.0338,
+      "max_drawdown_pct": 0.17,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.75,
+      "independent_trades_count": 9,
+      "trade_coverage_pct": 4.97,
+      "win_rate_pct": 33.33,
+      "profit_factor": 0.62,
+      "net_ev_pct": -0.0147,
+      "max_drawdown_pct": 0.1,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.8,
+      "independent_trades_count": 9,
+      "trade_coverage_pct": 4.97,
+      "win_rate_pct": 33.33,
+      "profit_factor": 0.62,
+      "net_ev_pct": -0.0146,
+      "max_drawdown_pct": 0.1,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.85,
+      "independent_trades_count": 9,
+      "trade_coverage_pct": 4.97,
+      "win_rate_pct": 33.33,
+      "profit_factor": 0.53,
+      "net_ev_pct": -0.0264,
+      "max_drawdown_pct": 0.15,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.9,
+      "independent_trades_count": 9,
+      "trade_coverage_pct": 4.97,
+      "win_rate_pct": 22.22,
+      "profit_factor": 0.41,
+      "net_ev_pct": -0.0373,
+      "max_drawdown_pct": 0.15,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.92,
+      "independent_trades_count": 6,
+      "trade_coverage_pct": 3.31,
+      "win_rate_pct": 33.33,
+      "profit_factor": 0.28,
+      "net_ev_pct": -0.0317,
+      "max_drawdown_pct": 0.08,
+      "is_pareto_optimal": false
+    },
+    {
+      "confidence_threshold": 0.95,
+      "independent_trades_count": 2,
+      "trade_coverage_pct": 1.1,
+      "win_rate_pct": 50.0,
+      "profit_factor": 1.99,
+      "net_ev_pct": 0.0535,
+      "max_drawdown_pct": 0.04,
+      "is_pareto_optimal": false
+    }
+  ],
+  "cnn_mamba_interactions": {
+    "CNN_LONG_MAMBA_LONG": {
+      "count": 8,
+      "win_rate": 25.0,
+      "net_ev": -0.013
+    },
+    "CNN_LONG_MAMBA_HOLD": {
+      "count": 5,
+      "win_rate": 0.0,
+      "net_ev": -0.107
+    },
+    "CNN_LONG_MAMBA_SHORT": {
+      "count": 0,
+      "win_rate": 0.0,
+      "net_ev": 0.0
+    },
+    "CNN_SHORT_MAMBA_SHORT": {
+      "count": 7,
+      "win_rate": 42.9,
+      "net_ev": -0.009
+    },
+    "CNN_SHORT_MAMBA_HOLD": {
+      "count": 4,
+      "win_rate": 25.0,
+      "net_ev": -0.021
+    },
+    "CNN_SHORT_MAMBA_LONG": {
+      "count": 0,
+      "win_rate": 0.0,
+      "net_ev": 0.0
+    }
+  },
+  "calibration": {
+    "ece_pct": 24.0,
+    "brier_score": 0.0771,
+    "bins": [
+      {
+        "bin_range": "0.50 - 0.60",
+        "sample_count": 8,
+        "avg_predicted_p_tp": 54.52,
+        "empirical_accuracy": 100.0,
+        "calibration_error": 45.48
+      },
+      {
+        "bin_range": "0.60 - 0.70",
+        "sample_count": 14,
+        "avg_predicted_p_tp": 65.3,
+        "empirical_accuracy": 100.0,
+        "calibration_error": 34.7
+      },
+      {
+        "bin_range": "0.70 - 0.80",
+        "sample_count": 18,
+        "avg_predicted_p_tp": 75.61,
+        "empirical_accuracy": 100.0,
+        "calibration_error": 24.39
+      },
+      {
+        "bin_range": "0.80 - 0.90",
+        "sample_count": 23,
+        "avg_predicted_p_tp": 85.38,
+        "empirical_accuracy": 100.0,
+        "calibration_error": 14.62
+      },
+      {
+        "bin_range": "0.90 - 1.00",
+        "sample_count": 7,
+        "avg_predicted_p_tp": 92.09,
+        "empirical_accuracy": 100.0,
+        "calibration_error": 7.91
+      }
+    ]
+  },
+  "symbol_generalization": {
+    "ADAUSDT": {
+      "symbol": "ADAUSDT",
+      "test_bars": 2175,
+      "independent_trades": 158,
+      "win_rate_pct": 88.0,
+      "net_ev_pct": 0.077,
+      "profit_factor": 37.11
+    },
+    "BNBUSDT": {
+      "symbol": "BNBUSDT",
+      "test_bars": 2175,
+      "independent_trades": 17,
+      "win_rate_pct": 17.6,
+      "net_ev_pct": -0.044,
+      "profit_factor": 0.26
+    },
+    "BTCUSDT": {
+      "symbol": "BTCUSDT",
+      "test_bars": 2175,
+      "independent_trades": 13,
+      "win_rate_pct": 15.4,
+      "net_ev_pct": -0.057,
+      "profit_factor": 0.13
+    },
+    "DOGEUSDT": {
+      "symbol": "DOGEUSDT",
+      "test_bars": 2175,
+      "independent_trades": 95,
+      "win_rate_pct": 44.2,
+      "net_ev_pct": 0.014,
+      "profit_factor": 1.64
+    },
+    "ETHUSDT": {
+      "symbol": "ETHUSDT",
+      "test_bars": 2175,
+      "independent_trades": 30,
+      "win_rate_pct": 20.0,
+      "net_ev_pct": -0.033,
+      "profit_factor": 0.41
+    },
+    "SOLUSDT": {
+      "symbol": "SOLUSDT",
+      "test_bars": 2175,
+      "independent_trades": 116,
+      "win_rate_pct": 56.9,
+      "net_ev_pct": 0.035,
+      "profit_factor": 3.84
+    },
+    "XRPUSDT": {
+      "symbol": "XRPUSDT",
+      "test_bars": 2175,
+      "independent_trades": 60,
+      "win_rate_pct": 41.7,
+      "net_ev_pct": 0.0,
+      "profit_factor": 1.02
+    }
+  },
+  "governance_criteria": {
+    "criterion_1_min_100_samples": {
+      "passed": false,
+      "actual": 9,
+      "required": 100
+    },
+    "criterion_2_positive_net_ev": {
+      "passed": false,
+      "actual": -0.0263736443327225,
+      "required": "> 0.0%"
+    },
+    "criterion_3_ci_lower_bound": {
+      "passed": false,
+      "actual": 12.06,
+      "required": "> 50.0%"
+    },
+    "criterion_4_ece_below_10": {
+      "passed": false,
+      "actual": 24.0,
+      "required": "<= 10.0%"
+    },
+    "criterion_5_max_drawdown_below_5": {
+      "passed": true,
+      "actual": 0.18,
+      "required": "<= 5.0%"
+    },
+    "criterion_6_zero_fallbacks": {
+      "passed": true,
+      "actual": "0 fallbacks",
+      "required": "0"
+    },
+    "criterion_7_all_tests_pass": {
+      "passed": true,
+      "actual": "58/58 passed",
+      "required": "100%"
+    },
+    "all_criteria_met": false,
+    "live_promotion_blocked": true
+  }
+}

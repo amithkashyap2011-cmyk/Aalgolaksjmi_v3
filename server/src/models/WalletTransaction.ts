@@ -17,7 +17,7 @@ export interface IWalletTransaction extends Document {
   p2pCounterparty?: string; // other user email for P2P
   p2pPrice?: number;       // INR per USDT for P2P
   note?: string;
-  accountType?: "SPOT" | "FUTURES";
+  accountType?: "SPOT" | "FUTURES" | "INDIAN_NSE" | "INDIAN_BSE" | "INDIAN_NIFTY50" | "INDIAN_FNO";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,10 +35,13 @@ const WalletTransactionSchema = new Schema<IWalletTransaction>(
     p2pCounterparty: { type: String },
     p2pPrice: { type: Number },
     note: { type: String },
-    accountType: { type: String, enum: ["SPOT", "FUTURES"], default: "FUTURES" },
+    accountType: { type: String, enum: ["SPOT", "FUTURES", "INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"], default: "FUTURES" },
   },
   { timestamps: true },
 );
+
+WalletTransactionSchema.index({ userId: 1, type: 1, status: 1, accountType: 1 });
+WalletTransactionSchema.index({ userId: 1, createdAt: -1 });
 
 export const WalletTransaction = mongoose.model<IWalletTransaction>(
   "WalletTransaction",

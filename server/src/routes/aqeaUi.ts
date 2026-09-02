@@ -18,8 +18,10 @@ import { WhaleFlowEngine } from "../services/aqea/whaleFlowEngine.js";
 import { NewsRiskEngine } from "../services/aqea/newsRiskEngine.js";
 import { ShadowEngine } from "../services/aqea/shadowEngine.js";
 import { ReplayEngine } from "../services/aqea/replayEngine.js";
-import { SymbolIntelligenceEngine } from "../services/aqea/symbolIntelligence.js";
 import * as tradeGovernor from "../services/aqea/tradeGovernor.js";
+import { ModelAuthorityRegistry } from "../services/aqea/autonomy/ModelAuthorityRegistry.js";
+import { ForwardTelemetryStore } from "../services/aqea/ensemble/ForwardTelemetryStore.js";
+import { AQEAAutonomousControlPlane } from "../services/aqea/autonomy/AQEAAutonomousControlPlane.js";
 
 const router = express.Router();
 
@@ -65,7 +67,7 @@ router.get("/dashboard", async (req, res) => {
 
     // ── Shared Constants ──
     const SENTINEL_REASONS = new Set(["SENTINEL_AUTO_PURGE", "SENTINEL_BANKRUPTCY_CLEAR", "SENTINEL_INFLATION_CLEAR", "SENTINEL_LIQUIDATION"]);
-    const INDIAN_ACCOUNT_TYPES = ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50"];
+    const INDIAN_ACCOUNT_TYPES = ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO", "INDIAN_EQUITY"];
 
     // ── Helper: compute per-domain metrics from a set of trades & wallets ──
     function computeDomainMetrics(
@@ -197,23 +199,39 @@ router.get("/dashboard", async (req, res) => {
 
     // ── 4. Indian Stock Wallets ──
     const indianNseBalance = paper.getWallet(userId, "PAPER", "INDIAN_NSE").get("INR") ?? 0;
+    const indianBseBalance = paper.getWallet(userId, "PAPER", "INDIAN_BSE").get("INR") ?? 0;
     const indianNiftyBalance = paper.getWallet(userId, "PAPER", "INDIAN_NIFTY50").get("INR") ?? 0;
 
-    let indianOpenPnlEquity = 0, indianNotionalEquity = 0, indianInvestedEquity = 0;
-    let indianOpenPnlFno = 0, indianNotionalFno = 0, indianInvestedFno = 0;
+    let indianInvestedNse = 0, indianInvestedBse = 0, indianInvestedNifty = 0;
+    let indianOpenPnlNse = 0, indianOpenPnlBse = 0, indianOpenPnlNifty = 0;
+    let indianNotionalNse = 0, indianNotionalBse = 0, indianNotionalNifty = 0;
+
     indianOpen.forEach(t => {
       const notional = t.quantity * t.entryPrice;
       const acct = String(t.accountType || "INDIAN_NSE");
+      const margin = notional / (t.leverage || 1);
+      const pnl = t.pnl || 0;
       if (acct === "INDIAN_NIFTY50" || acct === "INDIAN_FNO") {
-        indianNotionalFno += notional;
-        indianInvestedFno += notional / (t.leverage || 1);
-        indianOpenPnlFno += (t.pnl || 0);
+        indianNotionalNifty += notional;
+        indianInvestedNifty += margin;
+        indianOpenPnlNifty += pnl;
+      } else if (acct === "INDIAN_BSE") {
+        indianNotionalBse += notional;
+        indianInvestedBse += margin;
+        indianOpenPnlBse += pnl;
       } else {
-        indianNotionalEquity += notional;
-        indianInvestedEquity += notional / (t.leverage || 1);
-        indianOpenPnlEquity += (t.pnl || 0);
+        indianNotionalNse += notional;
+        indianInvestedNse += margin;
+        indianOpenPnlNse += pnl;
       }
     });
+
+    const indianInvestedEquity = indianInvestedNse + indianInvestedBse;
+    const indianInvestedFno = indianInvestedNifty;
+    const indianOpenPnlEquity = indianOpenPnlNse + indianOpenPnlBse;
+    const indianOpenPnlFno = indianOpenPnlNifty;
+    const indianNotionalEquity = indianNotionalNse + indianNotionalBse;
+    const indianNotionalFno = indianNotionalNifty;
 
     // ── 5. Compute per-domain metrics ──
     const cryptoMetrics = computeDomainMetrics(
@@ -225,7 +243,7 @@ router.get("/dashboard", async (req, res) => {
     );
     const indianMetrics = computeDomainMetrics(
       indianClosed, indianOpen, indianAllTrades,
-      { spot: indianNseBalance, futures: indianNiftyBalance },
+      { spot: indianNseBalance + indianBseBalance, futures: indianNiftyBalance },
       { spot: indianOpenPnlEquity, futures: indianOpenPnlFno },
       { spot: indianInvestedEquity, futures: indianInvestedFno },
       { spot: indianNotionalEquity, futures: indianNotionalFno },
@@ -327,9 +345,20 @@ router.get("/dashboard", async (req, res) => {
         ...cryptoMetrics,
         // Override with combined/filtered values
         totalEquity: summarySource.totalEquity,
+        totalEquityInr: parseFloat((combinedTotalEquity * inrRate).toFixed(2)),
         dailyPnL: summarySource.dailyPnL,
         openPnL: summarySource.openPnL,
+        currency: "USD",
         inrRate,
+        invested: {
+          total: parseFloat((cryptoInvestedSpot + cryptoLockedMargin + ((indianInvestedEquity + indianInvestedFno) / inrRate)).toFixed(2)),
+          spot: cryptoInvestedSpot,
+          futures: cryptoLockedMargin,
+        },
+        balances: {
+          spot: cryptoSpotBalance,
+          futures: cryptoFuturesBalance,
+        },
         regime: {
            direction: regimeDirection,
            strength: regimeStrength,
@@ -338,17 +367,43 @@ router.get("/dashboard", async (req, res) => {
            riskState
         }
       },
-      // ── NEW: Separate domain metrics ──
+      // ── Separate domain metrics ──
       domains: {
         crypto: {
           ...cryptoMetrics,
           currency: "USD",
           inrRate,
+          balances: {
+            spot: cryptoSpotBalance,
+            futures: cryptoFuturesBalance,
+          },
+          invested: {
+            spot: cryptoInvestedSpot,
+            futures: cryptoLockedMargin,
+            total: cryptoInvestedSpot + cryptoLockedMargin,
+          },
+          openPositions: cryptoOpen.length,
         },
         indianStock: {
           ...indianMetrics,
           currency: "INR",
           inrRate,
+          balances: {
+            nse: indianNseBalance,
+            bse: indianBseBalance,
+            nifty50: indianNiftyBalance,
+            spot: indianNseBalance + indianBseBalance,
+            futures: indianNiftyBalance,
+          },
+          invested: {
+            nse: indianInvestedNse,
+            bse: indianInvestedBse,
+            nifty50: indianInvestedNifty,
+            spot: indianInvestedEquity,
+            futures: indianInvestedFno,
+            total: indianInvestedEquity + indianInvestedFno,
+          },
+          openPositions: indianOpen.length,
         },
       },
       status: {
@@ -806,11 +861,9 @@ router.get("/header", async (req, res) => {
        // price = 0 means "unavailable" — the ribbon renders a dash. Never
        // substitute a made-up number here: a trading UI showing a fabricated
        // price is worse than showing none.
-       let price = 0;
-       try {
-          price = await binance.getTickerPrice(s, false);
-       } catch (err) {
-          console.warn(`[header] ticker unavailable for ${s} — sending price=0`);
+       let price = binance.getTickerPriceSync(s, false) || 0;
+       if (!price) {
+          try { price = await binance.getTickerPrice(s, false); } catch (err) { price = 0; }
        }
        
        let decision: "LONG" | "SHORT" | "HOLD" = "HOLD";
@@ -964,10 +1017,309 @@ router.post("/models/toggles", async (req: express.Request, res: express.Respons
       try { registry.setModelEnabled(regId, Boolean(enabled)); } catch {}
     }
 
+    // Also sync canonical ModelAuthorityRegistry Layer 1 permission
+    const canonicalMap: Record<string, string> = {
+      cnn: "CNN_1D",
+      ppo: "PPO_EXECUTION",
+      transformer: "TRANSFORMER_MICRO",
+      mamba: "MAMBA",
+      lnn: "XLSTM",
+      orderFlow: "ORDER_FLOW_CVD",
+      smartMoney: "SMC_INSTITUTIONAL",
+      gayatri: "GAYATRI_24_SIGNAL",
+      ohmkara: "OHMKARA_528HZ",
+      lakshmi: "AARYAN_MOMENTUM",
+    };
+    const canonId = canonicalMap[modelKey];
+    if (canonId) {
+      try {
+        ModelAuthorityRegistry.initialize();
+        ModelAuthorityRegistry.setAdminPermission(canonId, Boolean(enabled));
+      } catch {}
+    }
+
     res.json({
       success: true,
       message: `Model ${modelKey} set to ${enabled ? "ON" : "OFF"}`,
       settings,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/model-authorities
+ * Observability Console: Canonical model authority table showing Layer 1 Admin Permission,
+ * Layer 2 AI Runtime Status, Effective Weight, ΔEV, ECE, Correlation, and Reason.
+ */
+router.get("/model-authorities", (_req, res) => {
+  try {
+    ModelAuthorityRegistry.initialize();
+    const models = ModelAuthorityRegistry.getAllModels();
+    const families = ModelAuthorityRegistry.getAllSignalFamilies();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      models,
+      signalFamilies: families
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /aqea-ui/model-permission
+ * Layer 1 Admin Permission control: Toggles adminAllowed boundary without overriding AI runtime logic.
+ */
+router.post("/model-permission", (req, res) => {
+  try {
+    const { modelId, allowed } = req.body;
+    if (!modelId || allowed === undefined) {
+      return res.status(400).json({ error: "modelId and allowed required" });
+    }
+    ModelAuthorityRegistry.initialize();
+    const success = ModelAuthorityRegistry.setAdminPermission(modelId, Boolean(allowed));
+    if (!success) {
+      return res.status(404).json({ error: `Model ${modelId} not found in canonical registry` });
+    }
+    const updatedModel = ModelAuthorityRegistry.getModel(modelId);
+    res.json({
+      success: true,
+      message: `Layer 1 permission for ${modelId} set to ${allowed ? "ALLOWED" : "DISALLOWED"}`,
+      model: updatedModel
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/signal-families
+ * Observability Console: Evidence families and caps.
+ */
+router.get("/signal-families", (_req, res) => {
+  try {
+    ModelAuthorityRegistry.initialize();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      families: ModelAuthorityRegistry.getAllSignalFamilies()
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/autonomous-decisions
+ * Machine-readable decision audit log with full explanatory transparency.
+ */
+router.get("/autonomous-decisions", (req, res) => {
+  try {
+    const limit = Math.min(100, Number(req.query.limit) || 20);
+    const domain = (req.query.domain as string) || "ALL";
+    const allDecisions = ForwardTelemetryStore.getDecisions();
+    const records = allDecisions.slice(-limit);
+    const filtered = domain === "ALL" ? records : records.filter((r: any) => r.marketDomain === domain);
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      count: filtered.length,
+      decisions: filtered
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/model-health-scores
+ * Observability Console: Composite multi-metric health score table for all models.
+ */
+router.get("/model-health-scores", (_req, res) => {
+  try {
+    ModelAuthorityRegistry.initialize();
+    const scores = ModelAuthorityRegistry.getAllModelHealthScores();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      count: scores.length,
+      scores
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/authority-events
+ * Observability Console: Immutable audit log of all model authority state transitions.
+ */
+router.get("/authority-events", (req, res) => {
+  try {
+    const limit = Math.min(100, Number(req.query.limit) || 50);
+    const events = ModelAuthorityRegistry.getAuthorityEvents().slice(-limit);
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      count: events.length,
+      events
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/data-provenance
+ * Observability Console: Data provenance firewall and validation state metadata.
+ */
+router.get("/data-provenance", (_req, res) => {
+  try {
+    const provenance = ForwardTelemetryStore.getDataProvenanceSummary();
+    const validationState = ForwardTelemetryStore.getValidationState();
+    const forwardCount = ForwardTelemetryStore.getForwardOOSCount();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      validationState,
+      forwardOOSCount: forwardCount,
+      isLivePromotionPermitted: ForwardTelemetryStore.isLivePromotionPermitted(),
+      provenance
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/model-discovery
+ * Observability Console: Model discovery classifications and safe champion status.
+ */
+router.get("/model-discovery", (_req, res) => {
+  try {
+    ModelAuthorityRegistry.initialize();
+    const allModels = ModelAuthorityRegistry.getAllModels();
+    const discoveries = allModels.map(m => ({
+      modelId: m.modelId,
+      name: m.name,
+      status: m.status,
+      classification: ForwardTelemetryStore.classifyModel(m.modelId),
+      championTitle: ForwardTelemetryStore.getChampionStatusTitle(m.modelId),
+      effectiveWeight: m.effectiveWeight,
+      priorWeight: m.basePrior,
+      regimeFitSource: "PRIOR"
+    }));
+    const abstention = ForwardTelemetryStore.getAbstentionStatistics();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      discoveries,
+      abstention
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/evidence-governor
+ * Observability Console: Autonomous forward evidence, effective sample size, and promotion governance report.
+ */
+router.get("/evidence-governor", async (_req, res) => {
+  try {
+    const { AutonomousForwardEvidenceEngine } = await import("../services/aqea/governance/AutonomousForwardEvidenceEngine.js");
+    const report = AutonomousForwardEvidenceEngine.evaluatePromotionGovernance();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      report
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/paper-execution-status
+ * Observability Console: Phase 7.1 autonomous paper experimentation status.
+ */
+router.get("/paper-execution-status", async (_req, res) => {
+  try {
+    const { AutonomousForwardEvidenceEngine } = await import("../services/aqea/governance/AutonomousForwardEvidenceEngine.js");
+    const report = AutonomousForwardEvidenceEngine.evaluatePromotionGovernance();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      paperExperimentationActive: true,
+      livePromotionBlocked: true,
+      validationState: report.currentState,
+      empiricalEvidenceState: report.empiricalEvidenceState,
+      sampleSize: report.evidenceVector
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/heartbeat
+ * Autonomous Health: System heartbeat across 9 critical subsystems.
+ */
+router.get("/heartbeat", async (_req, res) => {
+  try {
+    const { AutonomousForwardEvidenceEngine } = await import("../services/aqea/governance/AutonomousForwardEvidenceEngine.js");
+    const heartbeat = AutonomousForwardEvidenceEngine.getSystemHeartbeat();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      heartbeat
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/daily-report
+ * Autonomous Governance: Daily performance and attribution report.
+ */
+router.get("/daily-report", async (_req, res) => {
+  try {
+    const { AutonomousForwardEvidenceEngine } = await import("../services/aqea/governance/AutonomousForwardEvidenceEngine.js");
+    const report = AutonomousForwardEvidenceEngine.generateDailyAutonomousReport();
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      report
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /aqea-ui/statistical-integrity
+ * Statistical Evidence: Phase 7.2 multi-lag ESS, block bootstrap, and sensitivity validation.
+ */
+router.get("/statistical-integrity", async (_req, res) => {
+  try {
+    const { AutonomousForwardEvidenceEngine } = await import("../services/aqea/governance/AutonomousForwardEvidenceEngine.js");
+    const { ForwardTelemetryStore } = await import("../services/aqea/ensemble/ForwardTelemetryStore.js");
+
+    const resolved = ForwardTelemetryStore.getResolvedRecords();
+    const returns = resolved.map(r => r.outcome?.realizedReturn || 0);
+
+    const sensitivity = AutonomousForwardEvidenceEngine.evaluateStatisticalSensitivity(returns);
+    const bootstrap = AutonomousForwardEvidenceEngine.performBlockBootstrapValidation(returns, 5, 500);
+
+    res.json({
+      success: true,
+      timestamp: Date.now(),
+      sensitivity,
+      bootstrap
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

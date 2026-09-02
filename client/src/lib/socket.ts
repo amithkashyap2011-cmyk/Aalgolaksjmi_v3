@@ -75,4 +75,5 @@ export interface TickData {
   volume: string;
   open?: string;
   time: number;
+  isFutures?: boolean;
 }

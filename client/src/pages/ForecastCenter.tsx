@@ -109,8 +109,9 @@ export default function ForecastCenter() {
   const [error, setError]       = useState<string | null>(null);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
 
-  const fetch_ = useCallback(async () => {
-    setLoading(true); setError(null);
+  const fetch_ = useCallback(async (silent = false) => {
+    if (!silent && !data) setLoading(true);
+    setError(null);
     try {
       const url = userId
         ? `/trading/ensemble-report?symbol=${symbol}&interval=${interval}&limit=200&userId=${userId}`
@@ -121,9 +122,17 @@ export default function ForecastCenter() {
       setLastFetch(new Date());
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
-  }, [symbol, interval, userId]);
+  }, [symbol, interval, userId, data]);
 
-  useEffect(() => { fetch_(); }, [fetch_]);
+  useEffect(() => { 
+    fetch_();
+    const timer = window.setInterval(() => {
+      void fetch_(true);
+    }, 15000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [fetch_]);
 
   const models: any[]   = data?.models ?? [];
   const pulse: any      = data?.marketPulse ?? {};
@@ -143,7 +152,7 @@ export default function ForecastCenter() {
   const formatNum = (n: number, dp = 4) => (n == null ? "—" : n.toFixed(dp));
 
   return (
-    <div style={{ background: S.bg, height: "100%", overflowY: "auto", padding: "0" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", background: S.bg, overflowY: "auto", minHeight: "100%" }}>
       <style>{`@keyframes spin{to{transform:rotate(360deg);}}`}</style>
 
       {/* Header */}
@@ -154,20 +163,20 @@ export default function ForecastCenter() {
         </div>
 
         {/* Symbol */}
-        <select value={symbol} onChange={(e) => setSymbol(e.target.value)} style={{ padding: "4px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: 700, background: "#1e293b", border: `1px solid ${S.border}`, color: S.text, outline: "none", cursor: "pointer" }}>
+        <select value={symbol} onChange={(e) => { setSymbol(e.target.value); setData(null); }} style={{ padding: "4px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: 700, background: "#1e293b", border: `1px solid ${S.border}`, color: S.text, outline: "none", cursor: "pointer" }}>
           {SYMBOLS.map((s) => <option key={s}>{s}</option>)}
         </select>
 
         {/* Interval */}
         <div style={{ display: "flex", gap: "3px" }}>
           {INTERVALS.map((iv) => (
-            <button key={iv} onClick={() => setInterval(iv)} style={{ padding: "3px 8px", borderRadius: "4px", fontSize: "10px", fontWeight: 700, border: "none", cursor: "pointer", background: interval === iv ? S.purple : "rgba(255,255,255,0.05)", color: interval === iv ? "#fff" : S.muted }}>
+            <button key={iv} onClick={() => { setInterval(iv); setData(null); }} style={{ padding: "3px 8px", borderRadius: "4px", fontSize: "10px", fontWeight: 700, border: "none", cursor: "pointer", background: interval === iv ? S.purple : "rgba(255,255,255,0.05)", color: interval === iv ? "#fff" : S.muted }}>
               {iv}
             </button>
           ))}
         </div>
 
-        <button onClick={fetch_} disabled={loading} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "5px", padding: "5px 12px", borderRadius: "6px", border: "none", background: S.purple, color: "#fff", fontSize: "11px", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1 }}>
+        <button onClick={() => fetch_(false)} disabled={loading} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "5px", padding: "5px 12px", borderRadius: "6px", border: "none", background: S.purple, color: "#fff", fontSize: "11px", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1 }}>
           <RefreshCw size={12} style={{ animation: loading ? "spin 0.8s linear infinite" : "none" }} />
           {loading ? "Fetching..." : "Refresh"}
         </button>

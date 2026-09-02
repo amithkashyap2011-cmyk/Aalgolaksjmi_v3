@@ -16,6 +16,8 @@ const mockGetTickerPrice = jest.fn() as any;
 jest.unstable_mockModule("../src/services/binanceService.js", () => ({
   getTickerPriceSync: mockGetTickerPriceSync,
   getTickerPrice: mockGetTickerPrice,
+  isRestBanned: jest.fn().mockReturnValue(false),
+  getRestBanRemainingMs: jest.fn().mockReturnValue(0),
 }));
 
 let enrichOpenTrades: any;

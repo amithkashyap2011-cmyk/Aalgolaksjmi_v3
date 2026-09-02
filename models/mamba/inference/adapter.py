@@ -41,7 +41,10 @@ class MambaInferenceAdapter:
         if not self.model_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {model_path}")
         
-        checkpoint = torch.load(model_path, map_location=device)
+        try:
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(model_path, map_location=device)
         
         # Load or use provided config
         if config is None:
@@ -115,14 +118,31 @@ class MambaInferenceAdapter:
             if len(direction_logits) == 2:
                 # Binary: LONG vs SHORT
                 probs = torch.softmax(direction_logits, dim=0)
-                direction_score = probs[0].item()  # P(LONG)
+                prob_long = float(probs[0].item())
+                prob_short = float(probs[1].item())
+                prob_hold = 0.0
+                direction_score = prob_long  # P(LONG)
+                direction = "LONG" if prob_long > 0.55 else ("SHORT" if prob_short > 0.55 else "HOLD")
             else:
                 # 3-class: LONG, SHORT, SIDEWAYS
                 probs = torch.softmax(direction_logits, dim=0)
-                direction_score = probs[0].item() - probs[1].item() + 0.5  # Normalize to [0, 1]
+                prob_long = float(probs[0].item())
+                prob_short = float(probs[1].item())
+                prob_hold = float(probs[2].item())
+                direction_score = prob_long - prob_short + 0.5  # Normalize to [0, 1]
                 direction_score = max(0.0, min(1.0, direction_score))
+                if prob_long > prob_short and prob_long > prob_hold:
+                    direction = "LONG"
+                elif prob_short > prob_long and prob_short > prob_hold:
+                    direction = "SHORT"
+                else:
+                    direction = "HOLD"
             
             return {
+                "direction": direction,
+                "probLong": float(prob_long),
+                "probShort": float(prob_short),
+                "probHold": float(prob_hold),
                 "directionScore": float(direction_score),
                 "predictedMove": float(returns_pred),
                 "confidence": float(confidence),
@@ -134,11 +154,16 @@ class MambaInferenceAdapter:
             print(f"✗ Prediction error: {e}")
             # Return neutral stub on error
             return {
+                "direction": "HOLD",
+                "probLong": 0.3333,
+                "probShort": 0.3333,
+                "probHold": 0.3334,
                 "directionScore": 0.5,
                 "predictedMove": 0.0,
                 "confidence": 0.0,
                 "attentionWeights": None,
                 "modelName": "mamba-v1-error",
+                "error": str(e)
             }
     
     def predict_multi_horizon(self, window: List[List[float]]) -> Dict[int, Dict]:

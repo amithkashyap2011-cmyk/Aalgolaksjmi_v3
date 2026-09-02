@@ -29,14 +29,14 @@ export class AqeaAuditService {
           validUserId = new mongoose.Types.ObjectId("000000000000000000000000");
         }
 
-        await AqeaAudit.create({
+        AqeaAudit.create({
           userId: validUserId,
           symbol,
           component,
           level,
           message,
           data
-        });
+        }).catch(err => console.warn("[AQEA_AUDIT_ERROR]", err));
       }
     } catch (err) {
       console.error("[AQEA_AUDIT_ERROR]", err);

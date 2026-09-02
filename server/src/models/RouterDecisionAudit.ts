@@ -14,7 +14,7 @@ export interface IRouterDecisionAudit extends Document {
 }
 
 const RouterDecisionAuditSchema = new Schema<IRouterDecisionAudit>({
-  timestamp: { type: Date, default: Date.now, index: true },
+  timestamp: { type: Date, default: Date.now },
   symbol: { type: String, required: true, index: true },
   regime: { type: String, required: true, index: true },
   selectedModel: { type: String, required: true, index: true },
@@ -28,5 +28,6 @@ const RouterDecisionAuditSchema = new Schema<IRouterDecisionAudit>({
 
 // Added compound index for efficiency
 RouterDecisionAuditSchema.index({ symbol: 1, timestamp: -1 });
+RouterDecisionAuditSchema.index({ timestamp: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
 
 export const RouterDecisionAudit = mongoose.model<IRouterDecisionAudit>("RouterDecisionAudit", RouterDecisionAuditSchema);

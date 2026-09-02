@@ -34,3 +34,8 @@ class FeatureSchemaV8:
     def normalize(cls, vector: np.ndarray) -> np.ndarray:
         vector = np.nan_to_num(vector, nan=0.0, posinf=0.0, neginf=0.0)
         return (vector - cls.MEANS) / (cls.STDS + 1e-8)
+
+    @classmethod
+    def normalize_window(cls, window: np.ndarray) -> np.ndarray:
+        window = np.nan_to_num(window, nan=0.0, posinf=0.0, neginf=0.0)
+        return (window - cls.MEANS) / (cls.STDS + 1e-8)

@@ -9,7 +9,7 @@ import { ResearchEngineService } from "../src/services/v5_1/researchEngineServic
 describe("AAlgolakshmi V5.1 Institutional Research & Validation Framework", () => {
   beforeAll(async () => {
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
   });
 
   afterAll(async () => {

@@ -13,3 +13,9 @@ export { AqeaTradeAnalytics, type IAqeaTradeAnalytics } from "./AqeaTradeAnalyti
 export { AqeaPerformance, type IAqeaPerformance } from "./AqeaPerformance.js";
 export { AqeaOrderFlowPerformance, type IAqeaOrderFlowPerformance } from "./AqeaOrderFlowPerformance.js";
 export { AqeaSmartMoneyPerformance, type IAqeaSmartMoneyPerformance } from "./AqeaSmartMoneyPerformance.js";
+export { AQEAForwardDecision, type IAQEAForwardDecision, type IModelDecisionBreakdown, type IEnsembleDecisionSummary } from "./AQEAForwardDecision.js";
+export { AQEAForwardOutcome, type IAQEAForwardOutcome, type ICostBreakdown } from "./AQEAForwardOutcome.js";
+export { AQEABiasAudit, type IAQEABiasAudit, type IBiasAuditVector, type IBiasDimensionAudit, type INegativeControlResult, type IPlaceboTestResult } from "./AQEABiasAudit.js";
+export { AQEAAuthoritativeDecision, type IAQEAAuthoritativeDecision, type IModelPredictionRecord } from "./AQEAAuthoritativeDecision.js";
+export { AQEAChampionChallenger, type IChampionChallengerRecord, type ModelLifecycleState } from "./AQEAChampionChallenger.js";
+export { ModelAuthoritySnapshot, type IModelAuthoritySnapshot } from "./ModelAuthoritySnapshot.js";

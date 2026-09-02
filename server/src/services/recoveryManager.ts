@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EnvironmentAuthority } from "./aqea/environmentAuthority.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export class RecoveryManager {
   private static instance: RecoveryManager;
@@ -41,7 +41,7 @@ export class RecoveryManager {
   private logRecoveryTrigger(reason: string) {
     const line = `[${new Date().toISOString()}] [RECOVERY_TRIGGER] Reason: ${reason}\n`;
     try {
-      fs.appendFileSync(path.join(__dirname, "..", "..", "auto_trade.log"), line);
+      fs.appendFileSync(path.join(__moduleDir, "..", "..", "auto_trade.log"), line);
     } catch {}
   }
 
@@ -129,8 +129,8 @@ export class RecoveryManager {
   public logRecovery(event: string) {
     const line = `[${new Date().toISOString()}] [RECOVERY] ${event}\n`;
     try {
-      fs.appendFileSync(path.join(__dirname, "..", "..", "auto_trade.log"), line);
-      fs.appendFileSync(path.join(__dirname, "..", "..", "RECOVERY_MANAGER_REPORT.md"), line);
+      fs.appendFileSync(path.join(__moduleDir, "..", "..", "auto_trade.log"), line);
+      fs.appendFileSync(path.join(__moduleDir, "..", "..", "RECOVERY_MANAGER_REPORT.md"), line);
     } catch {}
   }
 }

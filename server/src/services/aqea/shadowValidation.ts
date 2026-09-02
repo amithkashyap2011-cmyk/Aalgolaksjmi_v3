@@ -12,7 +12,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export interface ShadowOutcome {
   price15m?: number;
@@ -44,7 +44,7 @@ export interface ShadowMetrics {
 }
 
 export class ShadowValidationService {
-  private static REPORT_DIR = path.resolve((process.env.PROJECT_ROOT || path.resolve(__dirname, "../../../")), "docs", "shadow_validation");
+  private static REPORT_DIR = path.resolve((process.env.PROJECT_ROOT || path.resolve(moduleDir, "../../../")), "docs", "shadow_validation");
 
   /**
    * Tracks outcomes for unresolved shadow signals.
@@ -138,7 +138,7 @@ export class ShadowValidationService {
     }).lean();
 
     const metrics = await this.calculateMetrics(signals);
-    const reportPath = path.join((process.env.PROJECT_ROOT || path.resolve(__dirname, "../../../")), `AQEA_SHADOW_DAY_${dayNumber}.md`);
+    const reportPath = path.join((process.env.PROJECT_ROOT || path.resolve(moduleDir, "../../../")), `AQEA_SHADOW_DAY_${dayNumber}.md`);
     
     let content = `# AQEA Shadow Validation — Day ${dayNumber}\n\n`;
     content += `**Timestamp:** ${new Date().toISOString()}\n`;

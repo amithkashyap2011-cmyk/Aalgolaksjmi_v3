@@ -26,16 +26,14 @@ export async function connectIfAvailable(): Promise<boolean> {
     await mongoose.connect(MONGO_URI, {
       serverSelectionTimeoutMS: 1500,
       connectTimeoutMS: 1500,
+      socketTimeoutMS: 5000,
+      maxPoolSize: 10,
     });
     _mongoAvailable = true;
     return true;
   } catch {
     _mongoAvailable = false;
-    // Force-destroy any half-open connection
-    try { mongoose.connection.destroy(); } catch { /* ignore */ }
-    // Disable command buffering globally — any DB operation will throw
-    // immediately instead of hanging for 30s waiting for a connection.
-    mongoose.set("bufferCommands", false);
+    try { await mongoose.disconnect(); } catch { /* ignore */ }
     return false;
   }
 }
@@ -52,7 +50,7 @@ export function isMongoAvailable(): boolean {
  * If MongoDB is not available, the test will return early (pass vacuously).
  */
 export function skipIfNoMongo(): boolean {
-  if (_mongoAvailable === false) return true;
+  if (_mongoAvailable === false || mongoose.connection.readyState !== 1) return true;
   return false;
 }
 

@@ -62,7 +62,7 @@ export default function Positions() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [closingAll, setClosingAll] = useState(false);
-  const { userId, mode, accountType } = useAppStore();
+  const { userId, mode, accountType, livePrices } = useAppStore();
   const { currencyMode, summary } = useDashboardStore();
   const inrRate = summary?.inrRate || 85;
 
@@ -75,8 +75,7 @@ export default function Positions() {
   };
 
   const load = async (silent = false) => {
-    if (!userId) return;
-    if (!silent) setLoading(true);
+    if (!silent && positions.length === 0) setLoading(true);
     try {
       if (tab === "OPEN") {
         const data = await api.getOpenPositions(mode, accountType === "BOTH" ? undefined : accountType);
@@ -87,21 +86,25 @@ export default function Positions() {
       }
       setLoadError(null);
     } catch (e: any) {
-      if (tab === "OPEN") setPositions([]); else setClosed([]);
+      if (positions.length === 0 && closed.length === 0) {
+        if (tab === "OPEN") setPositions([]); else setClosed([]);
+      }
       setLoadError(
         e?.body?.code === "SYSTEM_NOT_READY"
           ? `Trading services are not ready (${e.body.state ?? "starting up"}) — positions can't be loaded yet. Data shown may be empty, not closed.`
           : e?.message || "Failed to load positions",
       );
-    } finally { if (!silent) setLoading(false); }
+    } finally { 
+      setLoading(false); 
+    }
   };
 
   useEffect(() => { load(false); }, [userId, mode, tab, accountType]);
   useEffect(() => {
-    if (!userId || tab !== "OPEN") return;
-    const t = setInterval(() => load(true), 5000); // live PnL refresh (silent)
+    if (tab !== "OPEN") return;
+    const t = setInterval(() => load(true), 4000); // live PnL refresh (silent)
     return () => clearInterval(t);
-  }, [userId, mode, tab]);
+  }, [mode, tab, accountType]);
 
   const handleSaveLevel = async (tradeId: string, patch: { sl?: number; tp?: number }) => {
     await api.updateSlTp({ tradeId, ...patch }).catch(console.error);
@@ -135,7 +138,18 @@ export default function Positions() {
     } finally { setClosingAll(false); }
   };
 
-  const totalPnl = positions.reduce((s, p) => s + (p.pnl ?? p.unrealisedPnl ?? p.unrealizedPnl ?? 0), 0);
+  const totalPnl = positions.reduce((s, p) => {
+    const entry = parseFloat(p.entryPrice ?? p.entry ?? 0);
+    const qty = parseFloat(p.quantity ?? p.positionAmt ?? p.size ?? p.qty ?? 0);
+    const isLong = (p.side ?? "BUY") === "BUY" || p.side === "LONG";
+    const isFutures = (p.accountType ?? "FUTURES") === "FUTURES";
+    const liveMark = livePrices && livePrices[p.symbol] ? parseFloat(String(livePrices[p.symbol])) : parseFloat(p.markPrice ?? p.currentPrice ?? entry);
+    const mark = liveMark > 0 ? liveMark : entry;
+    const grossPnl = isLong ? (mark - entry) * qty : (entry - mark) * qty;
+    const entryFee = isFutures ? entry * qty * 0.0004 : 0;
+    const exitFee = isFutures ? mark * qty * 0.0004 : 0;
+    return s + (isFutures ? (grossPnl - entryFee - exitFee) : grossPnl);
+  }, 0);
 
   return (
     <div style={{ background:BG, minHeight:"100%", padding:16, display:"flex", flexDirection:"column", gap:16 }}>
@@ -223,14 +237,25 @@ export default function Positions() {
                 </thead>
                 <tbody>
                   {positions.map((p, i) => {
-                    const pnl    = parseFloat(p.pnl ?? p.unrealisedPnl ?? p.unrealizedPnl ?? 0);
-                    const pnlPct = parseFloat(p.unrealisedPnlPct ?? p.unrealizedPnlPct ?? 0);
                     const isLong = (p.side ?? "BUY") === "BUY" || p.side === "LONG";
+                    const isFutures = (p.accountType ?? "FUTURES") === "FUTURES";
                     const tradeId = p._id ?? p.tradeId;
-                    const qty    = parseFloat(p.quantity ?? p.positionAmt ?? p.size ?? 0);
-                    const entry  = parseFloat(p.entryPrice ?? 0);
+                    const qty    = parseFloat(p.quantity ?? p.positionAmt ?? p.size ?? p.qty ?? 0);
+                    const entry  = parseFloat(p.entryPrice ?? p.entry ?? 0);
                     const lev    = parseFloat(p.leverage ?? 1) || 1;
-                    const invested = p.margin ? parseFloat(p.margin) : (qty * entry) / lev;
+                    const notional = entry * qty;
+
+                    const liveMark = livePrices && livePrices[p.symbol] ? parseFloat(String(livePrices[p.symbol])) : parseFloat(p.markPrice ?? p.currentPrice ?? entry);
+                    const mark   = liveMark > 0 ? liveMark : entry;
+
+                    const grossPnl = isLong ? (mark - entry) * qty : (entry - mark) * qty;
+                    const entryFee = isFutures ? entry * qty * 0.0004 : 0;
+                    const exitFee = isFutures ? mark * qty * 0.0004 : 0;
+                    const pnl = isFutures ? (grossPnl - entryFee - exitFee) : grossPnl;
+
+                    const invested = p.margin ? parseFloat(p.margin) : (lev > 0 ? notional / lev : notional);
+                    const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
+
                     return (
                       <tr key={tradeId ?? i} style={{ borderBottom:`1px solid ${BORD}` }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(59,130,246,0.04)")}
@@ -248,8 +273,8 @@ export default function Positions() {
                           {showInr && <div style={{ fontSize:9, color:TXT_FAINT }}>{inrText(entry)}</div>}
                         </td>
                         <td style={{ padding:"12px 14px", color:TXT, fontFamily:"monospace" }}>
-                          ${parseFloat(p.markPrice ?? p.currentPrice ?? 0).toLocaleString("en-US", { maximumFractionDigits:8 })}
-                          {showInr && <div style={{ fontSize:9, color:TXT_FAINT }}>{inrText(parseFloat(p.markPrice ?? p.currentPrice ?? 0))}</div>}
+                          ${mark.toLocaleString("en-US", { maximumFractionDigits:8 })}
+                          {showInr && <div style={{ fontSize:9, color:TXT_FAINT }}>{inrText(mark)}</div>}
                         </td>
                         <td style={{ padding:"12px 14px", color:TXT, fontFamily:"monospace", fontWeight:600 }}>
                           ${invested.toLocaleString("en-US", { minimumFractionDigits:2, maximumFractionDigits:2 })}
@@ -268,7 +293,7 @@ export default function Positions() {
                         <td style={{ padding:"12px 14px", color: pnlPct >= 0 ? G : R, fontFamily:"monospace" }}>
                           {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
                         </td>
-                        <td style={{ padding:"12px 14px", color:TXT_FAINT, fontFamily:"monospace" }}>{p.leverage ?? "—"}x</td>
+                        <td style={{ padding:"12px 14px", color:TXT, fontFamily:"monospace", fontWeight:600 }}>{lev}×</td>
                         <td style={{ padding:"12px 14px", textAlign:"center", position:"sticky", right:0, zIndex:1, background:CARD, borderLeft:`1px solid ${BORD}`, boxShadow:"-8px 0 8px -8px rgba(0,0,0,0.45)" }}>
                           <button
                             onClick={() => handleClose(tradeId)}

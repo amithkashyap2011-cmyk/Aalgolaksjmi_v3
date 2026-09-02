@@ -38,11 +38,17 @@ export class OrderFlowEngine {
   // Persistent metrics for CVD tracking
   private static cvdMap = new Map<string, number>();
   private static lastOiMap = new Map<string, number>();
+  private static cache = new Map<string, { result: OrderFlowResult; timestamp: number }>();
 
   /**
    * Performs deep order flow analysis.
    */
   public static async analyze(symbol: string): Promise<OrderFlowResult> {
+    const cached = this.cache.get(symbol.toUpperCase());
+    if (cached && Date.now() - cached.timestamp < 30000) {
+      return cached.result;
+    }
+
     try {
       // 1. Concurrent Data Fetching with individual error handling for robustness
       const results = await Promise.allSettled([
@@ -130,6 +136,7 @@ export class OrderFlowEngine {
         }
       };
 
+      this.cache.set(symbol.toUpperCase(), { result, timestamp: Date.now() });
       return result;
 
     } catch (err: any) {

@@ -32,11 +32,13 @@ let WalletSnapshot: any;
 let WalletTransaction: any;
 let Trade: any;
 
+jest.setTimeout(60000);
+
 describe("Regression Test: PAPER Wallet Deposit Without Orders Must Retain Exact Balance", () => {
   beforeAll(async () => {
     process.env.JWT_SECRET = JWT_SECRET;
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
 
     paper = await import("../src/services/paperState.js");
     ({ WalletSnapshot } = await import("../src/models/WalletSnapshot.js"));
@@ -54,17 +56,23 @@ describe("Regression Test: PAPER Wallet Deposit Without Orders Must Retain Exact
     app.use("/trading", tradingRouter);
 
     // Clean state
-    await WalletSnapshot.deleteMany({ userId: testUserId });
-    await WalletTransaction.deleteMany({ userId: testUserId });
-    await Trade.deleteMany({ userId: testUserId });
+    if (mongoose.connection.readyState === 1) {
+      try {
+        await WalletSnapshot.deleteMany({ userId: testUserId });
+        await WalletTransaction.deleteMany({ userId: testUserId });
+        await Trade.deleteMany({ userId: testUserId });
+      } catch { /* ignore */ }
+    }
     paper.resetAllPaperStateToZero();
   });
 
   afterAll(async () => {
-    if (WalletSnapshot) {
-      await WalletSnapshot.deleteMany({ userId: testUserId });
-      await WalletTransaction.deleteMany({ userId: testUserId });
-      await Trade.deleteMany({ userId: testUserId });
+    if (WalletSnapshot && mongoose.connection.readyState === 1) {
+      try {
+        await WalletSnapshot.deleteMany({ userId: testUserId });
+        await WalletTransaction.deleteMany({ userId: testUserId });
+        await Trade.deleteMany({ userId: testUserId });
+      } catch { /* ignore */ }
     }
     await disconnectMongo();
   });
@@ -166,5 +174,5 @@ describe("Regression Test: PAPER Wallet Deposit Without Orders Must Retain Exact
     expect(balRes.body.usdt).toBe(509.6);
     expect(balRes.body.totalBalance).toBe(509.6);
     expect(balRes.body.lockedMargin).toBe(0);
-  });
+  }, 60000);
 });

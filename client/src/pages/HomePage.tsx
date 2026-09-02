@@ -25,7 +25,7 @@ const A     = "var(--ds-warning)";
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { userId, selectedSymbol } = useAppStore();
+  const { userId, selectedSymbol, livePrices } = useAppStore();
   const { currencyMode, fetchDashboard } = useDashboardStore();
   const summary = useDashboardStore((s) => s.summary) ?? INITIAL_SUMMARY;
   const domains = useDashboardStore((s) => s.domains);
@@ -39,6 +39,8 @@ export default function HomePage() {
 
   const symbol  = selectedSymbol || "BTCUSDT";
   const inrRate = summary.inrRate || 84.0;
+
+
 
   const refresh = async (silent = false) => {
     if (!userId) return;
@@ -301,26 +303,60 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Spot vs Futures Asset Split Bar */}
-        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "12px 14px", border: "1px solid rgba(255,255,255,0.06)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, marginBottom: 6 }}>
-            <span style={{ color: "#38bdf8", display: "flex", alignItems: "center", gap: 6 }}>
-              <span>{isInrDomain ? 'EQUITY (CNC):' : 'SPOT ACCOUNT:'}</span>
-              <span>{showValues ? `${currSymbol}${(balances.spot || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "••••"}</span>
-              <span style={{ color: "#94a3b8", fontSize: 10 }}>(Invested: {currSymbol}{invested.spot.toLocaleString("en-IN", { maximumFractionDigits: 2 })})</span>
-            </span>
-            <span style={{ color: "#c084fc", display: "flex", alignItems: "center", gap: 6 }}>
-              <span>{isInrDomain ? 'F&O (NIFTY):' : 'FUTURES ACCOUNT:'}</span>
-              <span>{showValues ? `${currSymbol}${(balances.futures || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "••••"}</span>
-              <span style={{ color: "#94a3b8", fontSize: 10 }}>(Invested: {currSymbol}{invested.futures.toLocaleString("en-IN", { maximumFractionDigits: 2 })})</span>
-            </span>
-          </div>
+        {/* Domain-specific Account Split Details */}
+        {domainTab === 'indian' ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+            <div style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)", borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#10b981", textTransform: "uppercase" }}>NSE Equity (CNC)</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: "#f8fafc", fontFamily: "monospace", marginTop: 4 }}>
+                {showValues ? `₹${((indianD.balances as any)?.nse ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "••••"}
+              </div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                Invested: ₹{((indianD.invested as any)?.nse ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+              </div>
+            </div>
 
-          <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
-            <div style={{ width: `${spotPct}%`, background: "#38bdf8", transition: "width 0.5s ease" }} />
-            <div style={{ width: `${futPct}%`, background: "#c084fc", transition: "width 0.5s ease" }} />
+            <div style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)", borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#10b981", textTransform: "uppercase" }}>BSE Equity (CNC)</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: "#f8fafc", fontFamily: "monospace", marginTop: 4 }}>
+                {showValues ? `₹${((indianD.balances as any)?.bse ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "••••"}
+              </div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                Invested: ₹{((indianD.invested as any)?.bse ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+              </div>
+            </div>
+
+            <div style={{ background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.25)", borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase" }}>NIFTY50 (F&O)</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: "#f8fafc", fontFamily: "monospace", marginTop: 4 }}>
+                {showValues ? `₹${((indianD.balances as any)?.nifty50 ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "••••"}
+              </div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                Invested: ₹{((indianD.invested as any)?.nifty50 ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "12px 14px", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, marginBottom: 6 }}>
+              <span style={{ color: "#38bdf8", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>SPOT ACCOUNT:</span>
+                <span>{showValues ? `${(balances.spot || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "••••"}</span>
+                <span style={{ color: "#94a3b8", fontSize: 10 }}>(Invested: ${invested.spot.toLocaleString("en-IN", { maximumFractionDigits: 2 })})</span>
+              </span>
+              <span style={{ color: "#c084fc", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>FUTURES ACCOUNT:</span>
+                <span>{showValues ? `${(balances.futures || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "••••"}</span>
+                <span style={{ color: "#94a3b8", fontSize: 10 }}>(Invested: ${invested.futures.toLocaleString("en-IN", { maximumFractionDigits: 2 })})</span>
+              </span>
+            </div>
+
+            <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.08)" }}>
+              <div style={{ width: `${spotPct}%`, background: "#38bdf8", transition: "width 0.5s ease" }} />
+              <div style={{ width: `${futPct}%`, background: "#c084fc", transition: "width 0.5s ease" }} />
+            </div>
+          </div>
+        )}
 
         {/* Domain Split Summary (visible only on "All Markets" tab) */}
         {domainTab === 'all' && (
@@ -476,21 +512,31 @@ export default function HomePage() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${BORD}` }}>
-                  {["Symbol","Side","Size","Entry","Mark","Invested","Gain/Loss","P&L%"].map((h) => (
+                  {["Symbol","Side","Lev","Size","Entry","Mark","Invested","Gain/Loss","P&L%"].map((h) => (
                     <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "var(--ds-text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {positions.map((p, i) => {
-                  const pnl    = parseFloat(p.pnl ?? p.unrealisedPnl ?? p.unrealizedPnl ?? 0);
-                  const pnlPct = parseFloat(p.unrealisedPnlPct ?? p.unrealizedPnlPct ?? 0);
                   const side   = p.side ?? p.positionSide ?? "LONG";
-                  const qty    = parseFloat(p.quantity ?? p.positionAmt ?? p.size ?? 0);
+                  const isLong = side === "BUY" || side === "LONG";
+                  const isFutures = (p.accountType ?? "FUTURES") === "FUTURES";
+                  const qty    = parseFloat(p.quantity ?? p.positionAmt ?? p.size ?? p.qty ?? 0);
                   const entry  = parseFloat(p.entryPrice ?? p.entry ?? 0);
-                  const mark   = parseFloat(p.markPrice ?? p.mark ?? entry);
-                  const lev    = parseFloat(p.leverage ?? 1);
-                  const inv    = (qty * entry) / lev;
+                  const lev    = parseFloat(p.leverage ?? 1) || 1;
+                  const notional = entry * qty;
+
+                  const liveMark = livePrices && livePrices[p.symbol] ? parseFloat(String(livePrices[p.symbol])) : parseFloat(p.markPrice ?? p.mark ?? p.currentPrice ?? entry);
+                  const mark   = liveMark > 0 ? liveMark : entry;
+
+                  const grossPnl = isLong ? (mark - entry) * qty : (entry - mark) * qty;
+                  const entryFee = isFutures ? entry * qty * 0.0004 : 0;
+                  const exitFee = isFutures ? mark * qty * 0.0004 : 0;
+                  const pnl = isFutures ? (grossPnl - entryFee - exitFee) : grossPnl;
+
+                  const inv = p.margin ? parseFloat(p.margin) : (lev > 0 ? notional / lev : notional);
+                  const pnlPct = inv > 0 ? (pnl / inv) * 100 : 0;
 
                   return (
                     <tr key={i} style={{ borderBottom: `1px solid ${BORD}` }}>
@@ -500,6 +546,7 @@ export default function HomePage() {
                           {side}
                         </span>
                       </td>
+                      <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700 }}>{lev}×</td>
                       <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>{qty}</td>
                       <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${entry.toFixed(2)}</td>
                       <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${mark.toFixed(2)}</td>

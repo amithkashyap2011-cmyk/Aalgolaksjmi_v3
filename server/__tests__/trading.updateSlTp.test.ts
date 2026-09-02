@@ -1,4 +1,4 @@
-import { connectIfAvailable, disconnectMongo } from "./helpers/mongoTestHelper.js";
+import { connectIfAvailable, disconnectMongo, skipIfNoMongo } from "./helpers/mongoTestHelper.js";
 import { jest } from '@jest/globals';
 import express from "express";
 import request from "supertest";
@@ -33,13 +33,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (Trade) await Trade.deleteMany({ userId: testUserId });
+  if (Trade && mongoose?.connection?.readyState === 1) await Trade.deleteMany({ userId: testUserId });
   await disconnectMongo();
 });
 
 describe("POST /trading/update-sl-tp", () => {
   it("should update leverage for open position by tradeId and symbol", async () => {
-    if (!Trade) return;
+    if (skipIfNoMongo() || !Trade) return;
 
     const trade = await Trade.create({
       userId: testUserId,
@@ -51,7 +51,12 @@ describe("POST /trading/update-sl-tp", () => {
       mode: "PAPER",
       status: "OPEN",
       accountType: "FUTURES",
-      decisionPath: "TEST"
+      entrySource: "TEST",
+      decisionPath: {},
+      authorizedVotes: {},
+      shadowVotes: {},
+      coreScore: 0,
+      finalScore: 0,
     });
 
     paper.setPosition(testUserId, "DOGEUSDT", "PAPER", {

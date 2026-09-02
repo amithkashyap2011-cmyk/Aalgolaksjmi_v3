@@ -25,6 +25,11 @@ from pathlib import Path
 
 import numpy as np
 import torch
+try:
+    torch.set_num_threads(2)
+    torch.set_num_interop_threads(2)
+except Exception:
+    pass
 import torch.optim as optim
 
 import ppo_replay_buffer

@@ -1,14 +1,14 @@
 # AQEA Shadow Validation — Day 1
 
-**Timestamp:** 2026-08-04T08:06:54.999Z
-**Total Signals:** 6378
+**Timestamp:** 2026-08-22T01:12:48.161Z
+**Total Signals:** 0
 
 ## 1. Prediction Distribution
 | Class | Count | Percentage |
 | :--- | :--- | :--- |
-| LONG | 40 | 0.6% |
-| SHORT | 0 | 0.0% |
-| HOLD | 6338 | 99.4% |
+| LONG | 0 | NaN% |
+| SHORT | 0 | NaN% |
+| HOLD | 0 | NaN% |
 
 ## 2. Accuracy (60m window)
 - **LONG Accuracy:** 0.0%

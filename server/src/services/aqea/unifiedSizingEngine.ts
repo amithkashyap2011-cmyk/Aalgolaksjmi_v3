@@ -68,7 +68,9 @@ export class UnifiedSizingEngine {
     const slPct = (effectiveAtr * 1.5) / Math.max(price, 1);
 
     // 3. Base position size (risk-proportional to balance)
-    const riskAmount = balance * effectiveRiskPct;
+    // In PAPER mode with 0 balance, use standard $10,000 virtual baseline for hypothetical evidence sizing
+    const effectiveBalance = (balance <= 0 && mode === "PAPER") ? 10000 : Math.max(0, balance);
+    const riskAmount = effectiveBalance * effectiveRiskPct;
     let baseSize = slPct > 0 ? riskAmount / slPct : riskAmount * 10;
 
     // 3b. Volatility-Scaled Exposure Cap (VSE) — scales MAX_PORTFOLIO_EXPOSURE by asset relative volatility
@@ -79,7 +81,7 @@ export class UnifiedSizingEngine {
     const dynamicExposureCap = AQEA_CONFIG.MAX_PORTFOLIO_EXPOSURE * volatilityScalar;
 
     // Hard cap: single trade never exceeds dynamic Volatility-Scaled Exposure Cap of account
-    baseSize = Math.min(baseSize, balance * dynamicExposureCap);
+    baseSize = Math.min(baseSize, effectiveBalance * dynamicExposureCap);
 
     // 4. Multipliers
     const heatMul    = this.heatMultiplier(portfolioHeat);
@@ -131,18 +133,22 @@ export class UnifiedSizingEngine {
    * Returns 0 when the system is in a losing streak (Kelly goes negative).
    */
   static async computeRollingKelly(userId: string, mode: "PAPER" | "LIVE"): Promise<number> {
-    const trades = await Trade.find({
-      userId: toValidObjectId(userId),
-      mode,
-      status: "CLOSED",
-    })
-      .sort({ closedAt: -1 })
-      .limit(30)
-      .select("pnl")
-      .lean();
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return AQEA_CONFIG.MAX_RISK_PER_TRADE;
+      }
+      const trades = await Trade.find({
+        userId: toValidObjectId(userId),
+        mode,
+        status: "CLOSED",
+      })
+        .sort({ closedAt: -1 })
+        .limit(30)
+        .select("pnl")
+        .lean();
 
-    // Insufficient history — use conservative default (full 1% risk)
-    if (trades.length < 10) return AQEA_CONFIG.MAX_RISK_PER_TRADE;
+      // Insufficient history — use conservative default (full 1% risk)
+      if (!trades || trades.length < 10) return AQEA_CONFIG.MAX_RISK_PER_TRADE;
 
     const wins   = trades.filter(t => (t.pnl ?? 0) > 0);
     const losses = trades.filter(t => (t.pnl ?? 0) <= 0);
@@ -161,6 +167,9 @@ export class UnifiedSizingEngine {
 
     // Floor at 0 (never risk more than 0), cap at 25% (half-Kelly max = 12.5%)
     return Math.max(0, Math.min(0.25, kelly));
+    } catch {
+      return AQEA_CONFIG.MAX_RISK_PER_TRADE;
+    }
   }
 
   /**
@@ -217,33 +226,51 @@ export class UnifiedSizingEngine {
     balance: number,
     accountType?: "SPOT" | "FUTURES" | string
   ): Promise<number> {
-    if (balance <= 0) return 100; // treat zero balance as max heat
-
-    const query: any = {
-      userId: toValidObjectId(userId),
-      mode,
-      status: "OPEN",
-    };
-
-    if (accountType) {
-      if (accountType === "SPOT") {
-        query.accountType = { $in: ["SPOT", undefined, null] };
-      } else if (accountType === "FUTURES") {
-        query.accountType = "FUTURES";
-      } else {
-        query.accountType = accountType;
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return 0;
       }
+
+      if (balance <= 0) {
+        if (mode === "PAPER") {
+          const query: any = { userId: toValidObjectId(userId), mode, status: "OPEN" };
+          if (accountType) query.accountType = accountType === "SPOT" ? { $in: ["SPOT", undefined, null] } : accountType;
+          const openTrades = await Trade.find(query).select("quantity entryPrice leverage").lean();
+          if (openTrades.length === 0) return 0;
+          const totalMargin = openTrades.reduce((sum, t) => sum + (t.quantity * t.entryPrice) / Math.max(t.leverage || 1, 1), 0);
+          return (totalMargin / 10000) * 100;
+        }
+        return 100; // treat zero balance in LIVE as max heat
+      }
+
+      const query: any = {
+        userId: toValidObjectId(userId),
+        mode,
+        status: "OPEN",
+      };
+
+      if (accountType) {
+        if (accountType === "SPOT") {
+          query.accountType = { $in: ["SPOT", undefined, null] };
+        } else if (accountType === "FUTURES") {
+          query.accountType = "FUTURES";
+        } else {
+          query.accountType = accountType;
+        }
+      }
+
+      const openTrades = await Trade.find(query)
+        .select("quantity entryPrice leverage")
+        .lean();
+
+      const totalMargin = openTrades.reduce(
+        (sum, t) => sum + (t.quantity * t.entryPrice) / Math.max(t.leverage || 1, 1),
+        0
+      );
+
+      return (totalMargin / balance) * 100;
+    } catch {
+      return 0;
     }
-
-    const openTrades = await Trade.find(query)
-      .select("quantity entryPrice leverage")
-      .lean();
-
-    const totalMargin = openTrades.reduce(
-      (sum, t) => sum + (t.quantity * t.entryPrice) / Math.max(t.leverage || 1, 1),
-      0
-    );
-
-    return (totalMargin / balance) * 100;
   }
 }

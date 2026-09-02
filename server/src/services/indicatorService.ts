@@ -505,7 +505,92 @@ export function computeSupertrend(bars: OHLCVol[], period = 10, multiplier = 3):
 }
 
 /* ════════════════════════════════════════════════════════
- *  10.  Snapshot: compute all indicators for N bars
+ *  10.  Kalman Filter (1D Linear State Estimation)
+ * ════════════════════════════════════════════════════════ */
+
+export class StreamingKalmanFilter {
+  private x: number | null = null; // Estimated true price state
+  private p: number = 1.0;          // Estimation error covariance
+  private q: number = 0.001;        // Process noise variance
+  private r: number = 0.05;         // Measurement noise variance
+  private _velocity: number = 0;    // dx/dt estimate
+
+  constructor(processNoise = 0.001, measurementNoise = 0.05) {
+    this.q = processNoise;
+    this.r = measurementNoise;
+  }
+
+  get value(): number | null { return this.x; }
+  get velocity(): number { return this._velocity; }
+
+  update(measurement: number): number {
+    if (this.x === null) {
+      this.x = measurement;
+      return this.x;
+    }
+    const prev = this.x;
+    // 1. Time Update (Predict)
+    this.p += this.q;
+    // 2. Measurement Update (Kalman Gain)
+    const k = this.p / (this.p + this.r);
+    this.x += k * (measurement - this.x);
+    this.p *= (1 - k);
+    this._velocity = this.x - prev;
+    return this.x;
+  }
+}
+
+/* ════════════════════════════════════════════════════════
+ *  11.  Choppiness Index (CHOP) – Fractal Noise Denoising
+ * ════════════════════════════════════════════════════════ */
+
+export class StreamingChoppinessIndex {
+  private ring: RingBuffer<OHLC>;
+  private _value: number | null = null;
+
+  constructor(readonly period = 14) {
+    this.ring = new RingBuffer<OHLC>(period);
+  }
+
+  get value(): number | null { return this._value; }
+
+  update(bar: OHLC): number | null {
+    this.ring.push(bar);
+    if (!this.ring.isFull) return null;
+
+    let sumATR = 0;
+    let maxHigh = -Infinity;
+    let minLow = Infinity;
+
+    for (let i = 0; i < this.period; i++) {
+      const b = this.ring.at(i)!;
+      if (b.high > maxHigh) maxHigh = b.high;
+      if (b.low < minLow) minLow = b.low;
+      
+      const prevClose = i > 0 ? this.ring.at(i - 1)!.close : b.open;
+      const tr = Math.max(
+        b.high - b.low,
+        Math.abs(b.high - prevClose),
+        Math.abs(b.low - prevClose)
+      );
+      sumATR += tr;
+    }
+
+    const highLowDiff = maxHigh - minLow;
+    if (highLowDiff <= 0 || sumATR <= 0) {
+      this._value = 50;
+      return this._value;
+    }
+
+    // Fractal dimension: CHOP = 100 * [log10(sumATR / (maxHigh - minLow)) / log10(period)]
+    const ci = 100 * (Math.log10(sumATR / highLowDiff) / Math.log10(this.period));
+    this._value = Number(Math.max(0, Math.min(100, ci)).toFixed(2));
+    return this._value;
+  }
+}
+
+/* ════════════════════════════════════════════════════════
+ *  12.  Snapshot: compute all indicators for N bars
  * ════════════════════════════════════════════════════════ */
 
 export interface FibLevels {
@@ -527,8 +612,14 @@ export interface IndicatorSnapshot {
   macd: MACDValue | null;
   atr14: number | null;
   adx14: number | null;
+  /** Choppiness Index (0-100). > 61.8 = severe sideways chop, < 38.2 = clean trend */
+  chop14: number | null;
   bollinger: BollingerValue | null;
   stdDev20: number | null;
+  /** Kalman-filtered smoothed price */
+  kalmanPrice?: number | null;
+  /** Kalman estimated velocity */
+  kalmanVelocity?: number | null;
   /** Current close price */
   close: number;
   /** %‑change from previous close */
@@ -565,8 +656,10 @@ export function computeSnapshot(bars: OHLC[]): IndicatorSnapshot {
   const macdCalc = new StreamingMACD();
   const atrCalc = new StreamingATR(14);
   const adxCalc = new StreamingADX(14);
+  const chopCalc = new StreamingChoppinessIndex(14);
   const bollCalc = new StreamingBollinger(20, 2);
   const stdCalc = new StreamingStdDev(20);
+  const kalmanCalc = new StreamingKalmanFilter(0.001, 0.05);
 
   for (const bar of bars) {
     rsiCalc.update(bar.close);
@@ -577,8 +670,10 @@ export function computeSnapshot(bars: OHLC[]): IndicatorSnapshot {
     macdCalc.update(bar.close);
     atrCalc.update(bar);
     adxCalc.update(bar);
+    chopCalc.update(bar);
     bollCalc.update(bar.close);
     stdCalc.update(bar.close);
+    kalmanCalc.update(bar.close);
   }
 
   const last = bars[bars.length - 1];
@@ -615,8 +710,11 @@ export function computeSnapshot(bars: OHLC[]): IndicatorSnapshot {
     macd: macdCalc.value,
     atr14: atrCalc.value,
     adx14: adxCalc.value,
+    chop14: chopCalc.value,
     bollinger: bollCalc.value,
     stdDev20: stdCalc.value,
+    kalmanPrice: kalmanCalc.value,
+    kalmanVelocity: kalmanCalc.velocity,
     close: last.close,
     changePercent,
     fibLevels,

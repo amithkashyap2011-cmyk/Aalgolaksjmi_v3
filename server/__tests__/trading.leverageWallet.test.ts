@@ -1,4 +1,4 @@
-import { connectIfAvailable, disconnectMongo } from "./helpers/mongoTestHelper.js";
+import { connectIfAvailable, disconnectMongo, skipIfNoMongo } from "./helpers/mongoTestHelper.js";
 import { jest } from '@jest/globals';
 import express from "express";
 import request from "supertest";
@@ -17,6 +17,8 @@ const JWT_SECRET = process.env.JWT_SECRET || "test-secret-key";
 const testUserId = new mongoose.Types.ObjectId().toString();
 const token = jwt.sign({ sub: testUserId }, JWT_SECRET);
 
+jest.setTimeout(30000);
+
 let app: express.Express;
 let Trade: any, paper: any;
 
@@ -33,7 +35,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (Trade) await Trade.deleteMany({ userId: testUserId });
+  if (Trade && mongoose?.connection?.readyState === 1) {
+    try { await Trade.deleteMany({ userId: testUserId }); } catch { /* ignore */ }
+  }
   await disconnectMongo();
 });
 
@@ -56,15 +60,20 @@ describe("Leverage change → wallet margin adjustment", () => {
           entryPrice: ENTRY,
           leverage,
           mode: "PAPER",
-          status: "OPEN",
           accountType: "FUTURES",
-          decisionPath: "TEST",
+          status: "OPEN",
+          sl: 550.0,
+          tp: 700.0,
+          entrySource: "TEST",
+          decisionPath: {},
+          authorizedVotes: {},
+          shadowVotes: {},
+          coreScore: 0,
+          finalScore: 0,
         })
-      : null;
+      : { _id: new mongoose.Types.ObjectId() };
 
-    const tradeId = trade?._id?.toString() || `test-${Date.now()}`;
-
-    // Set up in-memory position
+    // Hydrate in-memory position
     paper.setPosition(testUserId, SYMBOL, "PAPER", {
       userId: testUserId,
       symbol: SYMBOL,
@@ -72,21 +81,30 @@ describe("Leverage change → wallet margin adjustment", () => {
       quantity: QTY,
       entryPrice: ENTRY,
       leverage,
-      tradeId,
+      tradeId: trade._id.toString(),
       accountType: "FUTURES",
+      sl: 550.0,
+      tp: 700.0,
     });
 
-    return { trade, tradeId };
+    return { tradeId: trade._id.toString() };
   }
 
   async function cleanup(tradeId?: string) {
-    if (Trade) await Trade.deleteMany({ userId: testUserId });
+    if (Trade && mongoose?.connection?.readyState === 1) {
+      if (tradeId) {
+        try { await Trade.deleteOne({ _id: tradeId }); } catch { /* ignore */ }
+      } else {
+        try { await Trade.deleteMany({ userId: testUserId }); } catch { /* ignore */ }
+      }
+    }
     // Clean up in-memory position
     paper.removePosition(testUserId, SYMBOL, "PAPER", "FUTURES", tradeId);
     paper.removePosition(testUserId, SYMBOL, "PAPER", "FUTURES");
   }
 
   it("increasing leverage (4x→10x) should credit freed margin to wallet", async () => {
+    if (skipIfNoMongo()) return;
     const initialMargin = (QTY * ENTRY) / 4; // ~1.89 USDT
     const startingWallet = 8.60; // Available USDT after opening position
 
@@ -123,6 +141,7 @@ describe("Leverage change → wallet margin adjustment", () => {
   });
 
   it("decreasing leverage (10x→4x) should debit additional margin from wallet", async () => {
+    if (skipIfNoMongo()) return;
     const startingWallet = 8.60;
 
     const { tradeId } = await setupPosition(10, startingWallet);
@@ -155,6 +174,7 @@ describe("Leverage change → wallet margin adjustment", () => {
   });
 
   it("locked margin should reflect new leverage after change", async () => {
+    if (skipIfNoMongo()) return;
     const startingWallet = 10.0;
     const { tradeId } = await setupPosition(5, startingWallet);
 
@@ -188,6 +208,7 @@ describe("Leverage change → wallet margin adjustment", () => {
   });
 
   it("same leverage value should not change wallet", async () => {
+    if (skipIfNoMongo()) return;
     const startingWallet = 8.60;
     const { tradeId } = await setupPosition(5, startingWallet);
 
@@ -209,6 +230,7 @@ describe("Leverage change → wallet margin adjustment", () => {
   });
 
   it("SL/TP only update should not touch wallet", async () => {
+    if (skipIfNoMongo()) return;
     const startingWallet = 8.60;
     const { tradeId } = await setupPosition(5, startingWallet);
 

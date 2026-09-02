@@ -5,6 +5,7 @@
  * shift to detect concept/feature drift before performance degrades.
  */
 
+import mongoose from "mongoose";
 import { ModelDrift } from "../../models/ModelDrift.js";
 
 export class DriftDetector {
@@ -25,7 +26,7 @@ export class DriftDetector {
     if (conceptDriftScore > 0.25) status = "CRITICAL";
     else if (conceptDriftScore > 0.12) status = "WARNING";
 
-    const driftRecord = await ModelDrift.create({
+    const resultObj = {
       modelName,
       conceptDriftScore,
       predictionDriftScore: +(conceptDriftScore * 0.9).toFixed(4),
@@ -33,8 +34,17 @@ export class DriftDetector {
       dataDriftScore: +(conceptDriftScore * 0.7).toFixed(4),
       status,
       evaluatedAt: new Date(),
-    });
+    };
 
-    return driftRecord;
+    if (mongoose?.connection?.readyState === 1) {
+      try {
+        const driftRecord = await ModelDrift.create(resultObj);
+        return driftRecord;
+      } catch (err) {
+        console.warn("[DriftDetector] Failed to persist ModelDrift:", err);
+      }
+    }
+
+    return resultObj;
   }
 }

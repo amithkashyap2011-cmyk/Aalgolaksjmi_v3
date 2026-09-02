@@ -145,7 +145,7 @@ class FinancialMambaModel(nn.Module):
         x = batch.prices  # (batch, seq_len, n_features)
         
         if self.normalizer is not None:
-            x = self.normalizer(x, batch.prices)
+            x = self.normalizer(x)
         
         # 2. Embedding
         x = self.feature_embedding(x)  # (batch, seq_len, d_model)
@@ -213,7 +213,7 @@ class FinancialMambaModel(nn.Module):
         x = batch.prices
         
         if self.normalizer is not None:
-            x = self.normalizer(x, batch.prices)
+            x = self.normalizer(x)
         
         x = self.feature_embedding(x)
         x = self.pos_embedding(x)

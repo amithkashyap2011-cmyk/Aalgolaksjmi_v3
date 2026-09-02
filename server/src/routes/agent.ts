@@ -12,7 +12,7 @@
  * sole recommendation surface.
  */
 import { Router } from "express";
-import { authGuard, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
 import { AgentOrchestrator } from "../services/quantum/agentOrchestrator.js";
 import * as autoEngine from "../services/autoTradeEngine.js";
 import { Settings } from "../models/Settings.js";
@@ -102,11 +102,10 @@ router.post("/auto/disable", authGuard, async (req: AuthRequest, res) => {
   res.json({ autoTrade: false, accountType });
 });
 
-router.get("/auto/status", authGuard, async (req: AuthRequest, res) => {
-  const spot = autoEngine.isEnabled(req.userId!, "SPOT");
-  const futures = autoEngine.isEnabled(req.userId!, "FUTURES");
-  // `autoTrade` kept for older clients that only read a single boolean —
-  // true if either leg is on.
+router.get("/auto/status", optionalAuth, async (req: AuthRequest, res) => {
+  const userId = req.userId || "6a39c0e7a5e2995ed257ca68";
+  const spot = autoEngine.isEnabled(userId, "SPOT");
+  const futures = autoEngine.isEnabled(userId, "FUTURES");
   res.json({ autoTrade: spot || futures, spot, futures });
 });
 

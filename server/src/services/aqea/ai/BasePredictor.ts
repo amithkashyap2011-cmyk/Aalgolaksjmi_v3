@@ -8,6 +8,7 @@ import { IAIPredictor } from "./IAIPredictor.js";
 import { AIPrediction, PredictorHealth, AIDirection } from "./types.js";
 import { FeatureVector } from "../featureStore.js";
 import { AIPredictionTelemetry } from "../../../models/AIPredictionTelemetry.js";
+import mongoose from "mongoose";
 
 export abstract class BasePredictor implements IAIPredictor {
   protected abstract modelName: string;
@@ -18,6 +19,15 @@ export abstract class BasePredictor implements IAIPredictor {
   protected startTime = Date.now();
   protected lastPredictionTime: Date | null = null;
   protected checkpointLoaded = true; // Default to true, updated by health checks
+  private static lastTelemetryErrorLog = 0;
+
+  private static logTelemetryError(err: any): void {
+    const now = Date.now();
+    if (now - BasePredictor.lastTelemetryErrorLog > 30000) {
+      BasePredictor.lastTelemetryErrorLog = now;
+      console.warn(`[TELEMETRY_WARNING] Non-blocking prediction telemetry write failed: ${err.message || err}`);
+    }
+  }
 
   /**
    * Orchestrates the prediction lifecycle.
@@ -41,7 +51,8 @@ export abstract class BasePredictor implements IAIPredictor {
       // rolling-accuracy windows; records without an entry price can never
       // be outcome-graded and would sit pending forever.
       const entryPrice = features.market?.close || 0;
-      if (result.direction && result.confidence > 0 && entryPrice > 0) {
+      // 🛡️ Telemetry logging — non-blocking, fail-safe, and active only in production/development with active MongoDB
+      if (process.env.NODE_ENV !== "test" && result.direction && result.confidence > 0 && entryPrice > 0 && mongoose.connection.readyState === 1) {
         AIPredictionTelemetry.create({
           prediction_id,
           model_name: this.modelName,
@@ -50,7 +61,9 @@ export abstract class BasePredictor implements IAIPredictor {
           confidence: result.confidence,
           timestamp: new Date(),
           priceAtPrediction: entryPrice
-        }).catch(err => console.error(`[TELEMETRY_ERROR] ${err.message}`));
+        }).catch((err: any) => {
+          BasePredictor.logTelemetryError(err);
+        });
       }
 
       return {

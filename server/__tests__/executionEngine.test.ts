@@ -1,5 +1,5 @@
 import { connectIfAvailable, disconnectMongo, skipIfNoMongo } from "./helpers/mongoTestHelper.js";
-import { describe, it, expect, beforeAll, afterAll } from "@jest/globals";
+import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
 import mongoose from "mongoose";
 import { ShadowExecutionEngine } from "../src/services/execution/shadowExecutionEngine.js";
 import { SlippageSimulator } from "../src/services/execution/slippageSimulator.js";
@@ -8,6 +8,8 @@ import { ExecutionQualityService } from "../src/services/execution/executionQual
 import { ExchangeSimulator } from "../src/services/execution/exchangeSimulator.js";
 import { ExecutionAnalyticsService } from "../src/services/execution/executionAnalyticsService.js";
 import { ReplayEngine } from "../src/services/execution/replayEngine.js";
+
+jest.setTimeout(30000);
 
 describe("Phase 22: Institutional Shadow Trading & Live Execution Validation", () => {
   beforeAll(async () => {

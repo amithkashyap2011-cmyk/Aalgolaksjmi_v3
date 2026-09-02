@@ -6,9 +6,12 @@ node_modules/
 venv/
 .venv/
 **/venv/
+**/.venv/
+.docx_venv/
 __pycache__/
 **/__pycache__/
 *.pyc
+*.pyo
 
 # Rust build
 target/
@@ -22,6 +25,7 @@ build/
 
 # Logs
 *.log
+*.log.*
 logs/
 **/logs/
 soak_logs/
@@ -32,11 +36,13 @@ db_data/
 *.wt
 WiredTiger*
 *.journal
+**/diagnostic.data/
 
 # Environment files
 .env
 .env.*
 !.env.example
+!server/.env.example
 
 # OS / IDE
 .DS_Store
@@ -46,6 +52,7 @@ WiredTiger*
 # Temporary files
 *.tmp
 *.temp
+.devtmp/
 
 # ML generated artifacts
 *.pt
@@ -53,57 +60,13 @@ WiredTiger*
 *.ckpt
 
 # Training/replay data
-replay_buffer.jsonl
-node_modules
-backups/
-
-# Secrets — never commit real credentials
-.env
-.env.*
-!.env.example
-!server/.env.example
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-node_modules
-/.docx_venv/
-/server/auto_trade.log.1
-/server/server_crash.log.1
-/client/node_modules/
-/node_modules/
-**/node_modules/
-**/__pycache__/
-*.pyc
 models/ppo/replay_buffer.jsonl
 data/historical/*.csv
+
+# Test / coverage artifacts
+coverage/
+**/coverage/
+
+# Backups and quarantine
+backups/
+_cleanup_quarantine/

@@ -13,6 +13,7 @@
  * (net of taker fees), so every screen agrees and there's no "jump" on close.
  */
 import * as binance from "./binanceService.js";
+import { isIndianTrade, resolveLivePriceForIndianTrade } from "./indianMarket/indianPricing.js";
 
 /** Binance taker fee per side (0.04% futures). Matches close-position fee math. */
 export const TAKER_FEE = 0.0004;
@@ -47,26 +48,83 @@ export function computeUnrealisedPnl(trade: any, markPrice: number): number {
  * trade, in place. Returns the same array for convenience.
  */
 export async function enrichOpenTrades(trades: any[]): Promise<any[]> {
-  for (const trade of trades) {
-    try {
-      const isFutures = (trade.accountType || "FUTURES") === "FUTURES";
-      let markPrice = binance.getTickerPriceSync(trade.symbol, isFutures);
-      if (!markPrice) markPrice = await binance.getTickerPrice(trade.symbol, isFutures);
-      if (!markPrice) continue;
+  if (!trades || trades.length === 0) return [];
 
-      const entryPrice = trade.entryPrice || trade.entry || 0;
-      const qty = trade.quantity || trade.qty || 0;
-      const pnl = computeUnrealisedPnl(trade, markPrice);
-      const margin = entryPrice * qty / (trade.leverage || 1);
+  await Promise.all(
+    trades.map(async (trade) => {
+      try {
+        if (isIndianTrade(trade)) {
+          const markPrice = resolveLivePriceForIndianTrade(trade);
+          const entryPrice = trade.entryPrice || trade.entry || 0;
+          const qty = trade.quantity || trade.qty || 0;
+          const leverage = trade.leverage ? Number(trade.leverage) : 1;
+          const notional = entryPrice * qty;
+          const margin = leverage > 0 ? notional / leverage : notional;
+          const isLong = (trade.side || "").toUpperCase() === "BUY" || (trade.side || "").toUpperCase() === "LONG";
+          const grossPnl = isLong ? (markPrice - entryPrice) * qty : (entryPrice - markPrice) * qty;
+          const pnlPercent = margin > 0 ? (grossPnl / margin) * 100 : 0;
 
-      trade.markPrice = markPrice;
-      trade.pnl = pnl;
-      trade.unrealisedPnl = pnl;
-      trade.margin = margin;
-      trade.unrealisedPnlPct = margin > 0 ? (pnl / margin) * 100 : 0;
-    } catch (err: any) {
-      console.error(`[pnlService] Failed to attach live PnL for ${trade.symbol}:`, err.message);
-    }
-  }
+          trade.markPrice = markPrice;
+          trade.leverage = leverage;
+          trade.pnl = Number(grossPnl.toFixed(2));
+          trade.unrealisedPnl = Number(grossPnl.toFixed(2));
+          trade.margin = Number(margin.toFixed(2));
+          trade.unrealisedPnlPct = Number(pnlPercent.toFixed(2));
+
+          console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
+            symbol: trade.symbol,
+            side: trade.side,
+            quantity: qty,
+            entryPrice,
+            markPrice,
+            leverage,
+            notional,
+            margin,
+            unrealizedPnl: trade.unrealisedPnl,
+            pnlPercent: trade.unrealisedPnlPct,
+            source: "BACKEND_PNL_SERVICE"
+          })}`);
+          return;
+        }
+
+        const isFutures = (trade.accountType || "FUTURES") === "FUTURES";
+        let markPrice = binance.getTickerPriceSync(trade.symbol, isFutures);
+        if (!markPrice) markPrice = await binance.getTickerPrice(trade.symbol, isFutures);
+        if (!markPrice) return;
+
+        const entryPrice = trade.entryPrice || trade.entry || 0;
+        const qty = trade.quantity || trade.qty || 0;
+        const leverage = trade.leverage ? Number(trade.leverage) : 1;
+        const notional = entryPrice * qty;
+        const margin = leverage > 0 ? notional / leverage : notional;
+        const pnl = computeUnrealisedPnl(trade, markPrice);
+        const pnlPercent = margin > 0 ? (pnl / margin) * 100 : 0;
+
+        trade.markPrice = markPrice;
+        trade.leverage = leverage;
+        trade.pnl = pnl;
+        trade.unrealisedPnl = pnl;
+        trade.margin = margin;
+        trade.unrealisedPnlPct = pnlPercent;
+
+        console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
+          symbol: trade.symbol,
+          side: trade.side,
+          quantity: qty,
+          entryPrice,
+          markPrice,
+          leverage,
+          notional,
+          margin,
+          unrealizedPnl: trade.unrealisedPnl,
+          pnlPercent: trade.unrealisedPnlPct,
+          source: "BACKEND_PNL_SERVICE"
+        })}`);
+      } catch (err: any) {
+        console.error(`[pnlService] Failed to attach live PnL for ${trade.symbol}:`, err.message);
+      }
+    })
+  );
+
   return trades;
 }

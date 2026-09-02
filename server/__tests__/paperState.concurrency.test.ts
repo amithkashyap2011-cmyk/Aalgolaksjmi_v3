@@ -40,18 +40,22 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (mongoose.connection.readyState === 1) {
-    await Trade.deleteMany({ userId: testUserId });
-    await WalletSnapshot.deleteMany({ userId: testUserId });
+  if (mongoose?.connection?.readyState === 1) {
+    try {
+      await Trade.deleteMany({ userId: testUserId });
+      await WalletSnapshot.deleteMany({ userId: testUserId });
+    } catch { /* ignore */ }
   }
   await disconnectMongo();
 });
 
 beforeEach(async () => {
-  if (mongoose.connection.readyState !== 1) return;
-  await Trade.deleteMany({ userId: testUserId });
-  await WalletSnapshot.deleteMany({ userId: testUserId });
-  await paper.setWalletBalance(testUserId, MODE, "USDT", 100_000, ACCOUNT_TYPE);
+  if (mongoose?.connection?.readyState !== 1) return;
+  try {
+    await Trade.deleteMany({ userId: testUserId });
+    await WalletSnapshot.deleteMany({ userId: testUserId });
+    await paper.setWalletBalance(testUserId, MODE, "USDT", 100_000, ACCOUNT_TYPE);
+  } catch { /* ignore */ }
 });
 
 describe("Concurrency regression — withWalletLock / debitWalletAndCreateTrade", () => {

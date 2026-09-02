@@ -9,7 +9,7 @@ import { StrategyRegistry } from "../src/models/StrategyRegistry.js";
 describe("AAlgolakshmi V5 Institutional Multi-Strategy Adaptive Platform", () => {
   beforeAll(async () => {
     const connected = await connectIfAvailable();
-    if (!connected) return;
+    if (!connected || mongoose.connection.readyState !== 1) return;
   });
 
   afterAll(async () => {

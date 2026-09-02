@@ -21,6 +21,15 @@ const mockChain = () => ({
   then: (cb: any, errCb?: any) => Promise.resolve([]).then(cb, errCb),
 });
 
+jest.unstable_mockModule("mongoose", () => ({
+  default: {
+    connection: { readyState: 1 },
+    Types: { ObjectId: class { static isValid() { return true; } } }
+  },
+  connection: { readyState: 1 },
+  Types: { ObjectId: class { static isValid() { return true; } } }
+}));
+
 const mockTradeFind = jest.fn().mockImplementation(() => mockChain());
 jest.unstable_mockModule("../../src/models/Trade.js", () => ({
   Trade: { find: mockTradeFind, create: jest.fn(), deleteMany: jest.fn() }

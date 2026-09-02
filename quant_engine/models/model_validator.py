@@ -37,7 +37,10 @@ class ModelValidator:
         if checkpoint_path.suffix in {".pt", ".pth", ".zip"}:
             try:
                 import torch
-                torch.load(checkpoint_path, map_location="cpu")
+                try:
+                    torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+                except TypeError:
+                    torch.load(checkpoint_path, map_location="cpu")
             except Exception as e:
                 return {"status": "DEGRADED", "reason": f"Torch load failed: {str(e)}"}
 

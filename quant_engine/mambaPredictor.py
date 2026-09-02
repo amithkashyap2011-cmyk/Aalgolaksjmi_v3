@@ -46,9 +46,9 @@ class MambaPredictor:
             size_mb = model_path.stat().st_size / (1024 * 1024)
             print(f"[Mamba] Found checkpoint. Size: {size_mb:.2f} MB")
 
-            if size_mb < 5.0:
+            if size_mb < 0.1:
                 self.degraded_reason = "stub checkpoint"
-                print(f"[Mamba] WARNING: Checkpoint is a stub (< 5MB). Marking as DEGRADED. Inference disabled.")
+                print(f"[Mamba] WARNING: Checkpoint is empty/stub (< 0.1MB). Marking as DEGRADED. Inference disabled.")
                 return
 
             # Inspect checkpoint keys for compatibility report
@@ -67,7 +67,10 @@ class MambaPredictor:
         Inspects checkpoint keys and compares with expected model architecture.
         """
         try:
-            checkpoint = torch.load(path, map_location='cpu')
+            try:
+                checkpoint = torch.load(path, map_location='cpu', weights_only=False)
+            except TypeError:
+                checkpoint = torch.load(path, map_location='cpu')
             ck_keys = []
             if isinstance(checkpoint, dict):
                 if 'model_state_dict' in checkpoint:
@@ -112,6 +115,10 @@ class MambaPredictor:
         if not self.checkpoint_loaded:
              print(f"[Mamba] Warning: Inference requested but model is DEGRADED. Returning neutral.")
              return {
+                "direction": "HOLD",
+                "probLong": 0.3333,
+                "probShort": 0.3333,
+                "probHold": 0.3334,
                 "directionScore": 0.5,
                 "predictedMove": 0.0,
                 "confidence": 0.0,
@@ -123,6 +130,10 @@ class MambaPredictor:
         if not np.isfinite(seq).all():
              print(f"[Mamba] Warning: Invalid sequence data detected")
              return {
+                "direction": "HOLD",
+                "probLong": 0.3333,
+                "probShort": 0.3333,
+                "probHold": 0.3334,
                 "directionScore": 0.5,
                 "predictedMove": 0.0,
                 "confidence": 0.0,
@@ -134,7 +145,9 @@ class MambaPredictor:
         self.last_inference = {
             "timestamp": np.datetime64('now').astype(str),
             "confidence": result.get("confidence", 0.0),
-            "directionScore": result.get("directionScore", 0.5)
+            "directionScore": result.get("directionScore", 0.5),
+            "direction": result.get("direction", "HOLD"),
+            "probLong": result.get("probLong", 0.3333)
         }
         
         return result

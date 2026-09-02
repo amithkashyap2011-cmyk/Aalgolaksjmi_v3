@@ -15,6 +15,9 @@ export const AI_ENDPOINTS = {
 };
 
 export async function buildEndpointUrl(endpointPath: string): Promise<string> {
+  if (endpointPath.startsWith("http://") || endpointPath.startsWith("https://")) {
+    return endpointPath;
+  }
   const baseUrl = await getQuantEngineURL();
   return `${baseUrl}${endpointPath}`;
 }

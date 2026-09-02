@@ -25,6 +25,8 @@ const AlertSchema = new Schema<IAlert>(
   { timestamps: { createdAt: true, updatedAt: false } }
 );
 
+AlertSchema.index({ createdAt: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
+
 AlertSchema.post("save", function (doc) {
   const io = getIO();
   if (io) {

@@ -26,6 +26,7 @@ export interface EntryEvaluationInput {
   riskProfile: any;
   symbol: string;
   sameDirectionCount?: number;
+  maxConcurrent?: number;
 }
 
 export type EntryEvaluationResult =
@@ -39,18 +40,29 @@ export type EntryEvaluationResult =
  * itself for confirmation this is where it now delegates.
  */
 export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationResult {
-  const { existing, aqeaDecision, riskProfile, symbol } = input;
+  const { existing, aqeaDecision, riskProfile, symbol, maxConcurrent = 10 } = input;
 
   if (existing) {
     return { ok: false, silent: false, reason: `Existing active position for ${symbol}` };
   }
 
-  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= 1) {
-    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max 1 active BUY position)` };
+  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= maxConcurrent) {
+    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max ${maxConcurrent} active BUY positions)` };
   }
 
   if (!aqeaDecision.riskApproved) {
     return { ok: false, silent: false, reason: `Risk parameters check failed` };
+  }
+
+  const rawConf = aqeaDecision.confidence ?? 0;
+  const confNormalized = rawConf > 1 ? rawConf / 100 : rawConf;
+  if (confNormalized < 0.68) {
+    return { ok: false, silent: false, reason: `AI conviction below minimum threshold (Score: ${Math.round(confNormalized * 100)}% < 68%)` };
+  }
+
+  const regime = aqeaDecision.decisionPath?.regime || "";
+  if (["TRENDING_BEAR", "VOLATILE_BEAR", "EXTREME_BEAR"].includes(regime) && confNormalized < 0.75) {
+    return { ok: false, silent: false, reason: `Counter-trend BUY rejected in BEARISH regime (${regime}) with sub-75% conviction (${Math.round(confNormalized * 100)}%)` };
   }
 
   const allocUsdt = riskProfile.positionSize || aqeaDecision.positionSize;
@@ -60,7 +72,7 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
     return { ok: false, silent: false, reason: `Invalid size or leverage configured` };
   }
 
-  const currentPrice = aqeaDecision.meta?.indicators?.close;
+  const currentPrice = aqeaDecision.meta?.indicators?.close || (aqeaDecision as any).currentPrice || (riskProfile as any)?.entry || (riskProfile as any)?.entryPrice;
   if (!currentPrice || !Number.isFinite(currentPrice) || currentPrice <= 0) {
     return { ok: false, silent: false, reason: `Entry price could not be resolved` };
   }
@@ -91,18 +103,29 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
  * section (same structure, SELL-side wording only).
  */
 export function evaluateShortEntry(input: EntryEvaluationInput): EntryEvaluationResult {
-  const { existing, aqeaDecision, riskProfile, symbol } = input;
+  const { existing, aqeaDecision, riskProfile, symbol, maxConcurrent = 10 } = input;
 
   if (existing) {
     return { ok: false, silent: false, reason: `Existing active position for ${symbol}` };
   }
 
-  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= 1) {
-    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max 1 active SELL position)` };
+  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= maxConcurrent) {
+    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max ${maxConcurrent} active SELL positions)` };
   }
 
   if (!aqeaDecision.riskApproved) {
     return { ok: false, silent: false, reason: `Risk parameters check failed` };
+  }
+
+  const rawConf = aqeaDecision.confidence ?? 0;
+  const confNormalized = rawConf > 1 ? rawConf / 100 : rawConf;
+  if (confNormalized < 0.68) {
+    return { ok: false, silent: false, reason: `AI conviction below minimum threshold (Score: ${Math.round(confNormalized * 100)}% < 68%)` };
+  }
+
+  const regime = aqeaDecision.decisionPath?.regime || "";
+  if (["TRENDING_BULL", "VOLATILE_BULL", "EXTREME_BULL"].includes(regime) && confNormalized < 0.75) {
+    return { ok: false, silent: false, reason: `Counter-trend SELL rejected in BULLISH regime (${regime}) with sub-75% conviction (${Math.round(confNormalized * 100)}%)` };
   }
 
   const allocUsdt = riskProfile.positionSize || aqeaDecision.positionSize;
@@ -112,7 +135,7 @@ export function evaluateShortEntry(input: EntryEvaluationInput): EntryEvaluation
     return { ok: false, silent: false, reason: `Invalid size or leverage configured` };
   }
 
-  const currentPrice = aqeaDecision.meta?.indicators?.close;
+  const currentPrice = aqeaDecision.meta?.indicators?.close || (aqeaDecision as any).currentPrice || (riskProfile as any)?.entry || (riskProfile as any)?.entryPrice;
   if (!currentPrice || !Number.isFinite(currentPrice) || currentPrice <= 0) {
     return { ok: false, silent: false, reason: `Entry price could not be resolved` };
   }

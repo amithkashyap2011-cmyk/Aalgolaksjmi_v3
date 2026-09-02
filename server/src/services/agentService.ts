@@ -12,22 +12,23 @@
  *   recommend(symbol, mode, userId) → full recommendation
  */
 
-import { getKlines, getLatestFundingRate, type Kline } from "./binanceService.js";
-import { computeSnapshot, type IndicatorSnapshot, type OHLC } from "./indicatorService.js";
+import * as binance from "../services/binanceService.js";
+import { type Kline } from "../services/binanceService.js";
+import { computeSnapshot, type IndicatorSnapshot, type OHLC } from "../services/indicatorService.js";
 import {
   normalizeWeights,
   type NormalizedWeights,
   type AnimalContributions,
-} from "./behaviourModel.js";
+} from "../services/behaviourModel.js";
 import mongoose from "mongoose";
 import { Settings, type IRiskConfig, type IBehaviorWeights } from "../models/Settings.js";
 import { Trade } from "../models/Trade.js";
-import * as paper from "./paperState.js";
+import * as paper from "../services/paperState.js";
 
 /* ── ML & DL model hooks (Phase 5) ───────────────────── */
-import { predict as mlPredict, buildMLFeatures, type MLPrediction } from "./mlModelService.js";
-import { predictSequence as dlPredict, buildSequenceInput, type DLPrediction } from "./dlModelService.js";
-import { applyDynamicMarketWeights } from "./modelRegistry.js";
+import { predict as mlPredict, buildMLFeatures, type MLPrediction } from "../services/mlModelService.js";
+import { predictSequence as dlPredict, buildSequenceInput, type DLPrediction } from "../services/dlModelService.js";
+import { applyDynamicMarketWeights } from "../services/modelRegistry.js";
 
 /* ════════════════════════════════════════════════════════
  *  Types
@@ -63,9 +64,7 @@ export interface AgentContext {
   saraswatiAlphaThreshold?: number;
 }
 
-/* ════════════════════════════════════════════════════════
- *  buildContext
- * ════════════════════════════════════════════════════════ */
+const userTradeStatsCache = new Map<string, { dailyPnl: number; weeklyPnl: number; monthlyPnl: number; tradesToday: number; lastTradeMinutesAgo: number; timestamp: number }>();
 
 export async function buildContext(
   symbol: string,
@@ -74,7 +73,7 @@ export async function buildContext(
   accountTypeArg?: "SPOT" | "FUTURES",
 ): Promise<AgentContext> {
   /* 1. Fetch last 200 bars (5m) for indicators */
-  const klines: Kline[] = await getKlines(symbol, "5m", undefined, undefined, 200);
+  const klines: Kline[] = await binance.getKlines(symbol, "5m", undefined, undefined, 200);
   const bars: OHLC[] = klines.map((k) => ({
     open: parseFloat(k.open),
     high: parseFloat(k.high),
@@ -87,11 +86,23 @@ export async function buildContext(
   const ind = computeSnapshot(bars);
 
   /* 3. Load settings & Daily P&L metrics */
-  const isValId = (id: any) => Boolean(id && (mongoose?.Types?.ObjectId?.isValid ? mongoose.Types.ObjectId.isValid(id) : true));
-  const settings = (userId && isValId(userId))
-    ? await Settings.findOne({ userId })
-    : null;
-  const riskConfig: IRiskConfig = settings?.riskConfig ?? {
+  const isDbConnected = () => (mongoose?.connection?.readyState === 1 || (mongoose as any)?.default?.connection?.readyState === 1);
+  const isValId = (id: any) => Boolean(id && (typeof id === "string" ? id.trim().length > 0 : true));
+  const safeExec = async (q: any, fallback: any) => {
+    try {
+      if (!q) return fallback;
+      if (typeof q.lean === "function") return await q.lean().catch(() => fallback);
+      return await Promise.resolve(q).catch(() => fallback);
+    } catch {
+      return fallback;
+    }
+  };
+
+  let settings: any = null;
+  if (userId && isValId(userId) && isDbConnected()) {
+    settings = await safeExec(Settings.findOne({ userId }), null);
+  }
+  const riskConfig: IRiskConfig = (settings as any)?.riskConfig ?? {
     maxDailyLoss: 100, maxWeeklyLoss: 300, maxMonthlyLoss: 800, maxPositionSizePct: 21,
     defaultSL: 2, defaultTP: 4, trailingSL: 1,
     defaultLeverage: 1, maxConcurrentPositions: 15,
@@ -100,36 +111,49 @@ export async function buildContext(
     dynamicSLTP: true, multiStageTP: true
   };
 
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayTrades = await Trade.find({
-    userId, mode,
-    openedAt: { $gte: todayStart },
-  }).lean();
+  const now = Date.now();
+  const cacheKey = `${userId}:${mode}`;
+  if (process.env.NODE_ENV === "test") {
+    userTradeStatsCache.clear();
+  }
+  let stats = userTradeStatsCache.get(cacheKey);
 
-  const dailyPnl = todayTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  if (!stats || now - stats.timestamp > 15000) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(todayStart);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
 
-  // Same pattern as dailyPnl above, just wider windows — a circuit breaker
-  // that only ever looks at "today" can't catch a string of daily losses
-  // each individually under the daily cap compounding into a much larger
-  // rolling drawdown.
-  const weekStart = new Date(todayStart);
-  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-  const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
-  const [weekTrades, monthTrades] = await Promise.all([
-    Trade.find({ userId, mode, openedAt: { $gte: weekStart } }).lean(),
-    Trade.find({ userId, mode, openedAt: { $gte: monthStart } }).lean(),
-  ]);
-  const weeklyPnl = weekTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const monthlyPnl = monthTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const tradesToday = todayTrades.length;
+    const [todayTrades, weekTrades, monthTrades, lastTrade] = isDbConnected()
+      ? await Promise.all([
+          safeExec(Trade.find({ userId, mode, openedAt: { $gte: todayStart } }), []),
+          safeExec(Trade.find({ userId, mode, openedAt: { $gte: weekStart } }), []),
+          safeExec(Trade.find({ userId, mode, openedAt: { $gte: monthStart } }), []),
+          safeExec(Trade.findOne({ userId, mode })?.sort ? Trade.findOne({ userId, mode }).sort({ openedAt: -1 }) : Trade.findOne({ userId, mode }), null),
+        ])
+      : [[], [], [], null];
+
+    const dailyPnl = (todayTrades || []).reduce((s: number, t: any) => s + (t.pnl ?? 0), 0);
+    const weeklyPnl = (weekTrades || []).reduce((s: number, t: any) => s + (t.pnl ?? 0), 0);
+    const monthlyPnl = (monthTrades || []).reduce((s: number, t: any) => s + (t.pnl ?? 0), 0);
+    const tradesToday = todayTrades.length;
+    const lastTradeMinutesAgo = lastTrade
+      ? Math.floor((Date.now() - new Date(lastTrade.openedAt!).getTime()) / 60000)
+      : 9999;
+
+    stats = {
+      dailyPnl, weeklyPnl, monthlyPnl, tradesToday, lastTradeMinutesAgo,
+      timestamp: now
+    };
+    if (userTradeStatsCache.size >= 500) {
+      userTradeStatsCache.clear();
+    }
+    userTradeStatsCache.set(cacheKey, stats);
+  }
+
+  const { dailyPnl, weeklyPnl, monthlyPnl, tradesToday, lastTradeMinutesAgo } = stats;
   const openPositionCount = paper.getOpenPositions(userId, mode).length;
-
-  // Compute real cooldown from last trade — never use a placeholder.
-  const lastTrade = await Trade.findOne({ userId, mode }).sort({ openedAt: -1 }).lean();
-  const lastTradeMinutesAgo = lastTrade
-    ? Math.floor((Date.now() - new Date(lastTrade.openedAt!).getTime()) / 60000)
-    : 9999;
 
   let rawWeights: IBehaviorWeights = settings?.behaviorWeights ?? {
     eagle: 50, tiger: 50, cheetah: 50, fox: 50, tortoise: 50,
@@ -172,7 +196,7 @@ export async function buildContext(
   let htfTrendBullish = true;
   if (!settings?.bypassConsensusLag && !settings?.bypassHtfTrendGate) {
     try {
-      const htfKlines = await getKlines(symbol, "1h", undefined, undefined, 60);
+      const htfKlines = await binance.getKlines(symbol, "1h", undefined, undefined, 60);
       const htfBars = htfKlines.map((k) => ({
         open: parseFloat(k.open), high: parseFloat(k.high),
         low: parseFloat(k.low), close: parseFloat(k.close),
@@ -189,21 +213,18 @@ export async function buildContext(
   const volatilityRatio =
     ind.stdDev20 !== null && ind.close > 0 ? ind.stdDev20 / ind.close : 0.01;
 
-  /* 7. Animal behaviour model REMOVED.
-   *    The 10-animal scoring no longer contributes to any decision. Live trading uses
-   *    AQEAEngine.decide() (which never used it) and the UI uses the quantum orchestrator.
-   *    A neutral blend is kept so downstream type contracts (checklist/saraswati) still hold. */
+  /* 7. Animal behaviour model REMOVED. */
   const animalBlend = { score: 0, contributions: {} as AnimalContributions };
 
-  /* 8. ML prediction (Phase 5) */
+  /* 8 & 9. ML & DL prediction (Phase 5) — Run concurrently */
   const mlFeatures = buildMLFeatures(
     ind, weights, dailyPnl, riskConfig.maxDailyLoss, tradesToday, openPositionCount,
   );
-  const mlPrediction = await mlPredict(mlFeatures);
-
-  /* 9. DL prediction (Phase 5) */
   const seqInput = buildSequenceInput(symbol, "5m", bars, 60);
-  const dlPrediction = await dlPredict(seqInput);
+  const [mlPrediction, dlPrediction] = await Promise.all([
+    mlPredict(mlFeatures).catch(() => ({ profitProbability: 0.5, expectedReturn: 0, confidence: 0, modelName: "stub" })),
+    dlPredict(seqInput).catch(() => ({ directionScore: 0.5, predictedMove: 0, confidence: 0, modelName: "stub" })),
+  ]);
 
   // Merge AI-configurable thresholds into riskConfig so checklist can read them
   // without needing a separate settings reference.
@@ -230,6 +251,6 @@ export async function buildContext(
     noLossMode: settings?.noLossMode ?? false,
     saraswatiAlphaThreshold: settings?.saraswatiAlphaThreshold ?? 45,
     // Real funding rate from Binance (neutral 0 on failure — never a fabricated value).
-    fundingRate: await getLatestFundingRate(symbol).catch(() => 0),
+    fundingRate: await binance.getLatestFundingRate(symbol).catch(() => 0),
   };
 }

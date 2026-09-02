@@ -34,16 +34,35 @@ start_mongo() {
   echo -e "\n${YELLOW}Step 1: Checking MongoDB status...${NC}"
   if mongosh --quiet --eval 'db.runCommand({ping:1})' mongodb://127.0.0.1:27017 >/dev/null 2>&1; then
     echo -e "${GREEN}✔ MongoDB is running on port 27017${NC}"
-  else
-    echo -e "${YELLOW}Starting MongoDB Community Service...${NC}"
-    brew services start mongodb-community >/dev/null 2>&1 || true
-    sleep 3
+    return 0
+  fi
+
+  echo -e "${YELLOW}Starting MongoDB Community Service (brew services)...${NC}"
+  brew services start mongodb-community >/dev/null 2>&1 || brew services restart mongodb-community >/dev/null 2>&1 || true
+
+  # Poll with retries up to 20 seconds
+  local max_retries=20
+  local count=0
+  while [ $count -lt $max_retries ]; do
     if mongosh --quiet --eval 'db.runCommand({ping:1})' mongodb://127.0.0.1:27017 >/dev/null 2>&1; then
-      echo -e "${GREEN}✔ MongoDB started successfully!${NC}"
-    else
-      echo -e "${RED}⚠ Could not connect to local MongoDB on port 27017.${NC}"
-      echo -e "${YELLOW}Ensure MongoDB is installed ('brew install mongodb-community').${NC}"
+      echo -e "${GREEN}✔ MongoDB started successfully on port 27017!${NC}"
+      return 0
     fi
+    sleep 1
+    count=$((count + 1))
+    echo -n "."
+  done
+  echo ""
+
+  # Final attempt check
+  if mongosh --quiet --eval 'db.runCommand({ping:1})' mongodb://127.0.0.1:27017 >/dev/null 2>&1; then
+    echo -e "${GREEN}✔ MongoDB is online!${NC}"
+  else
+    echo -e "${RED}⚠ Could not connect to local MongoDB on port 27017.${NC}"
+    echo -e "${YELLOW}Quick fix commands:${NC}"
+    echo -e "  1. brew services restart mongodb-community"
+    echo -e "  2. mongosh mongodb://127.0.0.1:27017"
+    echo -e "  3. If locked: rm -f /tmp/mongodb-27017.sock /opt/homebrew/var/mongodb/mongod.lock && brew services restart mongodb-community"
   fi
 }
 

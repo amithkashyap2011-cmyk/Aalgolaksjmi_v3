@@ -8,6 +8,7 @@ import { AqeaDecisionAttribution } from "../../models/AqeaDecisionAttribution.js
 import { getKlines } from "../binanceService.js";
 import fs from "fs";
 import path from "path";
+import mongoose from "mongoose";
 
 export interface SubsystemPerformance {
   subsystem: string;
@@ -123,24 +124,38 @@ export class OutcomeAttributionService {
     return Math.abs(ret) <= 0.001;
   }
 
+  private static perfHistoryCache: { data: any; timestamp: number } | null = null;
+
   /**
    * Returns long-term and short-term accuracy for MetaAlpha weighting.
    */
   public static async getPerformanceHistory(): Promise<any> {
-    const totalRecords = await AqeaDecisionAttribution.countDocuments({ outcome60m: { $exists: true } });
-    
-    // Default baseline if no data
-    if (totalRecords < 10) {
-      return {
-        CNN: { longTerm: 50, shortTerm: 50 },
-        TRANSFORMER: { longTerm: 50, shortTerm: 50 },
-        PPO: { longTerm: 50, shortTerm: 50 },
-        MAMBA: { longTerm: 50, shortTerm: 50 },
-        ORDER_FLOW: { longTerm: 50, shortTerm: 50 },
-        SMART_MONEY: { longTerm: 50, shortTerm: 50 },
-        REGIME: { longTerm: 50, shortTerm: 50 }
-      };
+    if (this.perfHistoryCache && Date.now() - this.perfHistoryCache.timestamp < 60000) {
+      return this.perfHistoryCache.data;
     }
+
+    const defaultBaseline = {
+      CNN: { longTerm: 50, shortTerm: 50 },
+      TRANSFORMER: { longTerm: 50, shortTerm: 50 },
+      PPO: { longTerm: 50, shortTerm: 50 },
+      MAMBA: { longTerm: 50, shortTerm: 50 },
+      ORDER_FLOW: { longTerm: 50, shortTerm: 50 },
+      SMART_MONEY: { longTerm: 50, shortTerm: 50 },
+      REGIME: { longTerm: 50, shortTerm: 50 }
+    };
+
+    if (mongoose.connection.readyState !== 1) {
+      return defaultBaseline;
+    }
+
+    try {
+      const totalRecords = await AqeaDecisionAttribution.countDocuments({ outcome60m: { $exists: true } });
+      
+      // Default baseline if no data
+      if (totalRecords < 10) {
+        this.perfHistoryCache = { data: defaultBaseline, timestamp: Date.now() };
+        return defaultBaseline;
+      }
 
     const subsystems = [
       { key: "cnnCorrect", name: "CNN" },
@@ -171,8 +186,12 @@ export class OutcomeAttributionService {
       };
     }
 
+    this.perfHistoryCache = { data: history, timestamp: Date.now() };
     return history;
+  } catch (err) {
+    return defaultBaseline;
   }
+}
 
   /**
    * Calculates win rate for every subsystem.

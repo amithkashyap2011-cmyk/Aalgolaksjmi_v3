@@ -16,7 +16,9 @@ const config: Config = {
   moduleNameMapper: {
     "^\\.\\./models/(.*?)(\\.js)?$": "<rootDir>/src/models/$1",
     "^\\.\\./\\.\\./models/(.*?)(\\.js)?$": "<rootDir>/src/models/$1",
-    "^.*/services/binanceService(\\.js)?$": "<rootDir>/src/services/binanceService",
+    "^(\\.\\./)+(src/)?models/(.*?)(\\.js)?$": "<rootDir>/src/models/$3",
+    "^(\\.\\./)+(src/)?services/(.*?)(\\.js)?$": "<rootDir>/src/services/$3",
+    "^\\./(binanceService|paperState|mlModelService|dlModelService|modelRegistry|indicatorService|behaviourModel|agentService)(\\.js)?$": "<rootDir>/src/services/$1",
     "^(\\..*)\\.js$": "$1",
   },
   transform: {
@@ -45,6 +47,8 @@ const config: Config = {
   // to mean what it claims to mean.
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts"],
   verbose: true,
+  testTimeout: 30000,
+  maxWorkers: 2,
 };
 
 export default config;
