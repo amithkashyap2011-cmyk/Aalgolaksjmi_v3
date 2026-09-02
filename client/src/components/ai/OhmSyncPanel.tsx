@@ -15,6 +15,7 @@ export default function OhmSyncPanel() {
   const data = useMemo(generateOhmWave, []);
 
   const opts: Highcharts.Options = {
+    accessibility: { enabled: false },
     chart: {
       height: 120,
       backgroundColor: "transparent",

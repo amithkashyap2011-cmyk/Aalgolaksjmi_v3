@@ -41,6 +41,8 @@ class SelfHealingLocator {
           el = container.querySelector(`[aria-label="${candidate.value}"]`) as HTMLElement;
         } else if (candidate.type === "class") {
           el = container.querySelector(`.${candidate.value}`) as HTMLElement;
+        } else if (candidate.type === "tag") {
+          el = container.querySelector(candidate.value) as HTMLElement;
         }
       } catch (err) {
         el = null;
@@ -116,8 +118,8 @@ describe("Self-Healing Test Automation & Visual Verification", { timeout: 15000 
     // Self-heal button finding
     const scanBtn = SelfHealingLocator.findElement(container!, [
       { type: "id", value: "broken-scan-btn-id" },
-      { type: "text", value: "Scan" },
-      { type: "class", value: "btn" }
+      { type: "text", value: "Mode" },
+      { type: "tag", value: "button" }
     ]);
 
     expect(scanBtn).toBeDefined();

@@ -129,6 +129,7 @@ export default function BacktestPage() {
   const netPnl = finalEquity - capital;
 
   const chartOptions: Highcharts.Options = {
+    accessibility: { enabled: false },
     chart: { type: "area", backgroundColor: S.surface, height: 260, animation: { duration: 700 } },
     title: { text: undefined }, credits: { enabled: false }, legend: { enabled: false },
     xAxis: {

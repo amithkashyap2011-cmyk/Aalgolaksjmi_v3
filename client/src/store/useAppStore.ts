@@ -1079,6 +1079,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   refreshQuantumReport: async (symbol?: string, mode?: string, exchange?: string) => {
+    if (!get().connected) return;
     try {
       const sym = symbol || get().selectedSymbol;
       const md = mode || get().mode || "PAPER";
