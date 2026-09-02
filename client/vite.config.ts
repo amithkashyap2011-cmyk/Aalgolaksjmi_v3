@@ -15,7 +15,7 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 9994,
+    port: 9996,
     proxy: {
       '/auth':          { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },
       '/settings':      { target: backendTarget, changeOrigin: true, bypass: (req) => (req.headers.accept?.includes('text/html') && !req.headers.accept?.includes('application/json')) ? '/index.html' : undefined },

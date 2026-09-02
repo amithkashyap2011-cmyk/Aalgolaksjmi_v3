@@ -25,7 +25,9 @@ export default function App() {
   const ready = useAppStore((s) => s.ready);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  useEffect(() => { boot(); }, [boot]);
+  useEffect(() => {
+    boot();
+  }, []);
 
   if (!ready) {
     return (

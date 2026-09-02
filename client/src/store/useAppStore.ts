@@ -39,6 +39,8 @@ socket.on("disconnect", () => {
 const DEMO_EMAIL = "demo@aalgo.local";
 const DEMO_PASSWORD = "123456";
 
+let isBooting = false;
+let alertTimer: ReturnType<typeof setInterval> | null = null;
 let demoAuthBootstrap: Promise<void> | null = null;
 
 async function ensureDemoAuthSession(): Promise<void> {
@@ -502,9 +504,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   /* ── boot: try backend auth, fall back to mock ──────── */
   boot: async () => {
-    let connected = false;
-    let userId: string | null = "mock-user-001";
-    let userEmail: string | null = DEMO_EMAIL;
+    if (get().ready || isBooting) return;
+    isBooting = true;
+    try {
+      let connected = false;
+      let userId: string | null = "mock-user-001";
+      let userEmail: string | null = DEMO_EMAIL;
 
     // 1. Auto-login into demo to test real-time backend loops if token is missing
     if (!api.getToken()) {
@@ -688,8 +693,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           console.warn("[store] Failed to fetch ticker data, keeping mock data:", err);
         }
 
-        // Poll for alerts every 5 seconds with correct mapping
-        if (typeof window !== "undefined") {
+        // Poll for alerts every 5 seconds with correct mapping (singleton timer)
+        if (typeof window !== "undefined" && !alertTimer) {
           const mapAlert = (a: any) => ({
             id: a._id || a.id || (String(Date.now()) + "_" + Math.floor(performance.now())),
             level: (a.severity || "GREEN") as "GREEN" | "AMBER" | "RED",
@@ -698,7 +703,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               : a.message || "System event",
             time: a.createdAt ? new Date(a.createdAt).toLocaleTimeString() : "Now"
           });
-          const alertInterval = setInterval(() => {
+          alertTimer = setInterval(() => {
             api.getAlerts().then((res) => {
               const mapped = (res.alerts || [])
                 .filter((a: any) => a.title || a.message)
@@ -758,6 +763,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().refreshMarketCheck();
       get().refreshEnsembleReport();
       get().refreshSpectralRegime();
+    }
+    } finally {
+      isBooting = false;
     }
   },
 
