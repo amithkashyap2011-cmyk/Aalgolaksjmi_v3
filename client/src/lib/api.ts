@@ -37,6 +37,9 @@ async function request<T = any>(
   const res = await fetch(`${BASE}${path}`, { ...opts, headers });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (res.status === 401) {
+      clearToken();
+    }
     const message = body?.error || body?.message || `HTTP ${res.status}`;
     const error = new Error(message) as Error & { status?: number; body?: any };
     error.status = res.status;

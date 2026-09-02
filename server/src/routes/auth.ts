@@ -70,7 +70,11 @@ router.post("/login", async (req, res) => {
     }
 
     // Live DB Auth
-    const user = await User.findOne({ email });
+    let user = await User.findOne({ email });
+    if (!user && email === "demo@aalgo.internal" && password === "123456") {
+      await ensureDefaultDemoUser();
+      user = await User.findOne({ email });
+    }
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       res.status(401).json({ error: "Invalid credentials" });
       return;
@@ -81,6 +85,25 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+export async function ensureDefaultDemoUser(): Promise<void> {
+  try {
+    if (mongoose.connection.readyState !== 1) return;
+    const demoEmail = "demo@aalgo.internal";
+    const existing = await User.findOne({ email: demoEmail });
+    if (!existing) {
+      const passwordHash = await bcrypt.hash("123456", 12);
+      const user = await User.create({ email: demoEmail, passwordHash, role: "admin" });
+      const existingSettings = await Settings.findOne({ userId: user._id });
+      if (!existingSettings) {
+        await Settings.create({ userId: user._id });
+      }
+      console.log(`[auth] Default demo user created: ${demoEmail} (${user._id})`);
+    }
+  } catch (err: any) {
+    console.warn(`[auth] Demo user seed check: ${err?.message}`);
+  }
+}
 
 
 /* ── me ───────────────────────────────────────────────── */

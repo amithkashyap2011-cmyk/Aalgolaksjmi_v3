@@ -28,7 +28,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, "..", ".env") });
 
 import { authGuard } from "./middleware/auth.js";
-import authRouter from "./routes/auth.js";
+import authRouter, { ensureDefaultDemoUser } from "./routes/auth.js";
 import settingsRouter from "./routes/settings.js";
 import apikeysRouter from "./routes/apikeys.js";
 import tradingRouter from "./routes/trading.js";
@@ -589,6 +589,9 @@ async function boot() {
 
     await paperState.hydrate();
     bootLog("Memory state hydrated.");
+
+    await ensureDefaultDemoUser();
+    bootLog("Default demo user ensured.");
 
     // Proactive startup reconciliation — previously the self-healing
     // auditor (sentinelAuditor.runSentinelAudit) only ran per-request, from
