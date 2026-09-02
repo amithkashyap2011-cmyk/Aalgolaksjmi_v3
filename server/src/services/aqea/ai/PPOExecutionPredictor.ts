@@ -11,6 +11,7 @@ import { AQEA_CONFIG } from "../config.js";
 import { AqeaAuditService } from "../AqeaAudit.js";
 
 import { AI_ENDPOINTS, buildEndpointUrl } from "../../../config/aiEndpointRegistry.js";
+import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
 
 export class PPOExecutionPredictor extends BasePredictor {
   protected modelName = "PPO_EXECUTION_V1";
@@ -18,6 +19,10 @@ export class PPOExecutionPredictor extends BasePredictor {
 
   public async isHealthy(): Promise<boolean> {
     try {
+      if (!await isQuantEngineAvailable()) {
+        this.checkpointLoaded = false;
+        return false;
+      }
       const url = await buildEndpointUrl(AI_ENDPOINTS.MODEL_HEALTH);
       const res = await fetch(url, { signal: AbortSignal.timeout(800) });
       if (!res.ok) {

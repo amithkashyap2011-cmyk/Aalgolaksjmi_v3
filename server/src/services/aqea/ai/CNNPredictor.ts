@@ -12,6 +12,7 @@ import { AqeaAuditService } from "../AqeaAudit.js";
 import { FEATURE_SCHEMA_V8, CNN_INPUT_DIMENSION } from "./FeatureSchema.js";
 
 import { AI_ENDPOINTS, buildEndpointUrl } from "../../../config/aiEndpointRegistry.js";
+import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
 
 export class CNNPredictor extends BasePredictor {
   protected modelName = "CNN_1D_V1";
@@ -19,6 +20,10 @@ export class CNNPredictor extends BasePredictor {
 
   public async isHealthy(): Promise<boolean> {
     try {
+      if (!await isQuantEngineAvailable()) {
+        this.checkpointLoaded = false;
+        return false;
+      }
       const url = await buildEndpointUrl(AI_ENDPOINTS.MODEL_HEALTH);
       const res = await fetch(url, { signal: AbortSignal.timeout(800) });
       if (!res.ok) {

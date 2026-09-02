@@ -7,6 +7,7 @@
  */
 
 import { buildEndpointUrl, AI_ENDPOINTS } from "../../../config/aiEndpointRegistry.js";
+import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
 import { ModelExpertPrediction, InferenceMode, ProbabilityDistribution } from "./IModelExpert.js";
 
 export interface InferenceCallParams {
@@ -32,6 +33,11 @@ export class ModelInferenceBridge {
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
+      const isAvailable = await isQuantEngineAvailable();
+      if (!isAvailable) {
+        throw new Error("MODEL_SERVICE_UNAVAILABLE: Connection to quant engine refused");
+      }
+
       const url = await buildEndpointUrl(params.endpoint);
       const res = await fetch(url, {
         method: "POST",

@@ -21,6 +21,22 @@ const REACH_TTL_MS = 10_000;
 const RECOVER_COOLDOWN_MS = 15_000;
 const HEARTBEAT_TRUST_MS = 20_000; // a heartbeat within this window is itself proof of life
 
+export async function isQuantEngineAvailable(): Promise<boolean> {
+  const url = await getQuantEngineURL();
+  const now = Date.now();
+  const quantService = systemManager.getService("quant_engine");
+  if (quantService && quantService.url && now - quantService.lastHeartbeat < HEARTBEAT_TRUST_MS) {
+    lastReach = { url, ts: now, ok: true };
+    return true;
+  }
+  if (lastReach.url === url && now - lastReach.ts < REACH_TTL_MS) {
+    return lastReach.ok;
+  }
+  const ok = await isReachable(url);
+  lastReach = { url, ts: now, ok };
+  return ok;
+}
+
 export async function getQuantEngineURL(): Promise<string> {
   // 🛡️ Phase 3 Orchestration: Single Source of Truth
   let quantService = systemManager.getService("quant_engine");

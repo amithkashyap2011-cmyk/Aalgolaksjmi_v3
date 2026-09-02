@@ -9,6 +9,7 @@ import { AIPrediction, PredictorHealth, AIDirection } from "./types.js";
 import { FeatureVector } from "../featureStore.js";
 import { AIPredictionTelemetry } from "../../../models/AIPredictionTelemetry.js";
 import mongoose from "mongoose";
+import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
 
 export abstract class BasePredictor implements IAIPredictor {
   protected abstract modelName: string;
@@ -36,7 +37,20 @@ export abstract class BasePredictor implements IAIPredictor {
     const start = Date.now();
     this.predictionCount++;
     this.lastPredictionTime = new Date();
-    
+
+    // ⚡ Fast-fail: skip all network calls if quant engine is unreachable.
+    // This prevents per-symbol 800–1000ms fetch hangs that cascade into
+    // 25 s SYMBOL_TERMINAL timeouts on the auto-trade scheduler.
+    if (!await isQuantEngineAvailable()) {
+      return {
+        direction: "HOLD",
+        confidence: 0,
+        probability: 0,
+        predictor: this.modelName,
+        meta: { recommendedAction: "UNAVAILABLE", reason: "SERVICE_OFFLINE" }
+      };
+    }
+
     try {
       const result = await this.runInference(features);
       const latency = Date.now() - start;
@@ -100,7 +114,9 @@ export abstract class BasePredictor implements IAIPredictor {
         err.message.includes("Connection") ||
         err.message.includes("OFFLINE") ||
         err.message.includes("Failed") ||
-        err.message.includes("ECONNREFUSED")
+        err.message.includes("ECONNREFUSED") ||
+        err.message.includes("connection reset") ||
+        err.message.includes("MODEL_SERVICE_UNAVAILABLE")
       );
 
       return {

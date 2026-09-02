@@ -457,7 +457,11 @@ export async function predictSequence(input: SequenceInput, endpointPath = "/res
   // Resolve URL: prefer dynamic quant engine URL, fall back to DL_SERVICE_URL env var
   let serviceUrl = "";
   try {
-    const { getQuantEngineURL } = await import("../config/serviceDiscovery.js");
+    const { getQuantEngineURL, isQuantEngineAvailable } = await import("../config/serviceDiscovery.js");
+    const available = await isQuantEngineAvailable();
+    if (!available) {
+      return predictSequenceLocalTransformer(input);
+    }
     const base = await getQuantEngineURL();
     serviceUrl = `${base}${endpointPath}`;
   } catch {

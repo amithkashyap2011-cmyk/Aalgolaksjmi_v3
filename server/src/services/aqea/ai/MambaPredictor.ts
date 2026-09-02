@@ -10,6 +10,7 @@ import { FeatureVector } from "../featureStore.js";
 import { AqeaAuditService } from "../AqeaAudit.js";
 
 import { AI_ENDPOINTS, buildEndpointUrl } from "../../../config/aiEndpointRegistry.js";
+import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
 
 export class MambaPredictor extends BasePredictor {
   protected modelName = "MAMBA_V1";
@@ -18,16 +19,20 @@ export class MambaPredictor extends BasePredictor {
 
   public async isHealthy(): Promise<boolean> {
     try {
+      if (!await isQuantEngineAvailable()) {
+        this.isDegraded = false;
+        return false;
+      }
       const url = await buildEndpointUrl(AI_ENDPOINTS.MODEL_HEALTH);
       const res = await fetch(url, { signal: AbortSignal.timeout(800) });
       if (!res.ok) return false;
       const health = await res.json() as any;
-      
+
       if (health.mamba?.checkpointLoaded === false) {
           this.isDegraded = true;
           return true;
       }
-      
+
       this.isDegraded = false;
       return health.mamba?.healthy === true;
     } catch {
