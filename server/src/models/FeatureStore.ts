@@ -12,7 +12,7 @@ export interface IFeatureStore extends Document {
 }
 
 const FeatureStoreSchema: Schema = new Schema({
-  featureName: { type: String, required: true, unique: true, index: true },
+  featureName: { type: String, required: true, unique: true },
   version: { type: String, default: "v1.0.0" },
   category: { type: String, required: true },
   importanceScore: { type: Number, default: 0.20 },

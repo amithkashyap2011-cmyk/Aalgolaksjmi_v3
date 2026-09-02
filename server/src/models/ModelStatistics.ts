@@ -22,7 +22,7 @@ export interface IModelStatistics extends Document {
 }
 
 const ModelStatisticsSchema: Schema = new Schema({
-  modelName: { type: String, required: true, unique: true, index: true },
+  modelName: { type: String, required: true, unique: true },
   category: { type: String, required: true },
   accuracy: { type: Number, default: 0 },
   precision: { type: Number, default: 0 },

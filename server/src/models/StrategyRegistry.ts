@@ -23,7 +23,7 @@ export interface IStrategyRegistry extends Document {
 }
 
 const StrategyRegistrySchema: Schema = new Schema({
-  strategyId: { type: String, required: true, unique: true, index: true },
+  strategyId: { type: String, required: true, unique: true },
   strategyName: { type: String, required: true },
   description: { type: String, required: true },
   category: { type: String, required: true },

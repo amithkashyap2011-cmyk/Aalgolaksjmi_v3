@@ -20,7 +20,7 @@ export interface IModelRegistry extends Document {
 }
 
 const ModelRegistrySchema: Schema = new Schema({
-  modelName: { type: String, required: true, unique: true, index: true },
+  modelName: { type: String, required: true, unique: true },
   category: { type: String, required: true },
   version: { type: String, default: "v3.2.0" },
   trainingDataset: { type: String, default: "2022_2024_CRYPTO_INDIAN_EQUITIES" },

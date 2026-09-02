@@ -15,7 +15,7 @@ export interface IResearchExperiment extends Document {
 }
 
 const ResearchExperimentSchema: Schema = new Schema({
-  experimentId: { type: String, required: true, unique: true, index: true },
+  experimentId: { type: String, required: true, unique: true },
   title: { type: String, required: true },
   category: { type: String, enum: ["MODEL", "STRATEGY", "PARAMETER", "BENCHMARK"], required: true },
   parameters: { type: Object, default: {} },

@@ -22,7 +22,7 @@ export interface IWalkForwardRun extends Document {
 }
 
 const WalkForwardRunSchema: Schema = new Schema({
-  runId: { type: String, required: true, unique: true, index: true },
+  runId: { type: String, required: true, unique: true },
   config: { type: Object, required: true },
   metrics: { type: Object, required: true },
   createdAt: { type: Date, default: Date.now, index: true },

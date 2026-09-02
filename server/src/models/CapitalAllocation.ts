@@ -14,7 +14,7 @@ export interface ICapitalAllocation extends Document {
 }
 
 const CapitalAllocationSchema: Schema = new Schema({
-  snapshotId: { type: String, required: true, unique: true, index: true },
+  snapshotId: { type: String, required: true, unique: true },
   allocations: { type: Array, required: true },
   totalCapitalUsdt: { type: Number, required: true },
   portfolioHeatPct: { type: Number, required: true },

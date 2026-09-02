@@ -41,7 +41,7 @@ export interface ITradeEvidence extends Document {
 }
 
 const TradeEvidenceSchema = new Schema<ITradeEvidence>({
-  evidenceId: { type: String, required: true, unique: true, index: true },
+  evidenceId: { type: String, required: true, unique: true },
   tradeId: { type: String, required: true, index: true },
   userId: { type: Schema.Types.ObjectId, required: true, index: true },
   timestamp: { type: Date, default: Date.now, index: true },

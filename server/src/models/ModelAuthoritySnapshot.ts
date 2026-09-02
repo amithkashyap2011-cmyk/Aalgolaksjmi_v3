@@ -51,7 +51,7 @@ export interface IModelAuthoritySnapshot extends Document {
 
 const ModelAuthoritySnapshotSchema = new Schema(
   {
-    snapshotId: { type: String, required: true, unique: true, index: true },
+    snapshotId: { type: String, required: true, unique: true },
     timestamp: { type: Number, required: true, index: true },
     marketDomain: { type: String, enum: ["CRYPTO", "INDIAN", "ALL"], default: "ALL", index: true },
     version: { type: String, default: "2026.1" },

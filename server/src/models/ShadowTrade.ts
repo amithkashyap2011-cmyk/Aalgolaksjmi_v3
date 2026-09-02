@@ -26,7 +26,7 @@ export interface IShadowTrade extends Document {
 }
 
 const ShadowTradeSchema: Schema = new Schema({
-  shadowTradeId: { type: String, required: true, unique: true, index: true },
+  shadowTradeId: { type: String, required: true, unique: true },
   symbol: { type: String, required: true, index: true },
   side: { type: String, enum: ["BUY", "SELL"], required: true },
   requestedQty: { type: Number, required: true },

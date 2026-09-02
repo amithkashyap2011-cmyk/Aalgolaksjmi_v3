@@ -107,7 +107,7 @@ const ModelPredictionRecordSchema = new Schema({
 }, { _id: false });
 
 const AQEAAuthoritativeDecisionSchema = new Schema({
-  decisionId: { type: String, required: true, unique: true, index: true },
+  decisionId: { type: String, required: true, unique: true },
   timestamp: { type: Number, required: true, index: true },
   marketDomain: { type: String, enum: ["CRYPTO", "INDIAN"], required: true, index: true },
   symbol: { type: String, required: true, index: true },

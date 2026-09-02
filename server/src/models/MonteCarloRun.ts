@@ -12,7 +12,7 @@ export interface IMonteCarloRun extends Document {
 }
 
 const MonteCarloRunSchema: Schema = new Schema({
-  simulationId: { type: String, required: true, unique: true, index: true },
+  simulationId: { type: String, required: true, unique: true },
   iterations: { type: Number, default: 1000 },
   expectedDrawdownPct: { type: Number, default: 4.2 },
   worstCaseDrawdownPct: { type: Number, default: 8.5 },

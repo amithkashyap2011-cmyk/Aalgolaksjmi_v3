@@ -104,8 +104,8 @@ const PlaceboTestSchema = new Schema({
 }, { _id: false });
 
 const AQEABiasAuditSchema = new Schema({
-  auditId: { type: String, required: true, unique: true, index: true },
-  timestamp: { type: Number, required: true, index: true },
+  auditId: { type: String, required: true, unique: true },
+  timestamp: { type: Number, required: true },
   overallBiasScore: { type: Number, required: true },
   biasVector: {
     lookAheadBias: { type: BiasDimensionSchema, required: true },

@@ -48,7 +48,7 @@ export interface IIndianTradeGroup extends Document {
 }
 
 const IndianTradeGroupSchema = new Schema<IIndianTradeGroup>({
-  tradeGroupId: { type: String, required: true, unique: true, index: true },
+  tradeGroupId: { type: String, required: true, unique: true },
   strategyInstanceId: { type: String, required: true, index: true },
   userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
   mode: { type: String, enum: ["BACKTEST", "PAPER", "LIVE"], default: "PAPER" },

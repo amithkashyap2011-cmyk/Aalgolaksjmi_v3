@@ -39,7 +39,7 @@ export interface IAQEAForwardOutcome extends Document {
 }
 
 const AQEAForwardOutcomeSchema: Schema = new Schema({
-  decisionId: { type: String, required: true, unique: true, index: true },
+  decisionId: { type: String, required: true, unique: true },
   decisionTimestamp: { type: Number, required: true, index: true },
   entryTimestamp: { type: Number, required: true },
   entryPrice: { type: Number, required: true },
@@ -61,7 +61,7 @@ const AQEAForwardOutcomeSchema: Schema = new Schema({
     marketImpact: { type: Number, default: 0 },
     totalCost: { type: Number, default: 0 }
   },
-  resolvedTimestamp: { type: Number, required: true, index: true },
+  resolvedTimestamp: { type: Number, required: true },
   createdAt: { type: Date, default: Date.now, index: true }
 }, {
   timestamps: true,

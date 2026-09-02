@@ -30,7 +30,7 @@ export interface IIndianRiskSettings extends Document {
 }
 
 const IndianRiskSettingsSchema = new Schema<IIndianRiskSettings>({
-  userId: { type: String, required: true, unique: true, index: true, default: "guest-user" },
+  userId: { type: String, required: true, unique: true, default: "guest-user" },
   autoTrade: { type: Boolean, default: false },
   niftyAutoTrade: { type: Boolean, default: true },
   bankNiftyAutoTrade: { type: Boolean, default: true },

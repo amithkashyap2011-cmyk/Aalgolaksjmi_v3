@@ -14,7 +14,7 @@ export interface IAutonomousExperiment extends Document {
 }
 
 const AutonomousExperimentSchema: Schema = new Schema({
-  experimentId: { type: String, required: true, unique: true, index: true },
+  experimentId: { type: String, required: true, unique: true },
   hypothesisId: { type: String, required: true, index: true },
   experimentType: { type: String, enum: ["BAYESIAN_OPT", "GRID_SEARCH", "WALK_FORWARD", "MONTE_CARLO"], default: "WALK_FORWARD" },
   candidateProfitFactor: { type: Number, required: true },

@@ -14,7 +14,7 @@ export interface IResearchHypothesis extends Document {
 }
 
 const ResearchHypothesisSchema: Schema = new Schema({
-  hypothesisId: { type: String, required: true, unique: true, index: true },
+  hypothesisId: { type: String, required: true, unique: true },
   weaknessType: {
     type: String,
     enum: ["STRATEGY_UNDERPERFORMANCE", "HIGH_SLIPPAGE", "PREMATURE_EXITS", "FALSE_BREAKOUTS", "MODEL_DRIFT"],

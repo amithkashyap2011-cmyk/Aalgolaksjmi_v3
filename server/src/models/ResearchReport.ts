@@ -13,7 +13,7 @@ export interface IResearchReport extends Document {
 }
 
 const ResearchReportSchema: Schema = new Schema({
-  reportId: { type: String, required: true, unique: true, index: true },
+  reportId: { type: String, required: true, unique: true },
   hypothesisId: { type: String, required: true, index: true },
   title: { type: String, required: true },
   summary: { type: String, required: true },
