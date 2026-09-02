@@ -1,5 +1,6 @@
 /* Vitest + Testing Library setup */
 import "@testing-library/jest-dom/vitest";
+import React from "react";
 import { vi } from "vitest";
 
 /* ── Mock socket.io-client to prevent WebSocket connection errors ── */
@@ -32,7 +33,6 @@ vi.mock("../lib/socket", () => ({
 
 /* ── Mock Highcharts React in JSDOM to prevent expensive SVG reflows ── */
 vi.mock("highcharts-react-official", () => {
-  const React = require("react");
   return {
     default: React.forwardRef((props: any, ref: any) =>
       React.createElement("div", {

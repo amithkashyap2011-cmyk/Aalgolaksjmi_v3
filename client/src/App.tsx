@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { Routes, Route } from "react-router-dom";
 import Sidebar from "./components/layout/Sidebar";
 import TopBar from "./components/layout/TopBar";
@@ -8,17 +8,17 @@ import ToastContainer from "./components/layout/ToastContainer";
 import AIFooterTradeBar from "./components/ai/AIFooterTradeBar";
 import { useAppStore } from "./store/useAppStore";
 
-import HomePage from "./pages/HomePage";
-import Positions from "./pages/Positions";
-import OrdersPage from "./pages/OrdersPage";
-import AIMatrix from "./pages/AIMatrix";
-import RiskCenterV8 from "./pages/RiskCenterV8";
-import WalletCenter from "./pages/WalletCenter";
-import SettingsPage from "./pages/SettingsPage";
-import BacktestPage from "./pages/BacktestPage";
-import ForecastCenter from "./pages/ForecastCenter";
-import ReportsModule from "./pages/reports/ReportsModule";
-import IndianMarketPage from "./pages/IndianMarketPage";
+const HomePage = lazy(() => import("./pages/HomePage"));
+const Positions = lazy(() => import("./pages/Positions"));
+const OrdersPage = lazy(() => import("./pages/OrdersPage"));
+const AIMatrix = lazy(() => import("./pages/AIMatrix"));
+const RiskCenterV8 = lazy(() => import("./pages/RiskCenterV8"));
+const WalletCenter = lazy(() => import("./pages/WalletCenter"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const BacktestPage = lazy(() => import("./pages/BacktestPage"));
+const ForecastCenter = lazy(() => import("./pages/ForecastCenter"));
+const ReportsModule = lazy(() => import("./pages/reports/ReportsModule"));
+const IndianMarketPage = lazy(() => import("./pages/IndianMarketPage"));
 
 export default function App() {
   const boot  = useAppStore((s) => s.boot);
@@ -66,20 +66,28 @@ export default function App() {
             style={{ flex:1, overflowY:"auto", overflowX:"hidden", paddingBottom: 0 }}
             className="page-fade"
           >
-            <Routes>
-              <Route path="/"                  element={<HomePage />} />
-              <Route path="/indian-market"     element={<IndianMarketPage />} />
-              <Route path="/aqea/wallet"        element={<WalletCenter />} />
-              <Route path="/aqea/positions"     element={<Positions />} />
-              <Route path="/aqea/orders"        element={<OrdersPage />} />
-              <Route path="/aqea/ai"            element={<AIMatrix />} />
-              <Route path="/aqea/risk-center"   element={<RiskCenterV8 />} />
-              <Route path="/backtest"           element={<BacktestPage />} />
-              <Route path="/prediction"         element={<ForecastCenter />} />
-              <Route path="/reports"            element={<ReportsModule />} />
-              <Route path="/reports/:section"   element={<ReportsModule />} />
-              <Route path="/settings"           element={<SettingsPage />} />
-            </Routes>
+            <Suspense
+              fallback={
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
+                  <div style={{ width: 32, height: 32, border: "2px solid #1e3a5f", borderTopColor: "#3b82f6", borderRadius: "50%", animation: "spin 0.6s linear infinite" }} />
+                </div>
+              }
+            >
+              <Routes>
+                <Route path="/"                  element={<HomePage />} />
+                <Route path="/indian-market"     element={<IndianMarketPage />} />
+                <Route path="/aqea/wallet"        element={<WalletCenter />} />
+                <Route path="/aqea/positions"     element={<Positions />} />
+                <Route path="/aqea/orders"        element={<OrdersPage />} />
+                <Route path="/aqea/ai"            element={<AIMatrix />} />
+                <Route path="/aqea/risk-center"   element={<RiskCenterV8 />} />
+                <Route path="/backtest"           element={<BacktestPage />} />
+                <Route path="/prediction"         element={<ForecastCenter />} />
+                <Route path="/reports"            element={<ReportsModule />} />
+                <Route path="/reports/:section"   element={<ReportsModule />} />
+                <Route path="/settings"           element={<SettingsPage />} />
+              </Routes>
+            </Suspense>
           </main>
 
           {/* Live Upcoming AI Trade Prediction Bar */}
