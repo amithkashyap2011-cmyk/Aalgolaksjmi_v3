@@ -448,33 +448,87 @@ router.get("/positions", async (req, res) => {
   }
 });
 
+// In-memory cache for /trades endpoint (3s TTL)
+const tradesCache = new Map<string, { data: any[]; ts: number }>();
+
 /**
- * GET /api/aqea/trades
+ * GET /api/aqea/trades (also /aqea-ui/trades)
  * Paginated closed trades
  */
 router.get("/trades", async (req, res) => {
   try {
     const userId = req.query.userId as string;
-    const limit  = parseInt(req.query.limit as string) || 50;
-    const skip   = parseInt(req.query.skip  as string) || 0;
+    const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 50));
+    const skip   = Math.max(0, parseInt(req.query.skip  as string) || 0);
     const showArchived = req.query.archived === "true";
 
-    const filter: any = {
-      userId:   getSafeObjectId(userId),
-      status:   "CLOSED",
-      strategy: /AQEA/,
-    };
-    if (!showArchived) filter.archived = { $ne: true };
+    const objectId = getSafeObjectId(userId);
+    const cacheKey = `${objectId.toString()}_${limit}_${skip}_${showArchived}`;
+    const cached = tradesCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < 3000) {
+      return res.json(cached.data);
+    }
 
-    const closedTrades = await Trade.find(filter)
+    const filter: any = {
+      userId: objectId,
+      status: "CLOSED"
+    };
+    if (showArchived) {
+      filter.archived = true;
+    } else {
+      filter.archived = { $ne: true };
+    }
+
+    let query = Trade.find(filter)
+      .select("symbol side pnl grossPnl netPnl status exitReason openedAt closedAt archived archivedAt quantity qty entryPrice exitPrice leverage strategy aiConfidence marketRegime coreScore finalScore meta")
       .sort({ closedAt: -1 })
       .limit(limit)
       .skip(skip)
+      .maxTimeMS(3000)
       .lean();
 
-    res.json(closedTrades);
+    try {
+      query = query.hint({ userId: 1, status: 1, closedAt: -1 });
+    } catch {
+      // fallback to default planner if hint not ready
+    }
+
+    const closedTrades = await query;
+    const sanitized = (closedTrades || []).map((t: any) => ({
+      _id: t._id,
+      symbol: t.symbol,
+      side: t.side,
+      pnl: t.pnl,
+      grossPnl: t.grossPnl,
+      netPnl: t.netPnl,
+      status: t.status,
+      exitReason: t.exitReason || t.meta?.closeReason || t.meta?.exitReason || null,
+      openedAt: t.openedAt,
+      closedAt: t.closedAt,
+      archived: !!t.archived,
+      archivedAt: t.archivedAt,
+      quantity: t.quantity ?? t.qty,
+      entryPrice: t.entryPrice,
+      exitPrice: t.exitPrice,
+      leverage: t.leverage || 1,
+      strategy: t.strategy || "AQEA",
+      aiConfidence: t.aiConfidence,
+      marketRegime: t.marketRegime || t.meta?.aqea?.regime || null,
+      coreScore: t.coreScore,
+      finalScore: t.finalScore || t.meta?.aqea?.finalScore || null,
+      meta: {
+        closeReason: t.meta?.closeReason || t.meta?.exitReason || t.exitReason,
+        exitReason: t.meta?.exitReason || t.exitReason,
+        aqea: t.meta?.aqea ? { regime: t.meta.aqea.regime, finalScore: t.meta.aqea.finalScore } : undefined
+      }
+    }));
+
+    tradesCache.set(cacheKey, { data: sanitized, ts: Date.now() });
+
+    res.json(sanitized);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("[aqeaUi /trades] Error fetching trades:", err.message);
+    res.json([]);
   }
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState, Fragment } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useDashboardStore } from '../store/useDashboardStore';
 import { formatCurrency, withInr } from '../lib/currency';
@@ -7,7 +7,7 @@ import {
   Archive, Trash2, ArchiveRestore, Eye, EyeOff, AlertTriangle, X,
 } from 'lucide-react';
 import {
-  archiveTrade, archiveAllTrades, clearArchivedTrades, getTradesWithArchived,
+  archiveTrade, archiveAllTrades, clearArchivedTrades,
 } from '../lib/api';
 
 const BG = "var(--ds-bg)", CARD = "var(--ds-surface)", BORD = "var(--ds-border)";
@@ -54,17 +54,22 @@ export default function OrdersPage() {
   const inrRate = summary?.inrRate || 85;
 
   const load = async () => {
-    if (!userId) return;
     setLoading(true);
     try {
+      const activeUserId = userId || "000000000000000000000000";
       const url = showArchived
-        ? `/aqea-ui/trades?userId=${userId}&limit=100&archived=true`
-        : `/aqea-ui/trades?userId=${userId}&limit=100`;
-      const res = await fetch(url);
+        ? `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=100&archived=true`
+        : `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=100`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setOrders(Array.isArray(data) ? data : []);
-    } catch { setOrders([]); }
-    finally { setLoading(false); }
+    } catch (err) {
+      console.warn("[OrdersPage] Failed to fetch trades:", err);
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, [userId, showArchived]);
@@ -90,8 +95,8 @@ export default function OrdersPage() {
   const handleArchiveAll = async () => {
     setConfirm(null);
     try {
-      const res = await archiveAllTrades(userId!);
-      flash(`${res.count} trades archived`);
+      const res = await archiveAllTrades(userId || "000000000000000000000000");
+      flash(`${res?.count || 0} trades archived`);
       await load();
     } catch { flash("Archive failed"); }
   };
@@ -100,8 +105,8 @@ export default function OrdersPage() {
   const handleClearArchived = async () => {
     setConfirm(null);
     try {
-      const res = await clearArchivedTrades(userId!);
-      flash(`${res.deleted} archived trades permanently deleted`);
+      const res = await clearArchivedTrades(userId || "000000000000000000000000");
+      flash(`${res?.deleted || 0} archived trades permanently deleted`);
       await load();
     } catch { flash("Clear failed"); }
   };
@@ -217,9 +222,8 @@ export default function OrdersPage() {
                   const isOpen = expanded === id;
                   const isArchived = !!o.archived;
                   return (
-                    <>
+                    <Fragment key={id}>
                       <tr
-                        key={id}
                         style={{
                           borderBottom:`1px solid var(--ds-border)`,
                           background: isOpen ? "rgba(59,130,246,0.05)" : isArchived ? "rgba(245,158,11,0.03)" : "",
@@ -312,7 +316,7 @@ export default function OrdersPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>

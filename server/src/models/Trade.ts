@@ -181,6 +181,8 @@ const TradeSchema = new Schema<ITrade>({
 
 TradeSchema.index({ userId: 1, symbol: 1, mode: 1, status: 1 });
 TradeSchema.index({ userId: 1, status: 1, mode: 1, accountType: 1 });
+TradeSchema.index({ userId: 1, status: 1, closedAt: -1 });
+TradeSchema.index({ userId: 1, status: 1, archived: 1, closedAt: -1 });
 TradeSchema.index({ userId: 1, mode: 1, openedAt: -1 });
 TradeSchema.index({ userId: 1, mode: 1, status: 1, openedAt: -1 });
 TradeSchema.index({ userId: 1, mode: 1, closedAt: -1 });
