@@ -262,43 +262,68 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Quick PnL Badges Row */}
+          {/* Quick PnL Badges Row — Plain-English & Beginner-Friendly */}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ background: dailyPnl >= 0 ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", border: `1px solid ${dailyPnl >= 0 ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, padding: "8px 14px", borderRadius: 10 }}>
-              <span style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", display: "block", marginBottom: 2 }}>TODAY'S P&L</span>
+            
+            {/* 1. Today's Performance */}
+            <div
+              style={{ background: dailyPnl >= 0 ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", border: `1px solid ${dailyPnl >= 0 ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, padding: "8px 14px", borderRadius: 10 }}
+              title="Today's Performance (Realized gains made today + current live trade profits)"
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase" }}>TODAY'S PROFIT / LOSS</span>
+              </div>
               <span style={{ fontSize: 13, fontWeight: 900, color: dailyPnl >= 0 ? "#34d399" : "#f87171", fontFamily: "monospace" }}>
                 {formatVal(dailyPnl)}
               </span>
+              <div style={{ fontSize: 8.5, color: "#64748b", fontWeight: 600, marginTop: 1 }}>Since midnight today</div>
             </div>
 
-            <div style={{ background: openPnl >= 0 ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", border: `1px solid ${openPnl >= 0 ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, padding: "8px 14px", borderRadius: 10 }}>
-              <span style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", display: "block", marginBottom: 2 }}>OPEN UNREALIZED</span>
+            {/* 2. Live Active Trades */}
+            <div
+              style={{ background: openPnl >= 0 ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", border: `1px solid ${openPnl >= 0 ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, padding: "8px 14px", borderRadius: 10 }}
+              title="Live Floating P&L: Profit or loss on trades that are currently running and NOT yet closed"
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase" }}>LIVE ACTIVE TRADES</span>
+              </div>
               <span style={{ fontSize: 13, fontWeight: 900, color: openPnl >= 0 ? "#34d399" : "#f87171", fontFamily: "monospace" }}>
                 {formatVal(openPnl)}
               </span>
+              <div style={{ fontSize: 8.5, color: "#64748b", fontWeight: 600, marginTop: 1 }}>Floating (not sold yet)</div>
             </div>
 
-            <div style={{ background: netPnl.total >= 0 ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", border: `1px solid ${netPnl.total >= 0 ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, padding: "8px 14px", borderRadius: 10 }}>
-              <span style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", display: "block", marginBottom: 2 }}>NET REALIZED P&L</span>
+            {/* 3. Closed History */}
+            <div
+              style={{ background: netPnl.total >= 0 ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)", border: `1px solid ${netPnl.total >= 0 ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`, padding: "8px 14px", borderRadius: 10 }}
+              title="Locked Realized P&L: Total cash profit or loss locked into wallet from all closed trades since day 1"
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase" }}>LOCKED IN WALLET</span>
+              </div>
               <span style={{ fontSize: 13, fontWeight: 900, color: netPnl.total >= 0 ? "#34d399" : "#f87171", fontFamily: "monospace" }}>
                 {formatVal(netPnl.total)}
               </span>
+              <div style={{ fontSize: 8.5, color: "#64748b", fontWeight: 600, marginTop: 1 }}>All past closed trades</div>
             </div>
 
-            {/* Total All-Time P&L (Realized + Open Unrealized) */}
+            {/* 4. Total All-Time P&L (Realized + Open Unrealized) */}
             <div style={{
               background: ((summary.totalAllTimePnL ?? (netPnl.total + openPnl)) >= 0) ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)",
               border: `1px solid ${((summary.totalAllTimePnL ?? (netPnl.total + openPnl)) >= 0) ? "#10b981" : "#ef4444"}`,
               padding: "8px 14px",
               borderRadius: 10,
               boxShadow: ((summary.totalAllTimePnL ?? (netPnl.total + openPnl)) >= 0) ? "0 0 12px rgba(16,185,129,0.2)" : "0 0 12px rgba(239,68,68,0.2)"
-            }} title="Total All-Time Net Profit/Loss (Realized + Open Unrealized)">
-              <span style={{ fontSize: 9, fontWeight: 800, color: "#f8fafc", textTransform: "uppercase", display: "block", marginBottom: 2 }}>
-                🔥 TOTAL ALL-TIME P&L
-              </span>
+            }} title="Overall Account Total: Locked Cash in Wallet + Live Floating Trades combined">
+              <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                <span style={{ fontSize: 9, fontWeight: 900, color: "#f8fafc", textTransform: "uppercase" }}>
+                  🔥 OVERALL TOTAL
+                </span>
+              </div>
               <span style={{ fontSize: 13, fontWeight: 900, color: ((summary.totalAllTimePnL ?? (netPnl.total + openPnl)) >= 0) ? "#34d399" : "#f87171", fontFamily: "monospace" }}>
                 {formatVal(summary.totalAllTimePnL ?? (netPnl.total + openPnl))}
               </span>
+              <div style={{ fontSize: 8.5, color: "#cbd5e1", fontWeight: 600, marginTop: 1 }}>Locked + Live combined</div>
             </div>
           </div>
         </div>
