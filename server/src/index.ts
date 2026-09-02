@@ -305,17 +305,16 @@ app.use((req, res, next) => {
   const isProtectedRoute = protectedRoutes.some(route => req.path.startsWith(route));
 
   // Read-only queries stay available while the system boots or waits for the
-  // quant engine — they never place orders, and the Positions/History pages
+  // quant engine — they never place orders, and the Positions/History/Market pages
   // must keep working even when execution is gated.
-  const readOnlyRoutes = ["/trading/open-positions", "/trading/history", "/trading/wallet", "/trading/klines"];
-  const isReadOnlyQuery = req.method === "GET" && readOnlyRoutes.some(route => req.path.startsWith(route));
+  const isReadOnlyQuery = req.method === "GET";
 
   if (isProtectedRoute && !isReadOnlyQuery && state !== SystemState.READY && state !== SystemState.DEGRADED) {
     return res.status(503).json({
       status: "error",
       code: "SYSTEM_NOT_READY",
       state: state,
-      message: "Trading services are currently unavailable. System is in state: " + state
+      message: "Trading execution services are currently unavailable. System is in state: " + state
     });
   }
   next();

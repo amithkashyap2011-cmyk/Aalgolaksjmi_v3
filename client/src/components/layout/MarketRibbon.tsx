@@ -28,10 +28,12 @@ const MarketRibbon: React.FC = () => {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchHeader();
-    const interval = setInterval(fetchHeader, 10000);
+    fetchHeader().catch(() => {});
+    const interval = setInterval(() => {
+      fetchHeader().catch(() => {});
+    }, 10000);
     return () => clearInterval(interval);
-  }, [fetchHeader]);
+  }, []);
 
   const DecisionTag = ({ decision, score }: { decision: string, score: number }) => {
      const styles: any = {

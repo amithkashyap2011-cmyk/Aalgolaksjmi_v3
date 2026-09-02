@@ -33,7 +33,7 @@ export default function TopBar({ onMenuClick }: Props) {
     go();
     const t = setInterval(go, 15000);
     return () => clearInterval(t);
-  }, [userId, accountType, fetchDashboard]);
+  }, [userId, accountType]);
 
   const inrRate = summary.inrRate || 85.0;
   const activeMode = MODES.find((m) => m.value === mode) ?? MODES[0];

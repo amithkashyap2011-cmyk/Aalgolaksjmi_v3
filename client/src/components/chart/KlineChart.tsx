@@ -45,6 +45,7 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
 
   const options: Highcharts.Options = {
     chart: { backgroundColor: "#070d1a", animation: false, height },
+    accessibility: { enabled: false },
     credits: { enabled: false },
     rangeSelector: { enabled: false },
     navigator: { enabled: true, height: 36, outlineColor: "rgba(255,255,255,0.05)" },

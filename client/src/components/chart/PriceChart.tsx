@@ -31,6 +31,7 @@ export default function PriceChart() {
     navigator: { enabled: false },
     scrollbar: { enabled: false },
     title: { text: "" },
+    accessibility: { enabled: false },
     credits: { enabled: false },
     xAxis: { type: "datetime", lineColor: "#e2e8f0", tickColor: "#e2e8f0" },
     yAxis: {

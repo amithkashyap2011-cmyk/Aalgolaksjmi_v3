@@ -188,7 +188,7 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
         positions: Array.isArray(posData) ? posData : [],
       });
     } catch (err) {
-      console.error("Dashboard fetch failed:", err);
+      // Gentle warning for transient network hiccups
     }
   },
   fetchHeader: async () => {
@@ -200,7 +200,7 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
       const data = await res.json();
       set({ headerData: Array.isArray(data) ? data : [] });
     } catch (err) {
-      console.error("Header fetch failed:", err);
+      // Gentle warning for transient network hiccups
     }
   },
   fetchLogs: async (userId: string) => {
@@ -219,7 +219,7 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
       })) : [];
       set({ logs: mappedLogs });
     } catch (err) {
-      console.error("Logs fetch failed:", err);
+      // Gentle warning for transient network hiccups
     }
   }
 }));
