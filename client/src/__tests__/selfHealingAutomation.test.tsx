@@ -22,7 +22,7 @@ class SelfHealingLocator {
 
   public static findElement(
     container: HTMLElement,
-    candidates: Array<{ type: "id" | "role" | "text" | "aria" | "class"; value: string }>
+    candidates: Array<{ type: "id" | "role" | "text" | "aria" | "class" | "tag"; value: string }>
   ): HTMLElement {
     for (let i = 0; i < candidates.length; i++) {
       const candidate = candidates[i];
