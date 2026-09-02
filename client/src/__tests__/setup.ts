@@ -15,6 +15,35 @@ vi.mock("socket.io-client", () => ({
   })),
 }));
 
+/* ── Mock socket module to prevent verbose terminal subscription logs ── */
+vi.mock("../lib/socket", () => ({
+  socket: {
+    on: vi.fn(),
+    off: vi.fn(),
+    emit: vi.fn(),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    id: "mock-socket-id",
+    connected: false,
+  },
+  subscribeTicker: vi.fn(),
+  unsubscribeTicker: vi.fn(),
+}));
+
+/* ── Mock Highcharts React in JSDOM to prevent expensive SVG reflows ── */
+vi.mock("highcharts-react-official", () => {
+  const React = require("react");
+  return {
+    default: React.forwardRef((props: any, ref: any) =>
+      React.createElement("div", {
+        ref,
+        "data-testid": "highcharts-mock",
+        className: "highcharts-container",
+      })
+    ),
+  };
+});
+
 /* ── Mock fetch — simulate server unreachable so store stays in mock-fallback mode ── */
 globalThis.fetch = vi.fn().mockResolvedValue({
   ok: false,
