@@ -182,11 +182,18 @@ export class FeaturePipeline {
     const bars = ctx.bars || [];
 
     // 1. OHLCV
-    const open = Number(ind.open ?? price);
-    const high = Number(ind.high ?? price);
-    const low = Number(ind.low ?? price);
+    // The live IndicatorSnapshot carries none of open/high/low/volume, so fall
+    // back to the latest bar (a real Binance kline) before the price/0 defaults.
+    // Without this, volume sat at 0 and open=high=low=close on EVERY live
+    // decision — a dead volume feature (tensorVector[4] stuck near -1) and a
+    // phantom parkinson/realized volatility (both pinned to 0.01). `??` (not
+    // `||`) preserves an explicit ind.volume === 0 for callers that pass one.
+    const lastBar = bars.length > 0 ? bars[bars.length - 1] : null;
+    const open = Number(ind.open ?? lastBar?.open ?? price);
+    const high = Number(ind.high ?? lastBar?.high ?? price);
+    const low = Number(ind.low ?? lastBar?.low ?? price);
     const close = Number(price);
-    const volume = Number(ind.volume ?? 0);
+    const volume = Number(ind.volume ?? ctx.volume ?? lastBar?.volume ?? 0);
     const vwap = Number(ind.vwap ?? price);
 
     // 2. Order Book
@@ -233,7 +240,11 @@ export class FeaturePipeline {
     const oiTrend = oiExp > 5 ? "EXPANDING" : (oiExp < -5 ? "CONTRACTING" : "STABLE");
 
     // 6. Volatility
-    const std14 = Number(ind.stdDev || ind.std_14 || (price * 0.01));
+    // The live IndicatorSnapshot exposes the rolling std as `stdDev20`, not
+    // `stdDev`/`std_14`, so without it here std14 fell through to the price*0.01
+    // placeholder and realizedVol was pinned to exactly 0.01 on every decision
+    // (a phantom volatility feeding tensorVector[7] and volRatio).
+    const std14 = Number(ind.stdDev || ind.std_14 || ind.stdDev20 || (price * 0.01));
     const realizedVol = price > 0 ? std14 / price : 0.01;
     const parkinsonVol = high > low && low > 0 ? Math.sqrt(Math.pow(Math.log(high / low), 2) / (4 * Math.log(2))) : 0.01;
     const volRatio = realizedVol / Math.max(0.001, parkinsonVol);

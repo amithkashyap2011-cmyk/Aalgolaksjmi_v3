@@ -1089,7 +1089,10 @@ export class AQEAEngine {
       },
       trendStrength: regime.trendStrength,
       momentum: std15Features.macd.momentum,
-      orderFlowCvd: std15Features.cvd.cvdScore,
+      // Report the live, normalized CVD the models actually consume, not the
+      // legacy raw `cvdScore` (0 by design on the live path) — otherwise this
+      // diagnostic reads orderFlowCvd:0 forever even when real order flow is fed.
+      orderFlowCvd: std15Features.cvd.cvdNormalized,
       smartMoney: {
         orderBlock: std15Features.smc.orderBlock,
         fvg: std15Features.smc.fvg,
