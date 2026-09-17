@@ -135,21 +135,13 @@ jest.unstable_mockModule("../../src/services/aqea/smartMoneyEngine.js", () => ({
   SmartMoneyEngine: { analyze: jest.fn(() => ({ votingScore: 80, signal: "BULLISH", diagnostics: { liquiditySweeps: [] } })) }
 }));
 
-let AQEAEngine: any, AQEA_CONFIG: any, Settings: any, PredictorRegistry: any, RiskEngine: any;
+let AQEAEngine: any, AQEA_CONFIG: any, Settings: any, PredictorRegistry: any;
 let LakshmiMasterRouter: any, __origRoute: any;
 beforeAll(async () => {
   ({ Settings } = await import("../../src/models/Settings.js"));
   ({ AQEAEngine } = await import("../../src/services/aqea/engine.js"));
   ({ AQEA_CONFIG } = await import("../../src/services/aqea/config.js") as any);
   ({ PredictorRegistry } = await import("../../src/services/aqea/ai/PredictorRegistry.js") as any);
-  // ⚠️ ESM MOCK CAVEAT: this project's global jest `moduleNameMapper` rewrites
-  // relative `.js` import specifiers, so `jest.unstable_mockModule` keys no
-  // longer match the specifier the engine actually imports — every module mock
-  // above is inert. The mocks that take effect do so via `jest.spyOn` on the
-  // REAL, shared module singleton in beforeEach (below): engine.ts and this test
-  // resolve to the same instance, so a spy here is what the engine sees. That is
-  // why RiskEngine / PredictorRegistry / Settings are re-controlled with spyOn.
-  ({ RiskEngine } = await import("../../src/services/aqea/riskEngine.js") as any);
   // The real ensemble fusion is structurally sub-hurdle (evPassesGate === false)
   // on this suite's synthetic inputs; post-fix that EV veto now blocks the
   // technical fallback. PPO execution-authority tests need a real directional
@@ -225,16 +217,6 @@ describe("AQEA Phase 5C: PPO Execution Authority", () => {
     
     mockGetWallet.mockReturnValue(new Map([["USDT", 10000]]));
     mockValidateTrade.mockResolvedValue({ allowed: true, positionSize: 100, riskScore: 90 });
-    // Risk must APPROVE so a directional base decision reaches the PPO execution-
-    // authority layer. The unstable_mockModule riskEngine mock is inert (see the
-    // ESM MOCK CAVEAT in beforeAll), so spy the real, shared RiskEngine the engine
-    // actually calls — otherwise the real engine reads an unfunded wallet and
-    // rejects every trade with BALANCE_ZERO, forcing HOLD before PPO runs.
-    if (RiskEngine?.validateTrade) {
-      jest.spyOn(RiskEngine, "validateTrade").mockResolvedValue({
-        allowed: true, positionSize: 100, riskScore: 90, maxLoss: 100, leverage: 5, reason: "OK"
-      } as any);
-    }
     (AQEA_CONFIG as any).PPO_EXECUTION_AUTHORITY = true;
     
     mockPPOPredictor.predict.mockResolvedValue({
