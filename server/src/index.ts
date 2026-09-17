@@ -88,7 +88,12 @@ process.on("uncaughtException", (err) => {
     fs.appendFileSync(crashLog, msg);
     fs.appendFileSync(tradeLog, msg);
   } catch {}
-  console.error(msg);
+  // 🛡️ Guard console output: a broken stdout/stderr pipe (EPIPE) thrown here
+  // would re-enter this uncaughtException handler and crash-loop the process
+  // (observed 2026-09-16: 8 restarts in ~90 min once npm-run-dev's stdout
+  // reader detached). File logging above is the durable record; console is
+  // best-effort.
+  try { console.error(msg); } catch {}
   // Give time for logging before exiting
   setTimeout(() => process.exit(1), 1000);
 });
@@ -103,7 +108,9 @@ process.on("unhandledRejection", (reason, promise) => {
     fs.appendFileSync(crashLog, msg);
     fs.appendFileSync(tradeLog, msg);
   } catch {}
-  console.error(msg);
+  // 🛡️ Guard console output (see uncaughtException handler above): an EPIPE
+  // thrown here becomes an uncaughtException and would crash-loop the process.
+  try { console.error(msg); } catch {}
 });
 
 import { validateTransportSecurityOnStartup, transportSecurityMiddleware } from "./middleware/transportSecurity.js";
