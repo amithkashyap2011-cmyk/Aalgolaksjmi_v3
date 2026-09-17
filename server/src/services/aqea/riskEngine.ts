@@ -32,6 +32,15 @@ export interface TradeContext {
   winRate: number;
   rewardRisk: number;
   fundingRate: number;
+  /**
+   * The user's configured concurrent-position ceiling
+   * (settings.riskConfig.maxConcurrentPositions). When omitted or invalid the
+   * engine falls back to AQEA_CONFIG.MAX_CONCURRENT_POSITIONS. Previously this
+   * gate hard-coded the config default and silently ignored the user's setting,
+   * so a user who set 10 was still capped at 5 (the entry evaluator honoured 10,
+   * making the two limits disagree).
+   */
+  maxConcurrentPositions?: number;
 }
 
 export class RiskEngine {
@@ -60,8 +69,18 @@ export class RiskEngine {
        status: "OPEN"
     }).lean() : [];
     
-    if (openTrades.length >= AQEA_CONFIG.MAX_CONCURRENT_POSITIONS) {
-       return this.reject(`MAX_POSITIONS_BREACH: ${openTrades.length}`);
+    // Honour the user's configured ceiling; fall back to the platform default
+    // only when it is absent or invalid (so an unset/garbage value can never
+    // disable the cap). Aligns this binding gate with the entry evaluator, which
+    // already reads settings.riskConfig.maxConcurrentPositions.
+    const maxPositions = (typeof ctx.maxConcurrentPositions === "number"
+      && Number.isFinite(ctx.maxConcurrentPositions)
+      && ctx.maxConcurrentPositions >= 1)
+        ? Math.floor(ctx.maxConcurrentPositions)
+        : AQEA_CONFIG.MAX_CONCURRENT_POSITIONS;
+
+    if (openTrades.length >= maxPositions) {
+       return this.reject(`MAX_POSITIONS_BREACH: ${openTrades.length}/${maxPositions}`);
     }
 
     // 3. Portfolio Exposure Check

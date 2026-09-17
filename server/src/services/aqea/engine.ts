@@ -686,6 +686,9 @@ export class AQEAEngine {
       currentPrice: context.currentPrice, atr: ind.atr14 || 0,
       winRate: context.performance.winRate, rewardRisk: context.performance.rewardRisk,
       fundingRate: context.marketData.fundingRate,
+      // Honour the user's configured concurrent-position ceiling instead of the
+      // hard-coded platform default (RiskEngine falls back to the default if unset).
+      maxConcurrentPositions: (userSettings as any)?.riskConfig?.maxConcurrentPositions,
     };
     
     const risk = await RiskEngine.validateTrade(riskCtx);
