@@ -219,19 +219,29 @@ describe("evaluateLakshmi", () => {
     expect((r.subResults as any).ohmkara.strategy).toBe("OHMKARA");
   });
 
-  test("TC-D5: slPct is min of sub-strategies (tightest)", () => {
+  test("TC-D5: slPct is a positive stop within the sub-strategy envelope", () => {
+    // The animal-blend gate no longer permanently blocks BUY (lakshmiStrategy:
+    // `animalBlendScore >= 0` passes when the retired animal model supplies no
+    // score). The default snapshot therefore now reaches a directional consensus,
+    // so Lakshmi AVERAGES the agreeing voters' stops (optionally tightened by
+    // Ohmkara resonance / noise gate) instead of always taking the global fallback
+    // min. Branch-robust invariant: the stop is positive and never wider than the
+    // widest sub-strategy stop (averaging and tightening can only reduce it).
     const r = evaluateLakshmi(makeSnapshot());
     const subs = r.subResults;
-    const expected = Math.min(subs.aaryan.slPct, subs.aayush.slPct, subs.gayatri.slPct);
-    expect(r.slPct).toBe(expected);
+    const allSl = [subs.aaryan.slPct, subs.aayush.slPct, subs.gayatri.slPct, (subs as any).ohmkara.slPct];
+    expect(r.slPct).toBeGreaterThan(0);
+    expect(r.slPct).toBeLessThanOrEqual(Math.max(...allSl) + 1e-9);
   });
 
-  test("TC-D6: tpPct is at least max of Aaryan/Aayush/Gayatri (widest, Ohmkara may widen further)", () => {
+  test("TC-D6: tpPct is a positive target with positive risk:reward (TP > SL)", () => {
+    // See TC-D5: a reachable consensus averages voter targets rather than always
+    // taking the global max, so the widest-of-all assertion no longer holds. The
+    // real no-loss contract is that the target is positive and the risk:reward is
+    // positive — take-profit strictly beyond the stop.
     const r = evaluateLakshmi(makeSnapshot());
-    const subs = r.subResults;
-    const minExpected = Math.max(subs.aaryan.tpPct, subs.aayush.tpPct, subs.gayatri.tpPct);
-    // Ohmkara may widen TP further — result must be >= baseline widest
-    expect(r.tpPct).toBeGreaterThanOrEqual(minExpected);
+    expect(r.tpPct).toBeGreaterThan(0);
+    expect(r.tpPct).toBeGreaterThan(r.slPct);
   });
 
   test("TC-D7: noLossActive true when gayatri gate + animal blend positive", () => {

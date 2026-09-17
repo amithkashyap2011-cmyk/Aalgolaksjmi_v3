@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { useLocation } from "react-router-dom";
+import { useState, useEffect, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { useDashboardStore } from "../../store/useDashboardStore";
 import { checkIsIndianMarketOpen } from "../../utils/indianMarketHours";
@@ -78,34 +78,82 @@ function generatePrediction(
   };
 }
 
+// 🛡️ 2026-09-16: entry/TP/SL were rendered with a fixed 2-decimal
+// toLocaleString, so any sub-$1 asset (e.g. DOGEUSDT ~$0.08) showed all
+// three as the identical-looking "$0.08" even though they're genuinely
+// distinct values (generatePrediction already computes them with 4-decimal
+// precision below $100 — this was purely a display bug, not a calculation
+// one). Mirrors that same magnitude-aware precision here, with one more
+// tier for sub-cent assets (SHIB etc.).
+function formatPrice(price: number): string {
+  const decimals = price > 100 ? 2 : price > 1 ? 4 : price > 0.01 ? 6 : 8;
+  return price.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+// A symbol the user selected that isn't one of the curated pool entries
+// above still needs *something* sensible to show — this builds that
+// fallback instead of silently ignoring the selection.
+function resolvePoolItem(
+  symbol: string,
+  isIndian: boolean,
+  accountType: "SPOT" | "FUTURES" | "BOTH"
+) {
+  const pool = isIndian ? INDIAN_POOL : CRYPTO_POOL;
+  const found = pool.find((p) => p.symbol === symbol);
+  if (found) return { ...found, isIndian };
+  return {
+    symbol,
+    exchange: isIndian ? "NSE (EQUITY)" : `BINANCE ${accountType === "BOTH" ? "FUTURES" : accountType}`,
+    basePrice: 0,
+    leverage: isIndian || accountType === "SPOT" ? 1 : 5,
+    reasons: ["Ensemble neural consensus", "Order-flow imbalance signal", "Multi-timeframe momentum confirmation"],
+    isIndian,
+  };
+}
+
 export default function AIFooterTradeBar() {
   const [isExpanded, setIsExpanded] = useState(false);
   const [countdown, setCountdown] = useState(15);
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [executionMessage, setExecutionMessage] = useState("");
   const location = useLocation();
+  const navigate = useNavigate();
   const { headerData } = useDashboardStore();
 
-  const isIndianRoute = location.pathname.startsWith("/indian-market");
-  const indianStatus = checkIsIndianMarketOpen();
-  // Only include Indian equities if explicitly on Indian Market page OR Indian stock market is actively open
-  const shouldIncludeIndian = isIndianRoute || indianStatus.isOpen;
+  const activeMarket = useAppStore((s) => s.activeMarket);
+  const accountType = useAppStore((s) => s.accountType);
+  const setSymbol = useAppStore((s) => s.setSymbol);
+  // The coin the user is actually looking at elsewhere in the app (ticker
+  // bar / watchlist selection) — previously this widget ignored it
+  // entirely and auto-cycled through its own fixed 4-symbol pool on a
+  // 15s timer, so picking a different coin anywhere else had no visible
+  // effect here at all.
+  const selectedSymbol = useAppStore((s) => s.selectedSymbol);
+  const isIndianRoute = activeMarket === "INDIA" || location.pathname.startsWith("/indian-market") || location.pathname.startsWith("/india");
 
-  // Active pool of candidate symbols based on session/page
-  const activePool = useMemo(() => {
-    if (isIndianRoute) {
-      return INDIAN_POOL.map((item) => ({ ...item, isIndian: true }));
-    }
-    if (shouldIncludeIndian) {
-      return [
-        ...CRYPTO_POOL.map((item) => ({ ...item, isIndian: false })),
-        ...INDIAN_POOL.map((item) => ({ ...item, isIndian: true })),
-      ];
-    }
-    return CRYPTO_POOL.map((item) => ({ ...item, isIndian: false }));
-  }, [isIndianRoute, shouldIncludeIndian]);
-
-  const [poolIndex, setPoolIndex] = useState(0);
+  // "BOTH" mode's badge previously just re-tinted whatever text the cycling
+  // prediction already had (e.g. "BINANCE FUTURES" painted blue) — the
+  // color changed but the word "SPOT" never actually appeared, which is
+  // what the color-blink was supposed to be signaling in the first place.
+  // This explicitly alternates the label itself between the two markets.
+  // BLINK_INTERVAL/BLINK_DIP are tuned to line up with the CSS keyframe
+  // below (see .aqea-exchange-blink) so the text swap happens right at
+  // the dimmest point of the fade instead of snapping instantly — a
+  // real crossfade blink rather than a flicker.
+  const BLINK_INTERVAL_MS = 2400;
+  const BLINK_DIP_MS = 220;
+  const [blinkPhase, setBlinkPhase] = useState<"SPOT" | "FUTURES">("SPOT");
+  useEffect(() => {
+    if (accountType !== "BOTH") return;
+    let dipTimer: ReturnType<typeof setTimeout>;
+    const mainTimer = setInterval(() => {
+      dipTimer = setTimeout(() => {
+        setBlinkPhase((prev) => (prev === "SPOT" ? "FUTURES" : "SPOT"));
+      }, BLINK_DIP_MS);
+    }, BLINK_INTERVAL_MS);
+    return () => {
+      clearInterval(mainTimer);
+      clearTimeout(dipTimer);
+    };
+  }, [accountType]);
 
   const getLivePrice = useCallback((sym: string) => {
     const found = headerData?.find((h) => h.symbol === sym);
@@ -113,34 +161,28 @@ export default function AIFooterTradeBar() {
   }, [headerData]);
 
   const [prediction, setPrediction] = useState<UpcomingTradePrediction>(() => {
-    const initialItem = isIndianRoute ? INDIAN_POOL[0] : CRYPTO_POOL[0];
-    return generatePrediction(initialItem, isIndianRoute);
+    const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
+    return generatePrediction(item, isIndianRoute, getLivePrice(item.symbol));
   });
 
-  // Keep prediction in sync if user navigates between Indian Market and Crypto views
+  // Re-evaluate immediately whenever the user picks a different coin,
+  // switches Indian/Crypto, or changes the SPOT/FUTURES/BOTH filter.
   useEffect(() => {
-    const pool = isIndianRoute
-      ? INDIAN_POOL.map((item) => ({ ...item, isIndian: true }))
-      : CRYPTO_POOL.map((item) => ({ ...item, isIndian: false }));
-    const selected = pool[0];
-    const live = getLivePrice(selected.symbol);
-    setPrediction(generatePrediction(selected, selected.isIndian, live));
-    setPoolIndex(0);
+    const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
+    setPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
     setCountdown(15);
-  }, [isIndianRoute, getLivePrice]);
+  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice]);
 
-  // Cycle upcoming predictions smoothly every 15 seconds
+  // Every 15s the AI "re-scores" the same selected coin (fresh direction/
+  // confidence/levels) — it no longer jumps to a different symbol on its
+  // own; the only thing that changes which coin is shown is the user's
+  // own selection, handled by the effect above.
   useEffect(() => {
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          setPoolIndex((oldIdx) => {
-            const nextIdx = (oldIdx + 1) % activePool.length;
-            const nextItem = activePool[nextIdx];
-            const live = getLivePrice(nextItem.symbol);
-            setPrediction(generatePrediction(nextItem, nextItem.isIndian, live));
-            return nextIdx;
-          });
+          const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
+          setPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
           return 15;
         }
         return prev - 1;
@@ -148,24 +190,32 @@ export default function AIFooterTradeBar() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [activePool, getLivePrice]);
+  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice]);
 
   const isIndianAsset = prediction.domain === "INDIAN" || prediction.exchange.includes("NSE") || prediction.exchange.includes("BSE");
   const currencySymbol = isIndianAsset ? "₹" : "$";
 
+  // 🛡️ 2026-09-16: this used to fake a success message via setTimeout
+  // without ever calling the backend — no Trade was ever created, so the
+  // "executed" order never appeared on the Orders page, and the symbol/
+  // direction/confidence shown here are randomly generated in
+  // generatePrediction() (Math.random()), not a real AQEA ensemble
+  // decision. Wiring "Execute Now" straight to real order placement would
+  // mean placing real (paper) trades off a coin flip, bypassing every
+  // conviction/risk gate the real engine enforces — worse than the
+  // original bug. Instead this sends the user to the real order-entry
+  // terminal for this symbol, where the actual placeOrder flow (with its
+  // real gates and a real Trade record) takes over.
   const handleManualExecute = () => {
-    setIsExecuting(true);
-    setExecutionMessage(`Creating ${prediction.direction} paper trade for ${prediction.symbol}...`);
-    setTimeout(() => {
-      setIsExecuting(false);
-      setExecutionMessage(
-        `✓ ${prediction.direction} Order Executed successfully at ${currencySymbol}${prediction.entryPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}!`
-      );
-      setTimeout(() => {
-        setExecutionMessage("");
-        setIsExpanded(false);
-      }, 2000);
-    }, 1200);
+    setSymbol(prediction.symbol);
+    setIsExpanded(false);
+    if (isIndianAsset) {
+      navigate("/india");
+    } else if (accountType === "FUTURES") {
+      navigate("/futures");
+    } else {
+      navigate("/spot");
+    }
   };
 
   const getDirColor = (dir: string) => {
@@ -174,8 +224,31 @@ export default function AIFooterTradeBar() {
     return "#f59e0b";
   };
 
+  // Colors match TopBar.tsx's own SPOT (#38bdf8) / FUTURES (#f59e0b) tab
+  // colors so the badge reads as "the same two markets" as the selector.
+  const SPOT_COLOR = "#38bdf8";
+  const FUTURES_COLOR = "#f59e0b";
+  const exchangeLabel = accountType === "BOTH" ? `BINANCE ${blinkPhase}` : prediction.exchange;
+  const exchangeColor = accountType === "BOTH"
+    ? (blinkPhase === "SPOT" ? SPOT_COLOR : FUTURES_COLOR)
+    : undefined;
+
   return (
     <>
+      {/* Crossfade the exchange badge through its dim point right as the
+          text swaps (see BLINK_DIP_MS above) instead of an instant snap —
+          keyframe % must stay in sync with BLINK_INTERVAL_MS/BLINK_DIP_MS. */}
+      <style>{`
+        @keyframes aqea-exchange-blink {
+          0%   { opacity: 1; }
+          9%   { opacity: 0.18; }
+          18%  { opacity: 1; }
+          100% { opacity: 1; }
+        }
+        .aqea-exchange-blink {
+          animation: aqea-exchange-blink 2.4s ease-in-out infinite;
+        }
+      `}</style>
       {/* ── Persistent Theme-Adaptive AI Footer Bar ── */}
       <div
         style={{
@@ -216,22 +289,27 @@ export default function AIFooterTradeBar() {
 
           <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 10, fontWeight: 900, color: "var(--ds-text-faint, #64748b)", letterSpacing: "0.05em", textTransform: "uppercase" }}>
-                NEXT TRADE IMMINENT
+              <span style={{ fontSize: 9.5, fontWeight: 900, padding: "1px 6px", borderRadius: 4, background: "rgba(168, 85, 247, 0.15)", color: "#a855f7", border: "1px solid rgba(168, 85, 247, 0.3)", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                AI SIGNAL (PROPOSED)
+              </span>
+              <span style={{ fontSize: 9.5, fontWeight: 800, padding: "1px 6px", borderRadius: 4, background: "rgba(239, 68, 68, 0.1)", color: "#ef4444", border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                NOT AN OPEN POSITION
               </span>
               <span
+                className={accountType === "BOTH" ? "aqea-exchange-blink" : undefined}
                 style={{
                   fontSize: 10,
                   fontWeight: 900,
                   padding: "1px 6px",
                   borderRadius: 4,
-                  background: "var(--ds-surface-2, #f1f5f9)",
-                  color: "var(--ds-text, #334155)",
-                  border: "1px solid var(--ds-border, #cbd5e1)",
+                  background: exchangeColor ? `${exchangeColor}22` : "var(--ds-surface-2, #f1f5f9)",
+                  color: exchangeColor || "var(--ds-text, #334155)",
+                  border: `1px solid ${exchangeColor ? `${exchangeColor}66` : "var(--ds-border, #cbd5e1)"}`,
                   fontFamily: "monospace",
+                  transition: "background 0.4s ease, color 0.4s ease, border-color 0.4s ease",
                 }}
               >
-                {prediction.exchange}
+                {exchangeLabel}
               </span>
             </div>
 
@@ -427,21 +505,21 @@ export default function AIFooterTradeBar() {
             <div style={{ background: "var(--ds-surface-2, #f8fafc)", padding: 10, borderRadius: 8, border: "1px solid var(--ds-border, #cbd5e1)" }}>
               <span style={{ fontSize: 10, color: "var(--ds-text-faint, #64748b)", display: "block", fontWeight: 700 }}>Est. Entry Price</span>
               <span style={{ fontSize: 13, fontWeight: 900, color: "var(--ds-text, #0f172a)", fontFamily: "monospace" }}>
-                {currencySymbol}{prediction.entryPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {currencySymbol}{formatPrice(prediction.entryPrice)}
               </span>
             </div>
 
             <div style={{ background: "rgba(16, 185, 129, 0.08)", padding: 10, borderRadius: 8, border: "1px solid rgba(16, 185, 129, 0.25)" }}>
               <span style={{ fontSize: 10, color: "#059669", display: "block", fontWeight: 700 }}>Target Take-Profit</span>
               <span style={{ fontSize: 13, fontWeight: 900, color: "#059669", fontFamily: "monospace" }}>
-                {currencySymbol}{prediction.targetTp.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {currencySymbol}{formatPrice(prediction.targetTp)}
               </span>
             </div>
 
             <div style={{ background: "rgba(239, 68, 68, 0.08)", padding: 10, borderRadius: 8, border: "1px solid rgba(239, 68, 68, 0.25)" }}>
               <span style={{ fontSize: 10, color: "#dc2626", display: "block", fontWeight: 700 }}>Stop-Loss Level</span>
               <span style={{ fontSize: 13, fontWeight: 900, color: "#dc2626", fontFamily: "monospace" }}>
-                {currencySymbol}{prediction.stopLoss.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {currencySymbol}{formatPrice(prediction.stopLoss)}
               </span>
             </div>
           </div>
@@ -461,24 +539,27 @@ export default function AIFooterTradeBar() {
             </div>
           </div>
 
-          {/* Action Message / Status */}
-          {executionMessage && (
-            <div
-              style={{
-                padding: 10,
-                borderRadius: 8,
-                background: "rgba(16, 185, 129, 0.12)",
-                border: "1px solid rgba(16, 185, 129, 0.3)",
-                color: "#059669",
-                fontSize: 12,
-                fontWeight: 800,
-                textAlign: "center",
-                marginBottom: 12,
-              }}
-            >
-              {executionMessage}
-            </div>
-          )}
+          {/* This is a randomly-generated illustrative forecast (see
+              generatePrediction's Math.random() direction/confidence), not
+              a live AQEA ensemble decision — placing a real order straight
+              from it would skip every conviction/risk gate the real engine
+              enforces. Said plainly instead of a fake "order executed"
+              toast that never created a trade. */}
+          <div
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              background: "rgba(100, 116, 139, 0.08)",
+              border: "1px solid var(--ds-border, #cbd5e1)",
+              color: "var(--ds-text-faint, #64748b)",
+              fontSize: 11,
+              fontWeight: 600,
+              textAlign: "center",
+              marginBottom: 12,
+            }}
+          >
+            Illustrative forecast only — not a live AQEA decision. "Trade This" opens the real order terminal.
+          </div>
 
           {/* Execution Controls */}
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
@@ -500,7 +581,6 @@ export default function AIFooterTradeBar() {
 
             <button
               onClick={handleManualExecute}
-              disabled={isExecuting}
               style={{
                 padding: "8px 16px",
                 borderRadius: 8,
@@ -509,7 +589,7 @@ export default function AIFooterTradeBar() {
                 color: "#ffffff",
                 fontSize: 12,
                 fontWeight: 800,
-                cursor: isExecuting ? "wait" : "pointer",
+                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
@@ -517,7 +597,7 @@ export default function AIFooterTradeBar() {
               }}
             >
               <Play size={13} />
-              {isExecuting ? "Executing..." : `Execute ${prediction.direction} Order Now`}
+              Trade This on {isIndianAsset ? "India Terminal" : accountType === "FUTURES" ? "Futures Terminal" : "Spot Terminal"}
             </button>
           </div>
         </div>

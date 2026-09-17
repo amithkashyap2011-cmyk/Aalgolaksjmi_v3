@@ -13,7 +13,30 @@ body {
 /* ─── Touch‑friendly defaults & CSS Variables ───────────────────────────── */
 @layer base {
   :root {
-    /* LIGHT MODE (User's Default) */
+    /* DARK MODE (DEFAULT TRADING TERMINAL) */
+    --color-terminal-950: #0B0E14;
+    --color-terminal-900: #151A23;
+    --color-terminal-800: #1F2937;
+    --color-terminal-700: #374151;
+    --color-terminal-600: #4B5563;
+    
+    --color-slate-50: #f8fafc;
+    --color-slate-100: #f1f5f9;
+    --color-slate-200: #e2e8f0;
+    --color-slate-300: #cbd5e1;
+    --color-slate-400: #94a3b8;
+    --color-slate-500: #64748b;
+    --color-slate-600: #475569;
+    --color-slate-700: #334155;
+    --color-slate-800: #1e293b;
+    --color-slate-900: #0f172a;
+    --color-slate-950: #020617;
+
+    --bg-aurora: #030712;
+  }
+
+  html.light {
+    /* OPTIONAL LIGHT MODE */
     --color-terminal-950: #F8F9FA;
     --color-terminal-900: #FFFFFF;
     --color-terminal-800: #E9ECEF;
@@ -33,29 +56,6 @@ body {
     --color-slate-950: #FFFFFF;
 
     --bg-aurora: #f7fbfa;
-  }
-
-  html.dark {
-    /* DARK MODE */
-    --color-terminal-950: #0B0E14;
-    --color-terminal-900: #151A23;
-    --color-terminal-800: #1F2937;
-    --color-terminal-700: #374151;
-    --color-terminal-600: #4B5563;
-    
-    --color-slate-50: #f8fafc;
-    --color-slate-100: #f1f5f9;
-    --color-slate-200: #e2e8f0;
-    --color-slate-300: #cbd5e1;
-    --color-slate-400: #94a3b8;
-    --color-slate-500: #64748b;
-    --color-slate-600: #475569;
-    --color-slate-700: #334155;
-    --color-slate-800: #1e293b;
-    --color-slate-900: #0f172a;
-    --color-slate-950: #020617;
-
-    --bg-aurora: #0B0E14;
   }
 
   button, [role="button"], a,

@@ -68,5 +68,21 @@ coverage/
 **/coverage/
 
 # Backups and quarantine
+**/backups/
 backups/
 _cleanup_quarantine/
+
+# Generated dev reports & scratch (root-anchored so real docs like README.md,
+# CLAUDE.md, SYSTEM_ARCHITECTURE.md and subdirectory docs stay tracked)
+/scratch/
+/*_REPORT.md
+/*_AUDIT.md
+/*_BASELINE.md
+/*_SUMMARY.md
+/*_LOCK.md
+/*_MATRIX.md
+/*_MANIFEST.md
+/*_GUIDE.md
+/*_BREAKDOWN.md
+/AGENTIC_TRADING_ARCHITECTURE.md
+/TEST_RESULTS.md

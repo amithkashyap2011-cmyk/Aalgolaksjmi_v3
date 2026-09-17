@@ -27,14 +27,15 @@ module.exports = {
       // headroom, not a tight budget.
       max_memory_restart: '1G',
       env: {
-        // Was 'development' — the only NODE_ENV==='production' check in the
-        // codebase (production/deploymentManager.ts) just logs a warning if
-        // shadow mode is left on; every other check only distinguishes
-        // 'test' from everything else, so this has zero other behavioral
-        // effect. This is meant to be a stable, always-on deployment
-        // (per this file's own "the ONE supported way to run" framing), so
-        // NODE_ENV should say so.
-        NODE_ENV: 'production',
+        // 'development', not 'production': this box serves plain HTTP on
+        // loopback with no TLS termination and no trusted reverse proxy in
+        // front of it. middleware/transportSecurity.ts fails closed and
+        // refuses to boot under NODE_ENV=production unless SSL_CERT_PATH/
+        // SSL_KEY_PATH or TRUST_PROXY=true are set — setting either without
+        // an actual proxy/certs would just be lying to that check, not
+        // satisfying it. If this ever runs behind a real TLS-terminating
+        // proxy, set NODE_ENV=production and TRUST_PROXY=true together.
+        NODE_ENV: 'development',
         PORT: 9991,
         // The quant engine is managed by PM2 (aqea-quant) below — the server must
         // never spawn its own copy, or duplicate instances pile up.
@@ -60,7 +61,14 @@ module.exports = {
       max_memory_restart: '2G',
       env: {
         // How the quant engine finds the Node server to register with.
-        REGISTRY_URL: 'http://127.0.0.1:9991'
+        REGISTRY_URL: 'http://127.0.0.1:9991',
+        OMP_NUM_THREADS: '1',
+        MKL_NUM_THREADS: '1',
+        OPENBLAS_NUM_THREADS: '1',
+        VECLIB_MAXIMUM_THREADS: '1',
+        NUMEXPR_NUM_THREADS: '1',
+        TORCH_NUM_THREADS: '1',
+        AQEA_CONTINUOUS_LEARNING: 'false'
       },
       error_file: './logs/quant-error.log',
       out_file: './logs/quant-out.log',

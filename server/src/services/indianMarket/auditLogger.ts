@@ -20,7 +20,27 @@ export interface AuditEvent {
     | "TARGET_HIT"
     | "POSITION_CLOSED"
     | "DAILY_RISK_LOCK"
-    | "PANIC_STOP_TRIGGERED";
+    | "PANIC_STOP_TRIGGERED"
+    | "AUTOPILOT_MODE_CHANGED"
+    | "TARGET_DETECTED"
+    | "STOP_DETECTED"
+    | "EXIT_INTENT_CREATED"
+    | "EXIT_ORDER_SUBMITTED"
+    | "EXIT_ORDER_ACKNOWLEDGED"
+    | "EXIT_ORDER_REJECTED"
+    | "EXIT_PARTIAL_FILL"
+    | "EXIT_FILLED"
+    | "POSITION_RECONCILED"
+    | "BROKER_STATE_CHANGED"
+    | "MARKET_DATA_STATE_CHANGED"
+    | "PERSISTENCE_STATE_CHANGED"
+    | "FINANCIAL_WRITE_FAILED"
+    | "DEAD_LETTER_CAPTURED"
+    | "POSITION_DISCREPANCY_DETECTED"
+    | "RETRY_BLOCKED"
+    | "RECONCILIATION_REQUIRED_ON_FAILURE"
+    | "STARTUP_SESSION_RECOVERED"
+    | (string & {});
   underlying?: string;
   strategy?: string;
   instrument?: string;
@@ -54,6 +74,14 @@ export class IndianAuditLogger {
     }
 
     return fullEvent;
+  }
+
+  public static logEvent(event: { action?: string; eventType?: string; details?: Record<string, any>; reason?: string; [key: string]: any }): AuditEvent {
+    return this.log({
+      eventType: (event.eventType || event.action || "SYSTEM_EVENT") as any,
+      details: event.details || {},
+      reason: event.reason,
+    });
   }
 
   public static getRecentEvents(limit = 100): AuditEvent[] {

@@ -90,6 +90,10 @@ const chainMock = {
 
 jest.unstable_mockModule("../src/models/Trade.js", () => ({ Trade: { find: jest.fn().mockReturnValue(chainMock), create: jest.fn(), deleteMany: jest.fn() } }));
 jest.unstable_mockModule("../src/services/paperState.js", () => ({ getWallet: jest.fn().mockReturnValue(new Map([["INR", 500000]])) }));
+// Real Alert.ts calls AlertSchema.post("save", ...) at module load, which
+// this file's lightweight mongoose mock (above) doesn't implement — mock
+// the alert helper directly instead of pulling in the real model.
+jest.unstable_mockModule("../src/services/alertService.js", () => ({ safeCreateAlert: (jest.fn() as any).mockResolvedValue(undefined) }));
 
 let IndianMarketAutoTrader: any;
 

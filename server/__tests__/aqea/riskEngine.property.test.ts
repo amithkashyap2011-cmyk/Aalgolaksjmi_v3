@@ -144,11 +144,12 @@ describe("RiskEngine — property-based invariants", () => {
         fc.integer({ min: -50_000, max: 50_000 }),       // today's net pnl
         async (balance, todayPnl) => {
           mockGetWallet.mockReturnValue(new Map([["USDT", balance]]));
+          // Drawdown is bucketed by CLOSE time now — this loss is realized today.
           const openChain = { lean: () => Promise.resolve([]), exec: () => Promise.resolve([]), then: (cb: any) => Promise.resolve([]).then(cb) };
           const monthChain = {
-            lean: () => Promise.resolve([{ pnl: todayPnl, status: "CLOSED", openedAt: new Date() }]),
-            exec: () => Promise.resolve([{ pnl: todayPnl, status: "CLOSED", openedAt: new Date() }]),
-            then: (cb: any) => Promise.resolve([{ pnl: todayPnl, status: "CLOSED", openedAt: new Date() }]).then(cb)
+            lean: () => Promise.resolve([{ pnl: todayPnl, status: "CLOSED", closedAt: new Date() }]),
+            exec: () => Promise.resolve([{ pnl: todayPnl, status: "CLOSED", closedAt: new Date() }]),
+            then: (cb: any) => Promise.resolve([{ pnl: todayPnl, status: "CLOSED", closedAt: new Date() }]).then(cb)
           };
           const allChain = { lean: () => Promise.resolve([]), exec: () => Promise.resolve([]), then: (cb: any) => Promise.resolve([]).then(cb) };
 

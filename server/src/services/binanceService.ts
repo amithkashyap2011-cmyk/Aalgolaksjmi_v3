@@ -51,10 +51,16 @@ export function handleRestError(status: number, errorText: string): void {
   if (status === 418 || status === 429 || errorText.includes("banned until") || errorText.includes("-1003")) {
     const match = errorText.match(/banned until (\d+)/i);
     let banEndTime = Date.now() + 5 * 60 * 1000; // Default 5 minutes
+    // Real Binance IP bans are minutes-to-hours, never years. A malformed or
+    // absurd epoch in the error body (e.g. microseconds, or a garbage value)
+    // must NOT be able to suppress all REST for days/years. Clamp the accepted
+    // ban end to now + MAX_REST_BAN_MS so a bad parse degrades to a bounded
+    // window instead of an effectively permanent outage.
+    const MAX_REST_BAN_MS = 15 * 60 * 1000; // 15 minutes — generous upper bound
     if (match && match[1]) {
       const parsed = parseInt(match[1], 10);
       if (!isNaN(parsed) && parsed > Date.now()) {
-        banEndTime = parsed;
+        banEndTime = Math.min(parsed, Date.now() + MAX_REST_BAN_MS);
       }
     }
     restBannedUntil = Math.max(restBannedUntil, banEndTime);
@@ -715,8 +721,13 @@ export async function getKlines(
   // 1. Cache-first lookup for real-time polling (no explicit historical timestamp bounds)
   if (!startTime && !endTime) {
     const cached = klineCache.get(key);
-    // If cached bars exist and are reasonably fresh (< 120s)
-    if (cached && cached.klines.length >= Math.min(limit, 20) && (Date.now() - cached.lastUpdated < 120_000 || isRestBanned())) {
+    // If cached bars exist and are genuinely fresh (< 120s) serve them as-is.
+    // NOTE: the `|| isRestBanned()` clause was removed here — during a REST ban
+    // it made ANY-age cache short-circuit as live and shadowed the provenance
+    // downgrade in block 2 below (which tags stale bars CACHED_LIVE vs
+    // UNKNOWN/synthetic by age). A ban with stale cache must fall through to
+    // block 2, not be returned here still tagged live.
+    if (cached && cached.klines.length >= Math.min(limit, 20) && (Date.now() - cached.lastUpdated < 120_000)) {
       // Sync latest candle with live WebSocket ticker price if available
       const latestPrice = getTickerPriceSync(symbol);
       if (latestPrice && cached.klines.length > 0) {
@@ -1045,12 +1056,19 @@ interface CombinedSocket {
   io: IOServer;
   isFutures: boolean;
   id: number;  // subscription ID counter for JSON method
-  reconnectAttempts: number;
 }
 
 const combinedSockets = new Map<string, CombinedSocket>();  // "spot" | "futures" → CombinedSocket
 const subscribedSymbolKeys = new Set<string>();  // "SYMBOL-spot" / "SYMBOL-futures"
 const intentionalClose = new Set<string>();
+// Reconnect backoff must survive the delete-and-recreate cycle below (each
+// reconnect throws away the old CombinedSocket and builds a brand new one),
+// so it's tracked here instead of on the object itself — keeping it on
+// CombinedSocket meant every reconnect attempt started a fresh object with
+// reconnectAttempts back at 0, so the exponential backoff never actually
+// grew past its 1s floor. That kept this reconnecting once a second
+// indefinitely instead of backing off toward the intended 30s ceiling.
+const reconnectAttemptsByType = new Map<string, number>();  // "spot" | "futures" → count
 
 let nextSubId = 1;
 
@@ -1120,18 +1138,16 @@ export function getActiveSocketsInfo() {
 export async function getTickerPrice(symbol: string, isFutures: boolean = false): Promise<number> {
   const cached = getTickerPriceSync(symbol, isFutures);
   if (isRestBanned()) {
+    // A live WS/REST cached price is real, last-known market data — safe to serve.
     if (cached !== null) return cached;
-    const fallbacks: Record<string, number> = {
-      BTCUSDT: 65000,
-      ETHUSDT: 3500,
-      BNBUSDT: 580,
-      SOLUSDT: 145,
-      ADAUSDT: 0.45,
-      XRPUSDT: 0.55,
-      DOGEUSDT: 0.12,
-      SHIBUSDT: 0.000018,
-    };
-    return fallbacks[symbol.toUpperCase()] || 100;
+    // On ban with a cold cache we have NO real price. Fabricating a plausible
+    // constant (was: BTC=65000, else 100) is dangerous — PnL/SL/sizing callers
+    // would compute against a fake market price and could size/close positions
+    // on fiction. Throw instead so callers skip this tick (they already handle
+    // a throw from the live-error path below), rather than trust a made-up number.
+    throw new Error(
+      `[binance-service] getTickerPrice(${symbol}): REST banned and no cached price available — refusing to fabricate a synthetic price.`
+    );
   }
 
   const binanceSymbol = toBinanceSymbol(symbol, isFutures);
@@ -1162,16 +1178,26 @@ export async function getTickerPrice(symbol: string, isFutures: boolean = false)
 export async function get24hrTicker(symbol: string, isFutures: boolean = false): Promise<any> {
   const cachedPrice = getTickerPriceSync(symbol, isFutures);
   if (isRestBanned()) {
-    const price = cachedPrice ?? (symbol.toUpperCase().includes("BTC") ? 65000 : 100);
-    return {
-      symbol: symbol.toUpperCase(),
-      lastPrice: String(price),
-      openPrice: String(price * 0.99),
-      highPrice: String(price * 1.02),
-      lowPrice: String(price * 0.98),
-      volume: "1000000",
-      priceChangePercent: "1.00",
-    };
+    // Serve a cache-derived ticker ONLY when we hold a real last-known price.
+    if (cachedPrice !== null) {
+      return {
+        symbol: symbol.toUpperCase(),
+        lastPrice: String(cachedPrice),
+        openPrice: String(cachedPrice),
+        highPrice: String(cachedPrice),
+        lowPrice: String(cachedPrice),
+        volume: "1000000",
+        priceChangePercent: "0.00",
+        isSynthetic: false,
+        dataProvenance: "CACHED_LIVE",
+      };
+    }
+    // No cache: previously fabricated BTC=65000 / else=100 and returned it as a
+    // real ticker. Refuse — throw so callers skip rather than compute PnL/SL on
+    // a fake price (mirrors the live-error path below, which also throws).
+    throw new Error(
+      `[binance-service] get24hrTicker(${symbol}): REST banned and no cached price available — refusing to fabricate a synthetic ticker.`
+    );
   }
 
   const binanceSymbol = toBinanceSymbol(symbol, isFutures);
@@ -1431,14 +1457,22 @@ function createCombinedSocket(symbols: string[], io: IOServer, isFutures: boolea
     io,
     isFutures,
     id: 1,
-    reconnectAttempts: 0,
   };
 
   ws.on("open", () => {
     console.log(`[binance-ws] Combined ${type} WebSocket established for: ${symbols.join(", ")}`);
     lastTickTimes.set(type, Date.now());
-    cs.reconnectAttempts = 0; // Reset on success
-    
+    // Only treat this as a genuine recovery — and reset the backoff — once
+    // it's stayed open a while. Resetting immediately on "open" is what let
+    // a connection that Binance accepts and then closes again seconds later
+    // (as observed) loop at the 1s floor forever: every cycle reset the
+    // counter before the next close ever saw a non-zero value.
+    setTimeout(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        reconnectAttemptsByType.set(type, 0);
+      }
+    }, 10000);
+
     // Ensure any symbols added to cs.symbols while connecting are subscribed to
     const allExpectedStreams = Array.from(cs.symbols).flatMap(sym => getStreamsForSymbol(toBinanceSymbol(sym, isFutures)));
     const initialStreams = symbols.flatMap(sym => getStreamsForSymbol(toBinanceSymbol(sym, isFutures)));
@@ -1467,11 +1501,12 @@ function createCombinedSocket(symbols: string[], io: IOServer, isFutures: boolea
     
     const typeKey = type;
     if (!intentionalClose.has(typeKey)) {
-      const delay = Math.min(30000, Math.pow(2, cs.reconnectAttempts) * 1000);
-      console.log(`[binance-ws] Reconnecting combined ${type} WebSocket in ${delay}ms (Attempt ${cs.reconnectAttempts + 1})...`);
-      
+      const attempts = reconnectAttemptsByType.get(type) ?? 0;
+      const delay = Math.min(30000, Math.pow(2, attempts) * 1000);
+      console.log(`[binance-ws] Reconnecting combined ${type} WebSocket in ${delay}ms (Attempt ${attempts + 1})...`);
+
       setTimeout(() => {
-        cs.reconnectAttempts++;
+        reconnectAttemptsByType.set(type, attempts + 1);
         // Re-subscribe all symbols that were in this combined socket
         const symsToReconnect = Array.from(cs.symbols);
         symsToReconnect.forEach(s => subscribedSymbolKeys.delete(`${s}-${type}`));

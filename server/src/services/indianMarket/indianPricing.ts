@@ -75,11 +75,33 @@ if (typeof setInterval !== "undefined" && process.env.NODE_ENV !== "test") {
   }
 }
 
+// In-memory 1.5s TTL cache for generated option chains across concurrent trade evaluations
+const chainCache = new Map<string, { chain: any; expiry: number }>();
+
+function getCachedOptionChain(underlying: string, spotPrice: number) {
+  const key = `${underlying}_${spotPrice}`;
+  const now = Date.now();
+  const hit = chainCache.get(key);
+  if (hit && now < hit.expiry) {
+    return hit.chain;
+  }
+  const chain = OptionChainService.generateOptionChain(underlying as any, spotPrice);
+  chainCache.set(key, { chain, expiry: now + 1500 });
+  return chain;
+}
+
 /**
  * Accurately resolves live market price for Indian equities, futures, and option contracts.
  */
 export function resolveLivePriceForIndianTrade(t: any): number {
   if (!t) return 0;
+  if (t.currentLtp && t.currentLtp > 0) return t.currentLtp;
+  if (t.meta?.currentLtp && t.meta.currentLtp > 0) return t.meta.currentLtp;
+  if (t.meta?.ltp && t.meta.ltp > 0) return t.meta.ltp;
+  if (typeof t.symbol === "string" && MOCK_LIVE_INDIAN_TIKERS[t.symbol]?.ltp > 0) {
+    return MOCK_LIVE_INDIAN_TIKERS[t.symbol].ltp;
+  }
+
   const normUnderlying = InstrumentMaster.normalizeUnderlying(t.underlying || t.symbol || "NIFTY");
   const isOption = t.instrumentType === "CE" || t.instrumentType === "PE" ||
     (t.legs && t.legs.length > 0 && (t.legs[0].instrumentType === "CE" || t.legs[0].instrumentType === "PE")) ||
@@ -89,7 +111,7 @@ export function resolveLivePriceForIndianTrade(t: any): number {
     const spotKey = normUnderlying === "NIFTY" ? "NIFTY50" : normUnderlying;
     const spotTicker = MOCK_LIVE_INDIAN_TIKERS[spotKey] || MOCK_LIVE_INDIAN_TIKERS["NIFTY50"] || { ltp: 24538.50 };
     const spotPrice = spotTicker.ltp;
-    const chain = OptionChainService.generateOptionChain(normUnderlying as any, spotPrice);
+    const chain = getCachedOptionChain(normUnderlying, spotPrice);
 
     let strike = t.legs?.[0]?.strike;
     let optionType = t.legs?.[0]?.instrumentType || (t.symbol?.endsWith("PE") ? "PE" : "CE");
@@ -103,7 +125,7 @@ export function resolveLivePriceForIndianTrade(t: any): number {
     }
 
     if (strike) {
-      const matched = chain.strikes.find((s) => s.strike === strike);
+      const matched = chain?.strikes?.find((s: any) => s.strike === strike);
       if (matched) {
         const optionLtp = optionType === "CE" ? matched.call?.ltp : matched.put?.ltp;
         if (optionLtp && optionLtp > 0) return optionLtp;

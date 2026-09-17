@@ -66,9 +66,9 @@ case "${1:-start}" in
     echo "Starting server + quant engine + client via PM2..."
     pm2 start ecosystem.config.js
     wait_for "Server (:9991)"       "curl -s -m 2 http://localhost:9991/health | grep -q '\"server\":true'" 90
-    wait_for "Quant engine (READY)" "curl -s -m 2 http://localhost:9991/health | grep -qE '\"state\":\"(READY|DEGRADED)\"'" 300
+    wait_for "Quant engine (READY)" "curl -s -m 2 http://localhost:9991/health/full | grep -qE '\"state\":\"(READY|DEGRADED)\"'" 300
     CLIENT_PORT=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk '/node/ && /:999[2-9]/ && !/:9991/ {sub(/.*:/,"",$9); print $9; exit}')
-    wait_for "Client (Vite)"        "[ -n \"$CLIENT_PORT\" ] || lsof -nP -iTCP:9994 -sTCP:LISTEN" 60
+    wait_for "Client (Vite)"        "[ -n \"$CLIENT_PORT\" ] || lsof -nP -iTCP:9994 -sTCP:LISTEN || lsof -nP -iTCP:9996 -sTCP:LISTEN" 60
     echo
     pm2 list
     echo

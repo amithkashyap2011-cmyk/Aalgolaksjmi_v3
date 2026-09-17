@@ -38,10 +38,18 @@ export class LSTMPredictor extends BasePredictor {
     }
   }
 
+  private static lstmCache = new Map<string, { expiresAt: number; result: { direction: AIDirection; confidence: number; probability: number; meta?: any } }>();
+
   protected async runInference(features: FeatureVector): Promise<{ direction: AIDirection; confidence: number; probability: number; meta?: any }> {
     const startTime = Date.now();
     if (!AQEA_CONFIG.AI_ENABLED) {
       return { direction: "HOLD", confidence: 0, probability: 0.5 };
+    }
+
+    const cacheKey = `${features.symbol}:${features.market?.close || 0}`;
+    const cached = LSTMPredictor.lstmCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt && process.env.NODE_ENV !== "test") {
+      return cached.result;
     }
 
     try {
@@ -99,7 +107,7 @@ export class LSTMPredictor extends BasePredictor {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(1000),
+        signal: AbortSignal.timeout(4000),
       });
 
       if (!res.ok) {
@@ -111,6 +119,10 @@ export class LSTMPredictor extends BasePredictor {
 
       const latency = Date.now() - startTime;
       console.log(`[LSTM_V1] EXIT runInference() - latency=${latency}ms direction=${data.direction}`);
+
+      if (LSTMPredictor.lstmCache.size > 200) LSTMPredictor.lstmCache.clear();
+      LSTMPredictor.lstmCache.set(cacheKey, { expiresAt: Date.now() + 30_000, result: data });
+
       return data;
     } catch (err) {
       // Local fallback calculation

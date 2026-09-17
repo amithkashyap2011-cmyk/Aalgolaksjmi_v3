@@ -19,14 +19,14 @@
   --ds-warning:       #f59e0b;
   --ds-info:          #3b82f6;
 
-  /* Surfaces & text — LIGHT theme */
-  --ds-bg:         #f8fafc;
-  --ds-surface:    #ffffff;
-  --ds-surface-2:  #f1f5f9;
-  --ds-border:     #e2e8f0;
-  --ds-text:       #0f172a;
-  --ds-text-muted: #64748b;
-  --ds-text-faint: #94a3b8;
+  /* Surfaces & text — INSTITUTIONAL DARK THEME (DEFAULT) */
+  --ds-bg:         #060b14;
+  --ds-surface:    #0b1220;
+  --ds-surface-2:  #1e293b;
+  --ds-border:     rgba(148,163,184,0.14);
+  --ds-text:       #f1f5f9;
+  --ds-text-muted: #94a3b8;
+  --ds-text-faint: #64748b;
 
   /* Spacing scale (4px base) */
   --ds-space-1: 0.25rem;  --ds-space-2: 0.5rem;  --ds-space-3: 0.75rem;
@@ -36,15 +36,15 @@
   --ds-radius-sm: 6px;  --ds-radius: 8px;  --ds-radius-lg: 12px;  --ds-radius-pill: 999px;
 
   /* Elevation */
-  --ds-shadow-sm: 0 1px 3px rgba(2,6,23,0.06);
-  --ds-shadow:    0 4px 16px rgba(2,6,23,0.08);
-  --ds-shadow-lg: 0 12px 32px rgba(2,6,23,0.12);
+  --ds-shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+  --ds-shadow:    0 4px 16px rgba(0,0,0,0.45);
+  --ds-shadow-lg: 0 12px 32px rgba(0,0,0,0.55);
 
   /* Typography */
   --ds-font: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ds-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
-  /* ── Align legacy + Bootstrap vars to the tokens (light) ── */
+  /* ── Align legacy + Bootstrap vars to the tokens (dark) ── */
   --app-bg: var(--ds-bg);
   --app-secondary-bg: var(--ds-surface);
   --app-card-bg: var(--ds-surface);
@@ -66,9 +66,44 @@
   --bs-body-bg: var(--ds-bg);
   --bs-body-color: var(--ds-text);
   --bs-border-color: var(--ds-border);
+  --bs-secondary-bg: var(--ds-surface-2);
+  --bs-tertiary-bg: var(--ds-surface);
+  --bs-emphasis-color: var(--ds-text);
+  --bs-secondary-color: var(--ds-text-muted);
 }
 
-/* ─── 2. DARK THEME (the missing override that caused white-in-dark) ── */
+/* ─── 2. EXPLICIT LIGHT THEME OVERRIDES ─── */
+html.light, html[data-theme="light"], html[data-theme="solar"] {
+  --ds-bg:         #f8fafc;
+  --ds-surface:    #ffffff;
+  --ds-surface-2:  #f1f5f9;
+  --ds-border:     #e2e8f0;
+  --ds-text:       #0f172a;
+  --ds-text-muted: #64748b;
+  --ds-text-faint: #94a3b8;
+
+  --ds-shadow-sm: 0 1px 3px rgba(2,6,23,0.06);
+  --ds-shadow:    0 4px 16px rgba(2,6,23,0.08);
+  --ds-shadow-lg: 0 12px 32px rgba(2,6,23,0.12);
+
+  --app-bg: var(--ds-bg);
+  --app-secondary-bg: var(--ds-surface);
+  --app-card-bg: var(--ds-surface);
+  --app-border: var(--ds-border);
+  --text-primary: var(--ds-text);
+  --text-secondary: var(--ds-text-muted);
+  --text-muted: var(--ds-text-faint);
+
+  --bs-body-bg: var(--ds-bg);
+  --bs-body-color: var(--ds-text);
+  --bs-border-color: var(--ds-border);
+  --bs-secondary-bg: var(--ds-surface-2);
+  --bs-tertiary-bg: var(--ds-surface);
+  --bs-emphasis-color: var(--ds-text);
+  --bs-secondary-color: var(--ds-text-muted);
+}
+
+/* ─── 2b. DARK THEME ─── */
 html.dark {
   --ds-bg:         #060b14;
   --ds-surface:    #0b1220;

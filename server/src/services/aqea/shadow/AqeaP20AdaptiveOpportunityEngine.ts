@@ -824,6 +824,7 @@ export class AqeaP20AdaptiveOpportunityEngine {
   }
 
   private static emitTelemetry(r: P20EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P20_ASSET_ROUTING_TRACE] ` + JSON.stringify({
       phase: "P20", mode: "SHADOW", symbol: r.symbol,
       assetState: r.assetRouting.assetState,

@@ -363,20 +363,32 @@ def train_ppo(warm_start: bool = True) -> dict:
                 advantages = returns_t - values_t
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-                new_probs, new_values = model(states_t)
-                new_dist = torch.distributions.Categorical(new_probs)
-                new_log_probs = new_dist.log_prob(actions_t)
+                # Real PPO reuses each batch for several epochs. With a single
+                # update, new_log_probs == old_log_probs so ratio == 1 and the
+                # clip never engages — that degenerates to A2C. Iterating lets
+                # the policy move while the clip bounds how far. advantages,
+                # returns and old_log_probs are fixed (computed under the
+                # behaviour policy); only the model updates across epochs.
+                PPO_EPOCHS = 4
+                ENTROPY_COEF = 0.01
+                for _ in range(PPO_EPOCHS):
+                    new_probs, new_values = model(states_t)
+                    new_dist = torch.distributions.Categorical(new_probs)
+                    new_log_probs = new_dist.log_prob(actions_t)
+                    entropy = new_dist.entropy().mean()
 
-                ratio = torch.exp(new_log_probs - old_log_probs_t)
-                surr1 = ratio * advantages
-                surr2 = torch.clamp(ratio, 0.8, 1.2) * advantages
-                actor_loss = -torch.min(surr1, surr2).mean()
-                critic_loss = torch.nn.functional.mse_loss(new_values.squeeze(-1), returns_t)
-                loss = actor_loss + 0.5 * critic_loss
+                    ratio = torch.exp(new_log_probs - old_log_probs_t)
+                    surr1 = ratio * advantages
+                    surr2 = torch.clamp(ratio, 0.8, 1.2) * advantages
+                    actor_loss = -torch.min(surr1, surr2).mean()
+                    critic_loss = torch.nn.functional.mse_loss(new_values.squeeze(-1), returns_t)
+                    # Entropy bonus (subtracted from loss) discourages premature
+                    # policy collapse by rewarding exploration.
+                    loss = actor_loss + 0.5 * critic_loss - ENTROPY_COEF * entropy
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
                 states, actions, rewards, values, log_probs = [], [], [], [], []
 

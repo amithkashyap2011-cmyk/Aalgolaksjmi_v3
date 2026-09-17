@@ -47,7 +47,7 @@ const ALLOWED_SETTINGS_FIELDS = new Set([
   // Engine/AI toggles (previously dropped by the filter, so they never persisted)
   "highPrecisionMode", "noLossMode", "overdrive", "bypassHtfTrendGate",
   "bypassChecklist", "bypassConsensusLag", "dynamicGuardian", "dynamicWeights",
-  "dynamicAnimals", "useEnsemble", "ensembleMode", "aiConsensusGate",
+  "dynamicAnimals", "useEnsemble", "ensembleMode", "aiConsensusGate", "shadowMode",
   "taFallbackEnabled", "taFallbackScope", "behaviourModelEnabled",
   // AQEA voting-layer toggles (per-user, previously hardcoded in AQEA_CONFIG)
   "orderFlowVotingEnabled", "smartMoneyVotingEnabled", "liveNewsSentimentEnabled", "cnnVotingEnabled", "lstmVotingEnabled",

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import {
   Landmark, Activity, TrendingUp, TrendingDown, RefreshCw,
   Clock, ShieldCheck, Zap, ArrowUpRight, ArrowDownRight, Layers,
   Wallet, AlertTriangle, CheckCircle2, Play, Square, ShieldAlert,
   Sliders, BarChart3, HelpCircle, FileText, ChevronRight, Lock, Unlock,
-  SlidersHorizontal, Check, Info, Flame
+  SlidersHorizontal, Check, Info, Flame, History, Award, ArrowLeft
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import ZerodhaKiteTerminal from "../components/indianMarket/ZerodhaKiteTerminal";
@@ -37,20 +38,19 @@ interface OptionChainStrikeItem {
 interface StrategyItem {
   id: string;
   name: string;
-  category: string;
-  description: string;
-  defaultTimeframe: string;
-  enabled: boolean;
-}
-
-interface AuditLogItem {
-  id: string;
-  timestamp: string;
-  eventType: string;
+  category: "DIRECTIONAL" | "NON_DIRECTIONAL" | "VOLATILITY" | string;
+  legsDescription?: string;
+  description?: string;
+  defaultTimeframe?: string;
   underlying?: string;
-  strategy?: string;
-  details: Record<string, any>;
-  reason?: string;
+  maxRisk?: string;
+  targetProfit?: string;
+  pcrRange?: string;
+  regimeFit?: string[];
+  enabled: boolean;
+  aiWeight?: number;
+  winRate?: number;
+  sharpeRatio?: number;
 }
 
 interface PositionItem {
@@ -59,14 +59,57 @@ interface PositionItem {
   underlying: string;
   side: "BUY" | "SELL";
   quantity: number;
+  remainingQty?: number;
   entryPrice: number;
   currentPrice: number;
-  sl?: number;
-  tp?: number;
+  sl: number;
+  tp: number;
+  targetStatus?: "PENDING" | "HIT";
+  stopStatus?: "PENDING" | "HIT";
+  autoPilotStatus?: string;
+  exitOrderStatus?: string;
+  positionStatus?: string;
+  autoCloseStatus: "ARMED" | "TRIGGERED" | "MANUAL" | string;
+  leverage: number;
+  accountType: string;
+  totalNotional: number;
+  marginUsed: number;
   unrealizedPnl: number;
   unrealizedPnlPct: number;
+  openedAt: string;
   strategy?: string;
   legs?: any[];
+}
+
+interface ClosedTradeItem {
+  tradeId: string;
+  symbol: string;
+  underlying?: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  entryPrice: number;
+  exitPrice: number;
+  leverage?: number;
+  productType?: string;
+  accountType?: string;
+  realizedPnl: number;
+  realizedPnlPct?: number;
+  charges?: number;
+  netPnl?: number;
+  exitReason?: string;
+  openedAt?: string;
+  closedAt?: string;
+  strategy?: string;
+}
+
+interface AuditLogItem {
+  id: string;
+  timestamp: string;
+  eventType: string;
+  underlying: string;
+  strategy: string;
+  reason?: string;
+  details?: any;
 }
 
 function formatINR(val: number): string {
@@ -77,15 +120,14 @@ function formatINR(val: number): string {
   }).format(val);
 }
 
-function IstClock() {
+function LiveClockIST() {
   const [time, setTime] = useState("");
   useEffect(() => {
     const update = () => {
       const now = new Date();
-      const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-      const ist = new Date(utc + 5.5 * 3600000);
       setTime(
-        ist.toLocaleTimeString("en-IN", {
+        now.toLocaleTimeString("en-IN", {
+          timeZone: "Asia/Kolkata",
           hour: "2-digit",
           minute: "2-digit",
           second: "2-digit",
@@ -100,26 +142,114 @@ function IstClock() {
   return <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#38bdf8" }}>{time || "09:15:00 IST"}</span>;
 }
 
+const IstClock = LiveClockIST;
+
 export default function IndianMarketPage() {
   const { addAlert } = useAppStore();
+  const navigate = useNavigate();
 
   const addToast = (text: string, type: "success" | "error" | "info" = "info") => {
     const level = type === "success" ? "GREEN" : type === "error" ? "RED" : "AMBER";
     addAlert(level, text);
   };
 
-  // Terminal View Mode: KITE_SIMPLE vs QUANT_AI
-  const [terminalMode, setTerminalMode] = useState<"KITE_SIMPLE" | "QUANT_AI">("KITE_SIMPLE");
+  // Terminal View Mode: KITE_SIMPLE vs QUANT_AI (persisted in localStorage)
+  const [terminalMode, setTerminalMode] = useState<"KITE_SIMPLE" | "QUANT_AI">(() => {
+    return (localStorage.getItem("INDIAN_TERMINAL_MODE") as "KITE_SIMPLE" | "QUANT_AI") || "KITE_SIMPLE";
+  });
+
+  const handleSetTerminalMode = (mode: "KITE_SIMPLE" | "QUANT_AI") => {
+    setTerminalMode(mode);
+    try {
+      localStorage.setItem("INDIAN_TERMINAL_MODE", mode);
+    } catch {}
+  };
 
   // Navigation Tabs
   const [activeTab, setActiveTab] = useState<"COMMAND_CENTER" | "OPTION_CHAIN" | "STRATEGIES" | "POSITIONS" | "AUDIT_LOGS" | "ANALYTICS">("COMMAND_CENTER");
   const [selectedUnderlying, setSelectedUnderlying] = useState<"NIFTY" | "BANKNIFTY" | "FINNIFTY" | "SENSEX">("NIFTY");
+  const location = useLocation();
 
-  // Core Controls
-  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
+  // Synchronize sidebar hash navigation (#options, #positions, #reconciliation)
+  useEffect(() => {
+    const hash = location.hash;
+    if (hash === "#options") {
+      setActiveTab("OPTION_CHAIN");
+    } else if (hash === "#positions" || hash === "#portfolio") {
+      // 🛡️ 2026-09-16: the sidebar's "Portfolio" link (/india#portfolio)
+      // wasn't in this list, so it fell through with no matching branch —
+      // the tab silently stayed whatever it already was, making Portfolio
+      // indistinguishable from Dashboard. POSITIONS is this page's actual
+      // holdings view, so #portfolio maps there like #positions already did.
+      setActiveTab("POSITIONS");
+    } else if (hash === "#reconciliation") {
+      setActiveTab("AUDIT_LOGS");
+    } else if (hash === "#strategies") {
+      setActiveTab("STRATEGIES");
+    } else if (hash === "#analytics") {
+      setActiveTab("ANALYTICS");
+    } else if (!hash || hash === "#terminal") {
+      setActiveTab("COMMAND_CENTER");
+    }
+  }, [location.hash]);
+
+  // Core Controls (Auto-Trade enabled by default)
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState(true);
   const [executionMode, setExecutionMode] = useState<"PAPER" | "LIVE">("PAPER");
   const [panicStopActive, setPanicStopActive] = useState(false);
   const [dailyRiskLock, setDailyRiskLock] = useState(false);
+
+  // Financial Funds & Margins
+  const [funds, setFunds] = useState<{
+    availableCashINR: number;
+    investedAmountINR: number;
+    totalEquityINR: number;
+    unrealizedPnlINR: number;
+    realizedPnlINR: number;
+    todayPnlINR: number;
+    openTradesCount: number;
+    closedTradesCount: number;
+    winRate: number;
+    autoTradeEnabled: boolean;
+    inrRate?: number;
+    cumulativeRealizedNetPnlINR?: number;
+    accountMode?: string;
+    capitalSource?: string;
+  }>({
+    availableCashINR: 0,
+    investedAmountINR: 0,
+    totalEquityINR: 0,
+    unrealizedPnlINR: 0,
+    realizedPnlINR: 0,
+    todayPnlINR: 0,
+    openTradesCount: 0,
+    closedTradesCount: 0,
+    winRate: 0,
+    autoTradeEnabled: true,
+    inrRate: 95.613964,
+    cumulativeRealizedNetPnlINR: 0,
+  });
+  const [depositing, setDepositing] = useState(false);
+
+  const handleAddPaperFunds = async (amount: number = 100000) => {
+    setDepositing(true);
+    try {
+      const res = await fetch("/api/indian-market/funds/deposit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: "guest-user", amount }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addToast(`✅ Added ₹${amount.toLocaleString("en-IN")} Paper Trading Margin!`, "success");
+        await fetchData();
+      }
+    } catch (err: any) {
+      addToast(`Deposit failed: ${err.message}`, "error");
+    } finally {
+      setDepositing(false);
+    }
+  };
 
   // Granular Toggles
   const [riskSettings, setRiskSettings] = useState<any>({
@@ -137,91 +267,113 @@ export default function IndianMarketPage() {
   const [optionChain, setOptionChain] = useState<any | null>(null);
   const [strategies, setStrategies] = useState<StrategyItem[]>([]);
   const [positions, setPositions] = useState<PositionItem[]>([]);
+  const [closedTrades, setClosedTrades] = useState<ClosedTradeItem[]>([]);
+  const [positionSubTab, setPositionSubTab] = useState<"OPEN" | "CLOSED">("OPEN");
+  const [historyTimeframe, setHistoryTimeframe] = useState<"daily" | "weekly" | "monthly" | "all">("all");
   const [tradeGroups, setTradeGroups] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [analytics, setAnalytics] = useState<any | null>(null);
   const [regimeAnalysis, setRegimeAnalysis] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [executingStrategy, setExecutingStrategy] = useState<string | null>(null);
 
-  // Fetch all initial market and strategy state
-  const fetchData = useCallback(async () => {
+  // Parallel, timeout-protected fetch helper
+  const safeFetch = async (url: string, timeoutMs: number = 4000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      // 1. Scan & Market Overview
-      const scanRes = await fetch("/api/indian-market/scan?userId=guest-user");
-      const scanJson = await scanRes.json();
-      if (scanJson.success) {
-        setScanStocks(scanJson.stocks || []);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(id);
+      return await res.json();
+    } catch {
+      clearTimeout(id);
+      return null;
+    }
+  };
+
+  // Fetch market and strategy state with tiered polling
+  const fetchData = useCallback(async (isFullRefresh = false) => {
+    try {
+      const activeTasks: Promise<any>[] = [
+        // 0. Account Margin & Funds
+        safeFetch("/api/indian-market/funds?userId=guest-user").then((json) => {
+          if (json?.success) {
+            setFunds(json);
+            if (typeof json.autoTradeEnabled === "boolean") {
+              setAutoTradeEnabled(json.autoTradeEnabled);
+            }
+          }
+        }),
+
+        // 1. Scan & Market Overview
+        safeFetch("/api/indian-market/scan?userId=guest-user").then((json) => {
+          if (json?.success) setScanStocks(json.stocks || []);
+        }),
+
+        // 2. Option Chain for Selected Underlying
+        safeFetch(`/api/indian-market/option-chain?underlying=${selectedUnderlying}`).then((json) => {
+          if (json?.success) setOptionChain(json.chain);
+        }),
+
+        // 5. Positions (real-time single source of truth)
+        safeFetch("/api/indian-market/positions").then((json) => {
+          if (json?.success) setPositions(json.positions || []);
+        }),
+      ];
+
+      // Lower frequency endpoints: only on fullRefresh (every 20s or on mount / user action)
+      if (isFullRefresh) {
+        activeTasks.push(
+          // 3. Strategy Router Regime
+          safeFetch(`/api/indian-market/strategy-router?underlying=${selectedUnderlying}`).then((json) => {
+            if (json?.success) setRegimeAnalysis(json.analysis);
+          }),
+          // 4. Strategies List
+          safeFetch("/api/indian-market/strategies").then((json) => {
+            if (json?.success) setStrategies(json.strategies || []);
+          }),
+          // 5b. Closed Trade History
+          safeFetch(`/api/indian-market/history?timeframe=${historyTimeframe}`).then((json) => {
+            if (json?.success) setClosedTrades(json.history || []);
+          }),
+          // 5c. Trade Groups
+          safeFetch("/api/indian-market/trade-groups").then((json) => {
+            if (json?.success) setTradeGroups(json.groups || []);
+          }),
+          // 6. Risk Settings & Status
+          safeFetch("/api/indian-market/risk-settings").then((json) => {
+            if (json?.success && json.settings) {
+              setRiskSettings(json.settings);
+              setAutoTradeEnabled(json.settings.autoTrade);
+              setPanicStopActive(json.settings.panicStop);
+              setDailyRiskLock(json.settings.dailyRiskLock);
+            }
+          }),
+          // 7. Audit Logs
+          safeFetch("/api/indian-market/audit-logs?limit=50").then((json) => {
+            if (json?.success) setAuditLogs(json.logs || []);
+          }),
+          // 8. Analytics
+          safeFetch("/api/indian-market/analytics").then((json) => {
+            if (json?.success) setAnalytics(json.analytics);
+          }),
+        );
       }
 
-      // 2. Option Chain for Selected Underlying
-      const chainRes = await fetch(`/api/indian-market/option-chain?underlying=${selectedUnderlying}`);
-      const chainJson = await chainRes.json();
-      if (chainJson.success) {
-        setOptionChain(chainJson.chain);
-      }
-
-      // 3. Strategy Router Regime
-      const routerRes = await fetch(`/api/indian-market/strategy-router?underlying=${selectedUnderlying}`);
-      const routerJson = await routerRes.json();
-      if (routerJson.success) {
-        setRegimeAnalysis(routerJson.analysis);
-      }
-
-      // 4. Strategies List
-      const stratRes = await fetch("/api/indian-market/strategies");
-      const stratJson = await stratRes.json();
-      if (stratJson.success) {
-        setStrategies(stratJson.strategies || []);
-      }
-
-      // 5. Positions & Trade Groups
-      const posRes = await fetch("/api/indian-market/positions");
-      const posJson = await posRes.json();
-      if (posJson.success) {
-        setPositions(posJson.positions || []);
-      }
-
-      const grpRes = await fetch("/api/indian-market/trade-groups");
-      const grpJson = await grpRes.json();
-      if (grpJson.success) {
-        setTradeGroups(grpJson.groups || []);
-      }
-
-      // 6. Risk Settings & Status
-      const riskRes = await fetch("/api/indian-market/risk-settings");
-      const riskJson = await riskRes.json();
-      if (riskJson.success && riskJson.settings) {
-        setRiskSettings(riskJson.settings);
-        setAutoTradeEnabled(riskJson.settings.autoTrade);
-        setPanicStopActive(riskJson.settings.panicStop);
-        setDailyRiskLock(riskJson.settings.dailyRiskLock);
-      }
-
-      // 7. Audit Logs
-      const auditRes = await fetch("/api/indian-market/audit-logs?limit=50");
-      const auditJson = await auditRes.json();
-      if (auditJson.success) {
-        setAuditLogs(auditJson.logs || []);
-      }
-
-      // 8. Analytics
-      const analRes = await fetch("/api/indian-market/analytics");
-      const analJson = await analRes.json();
-      if (analJson.success) {
-        setAnalytics(analJson.analytics);
-      }
-
-      setLoading(false);
+      await Promise.allSettled(activeTasks);
     } catch (err: any) {
       console.warn("Failed fetching Indian Market state:", err);
-      setLoading(false);
     }
-  }, [selectedUnderlying]);
+  }, [selectedUnderlying, historyTimeframe]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 4000);
+    let tickCount = 0;
+    fetchData(true); // Full initial load
+    const interval = setInterval(() => {
+      tickCount++;
+      const isFull = tickCount % 5 === 0; // Full refresh every 20s (5 * 4s)
+      fetchData(isFull);
+    }, 4000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -348,7 +500,12 @@ export default function IndianMarketPage() {
 
   // Render Kite Simple Mode if selected
   if (terminalMode === "KITE_SIMPLE") {
-    return <ZerodhaKiteTerminal onSwitchToQuant={() => setTerminalMode("QUANT_AI")} />;
+    return (
+      <ZerodhaKiteTerminal
+        onSwitchToQuant={() => handleSetTerminalMode("QUANT_AI")}
+        onBack={() => navigate("/")}
+      />
+    );
   }
 
 
@@ -422,9 +579,40 @@ export default function IndianMarketPage() {
         {/* Master Control Toggles */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           
+          {/* Back to Dashboard */}
+          <button
+            onClick={() => navigate("/")}
+            title="Go back to Main Dashboard"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "8px 14px",
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              color: "#cbd5e1",
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              transition: "all 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+              e.currentTarget.style.color = "#fff";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+              e.currentTarget.style.color = "#cbd5e1";
+            }}
+          >
+            <ArrowLeft size={14} />
+            <span>Dashboard</span>
+          </button>
+
           {/* Switch to Kite Simple Mode Button */}
           <button
-            onClick={() => setTerminalMode("KITE_SIMPLE")}
+            onClick={() => handleSetTerminalMode("KITE_SIMPLE")}
             style={{
               display: "flex",
               alignItems: "center",
@@ -556,6 +744,208 @@ export default function IndianMarketPage() {
         </div>
       </div>
 
+      {/* ─── 1.5 NON-TECHNICAL USER FINANCIAL SCOREBOARD ─────────────── */}
+      <div style={{ marginBottom: 18 }}>
+        {/* Source Badge & Mode Indicator */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: "0.06em",
+              padding: "3px 10px",
+              borderRadius: 6,
+              background: executionMode === "LIVE" ? "rgba(239, 68, 68, 0.15)" : "rgba(37, 99, 235, 0.15)",
+              color: executionMode === "LIVE" ? "#f87171" : "#60a5fa",
+              border: `1px solid ${executionMode === "LIVE" ? "rgba(239, 68, 68, 0.3)" : "rgba(37, 99, 235, 0.3)"}`
+            }}>
+              ● {executionMode === "LIVE" ? "LIVE BROKER (ANGEL ONE)" : "PAPER ACCOUNT (SIMULATED LEDGER)"}
+            </span>
+            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>
+              {executionMode === "LIVE" ? "Source: Official Exchange Margin" : "Source: Paper Initial Capital (₹20,000 INR)"}
+            </span>
+          </div>
+          <span style={{ fontSize: 11, color: "#10b981", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
+            RECONCILED
+          </span>
+        </div>
+
+        {/* Top 4 Financial Metric Cards */}
+        {(() => {
+          const inrFxRate = funds?.inrRate || 95.613964;
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+              
+              {/* 1. Available Cash Margin */}
+              <div style={{ background: "linear-gradient(145deg, #0f172a 0%, #0a1120 100%)", border: "1px solid rgba(56, 189, 248, 0.25)", borderRadius: 14, padding: "16px 18px", boxShadow: "0 4px 20px rgba(0,0,0,0.35)", position: "relative", overflow: "hidden" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(56, 189, 248, 0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Wallet size={16} color="#38bdf8" />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Available Balance</span>
+                  </div>
+                  <button
+                    onClick={() => handleAddPaperFunds(100000)}
+                    disabled={depositing}
+                    style={{ background: "rgba(56, 189, 248, 0.12)", border: "1px solid rgba(56, 189, 248, 0.3)", color: "#38bdf8", padding: "4px 9px", borderRadius: 6, fontSize: 11, fontWeight: 800, cursor: "pointer" }}
+                    title="Add ₹1,00,000 Paper Trading Margin"
+                  >
+                    {depositing ? "Adding..." : "+ Add ₹1L Cash"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: "#f8fafc", fontFamily: "monospace", marginTop: 10, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <span>₹{(funds?.availableCashINR ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span style={{ fontSize: 13, color: "#94a3b8", fontWeight: 700 }}>(${(((funds?.availableCashINR ?? 0) / inrFxRate)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                  <CheckCircle2 size={12} color="#34d399" />
+                  <span>Ready for new option &amp; stock orders</span>
+                </div>
+              </div>
+
+              {/* 2. Invested in Trades */}
+              <div style={{ background: "linear-gradient(145deg, #0f172a 0%, #0a1120 100%)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: 14, padding: "16px 18px", boxShadow: "0 4px 20px rgba(0,0,0,0.35)", position: "relative", overflow: "hidden" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(245, 158, 11, 0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Layers size={16} color="#fbbf24" />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Invested Capital</span>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#f59e0b", background: "rgba(245, 158, 11, 0.12)", padding: "2px 8px", borderRadius: 6 }}>
+                    {positions.length} Positions Active
+                  </span>
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 900, color: "#fbbf24", fontFamily: "monospace", marginTop: 10, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <span>₹{(funds?.investedAmountINR ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span style={{ fontSize: 13, color: "#f59e0b", opacity: 0.85, fontWeight: 700 }}>(${(((funds?.investedAmountINR ?? 0) / inrFxRate)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
+                  Total Margin: ₹{(funds?.totalEquityINR ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${(((funds?.totalEquityINR ?? 0) / inrFxRate)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                </div>
+              </div>
+
+              {/* 3. Today's Profit / Loss */}
+              {(() => {
+                const todayP = funds?.todayPnlINR ?? 0;
+                const isPos = todayP >= 0;
+                return (
+                  <div style={{ background: "linear-gradient(145deg, #0f172a 0%, #0a1120 100%)", border: `1px solid ${isPos ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"}`, borderRadius: 14, padding: "16px 18px", boxShadow: "0 4px 20px rgba(0,0,0,0.35)", position: "relative", overflow: "hidden" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 8, background: isPos ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          {isPos ? <TrendingUp size={16} color="#34d399" /> : <TrendingDown size={16} color="#f87171" />}
+                        </div>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Today's P&amp;L</span>
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: isPos ? "#34d399" : "#f87171", background: isPos ? "rgba(16, 185, 129, 0.12)" : "rgba(239, 68, 68, 0.12)", padding: "2px 8px", borderRadius: 6 }}>
+                        Live Today
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 24, fontWeight: 900, color: isPos ? "#10b981" : "#ef4444", fontFamily: "monospace", marginTop: 10, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                      <span>{isPos ? "+" : ""}₹{todayP.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span style={{ fontSize: 13, opacity: 0.85, fontWeight: 700 }}>({isPos ? "+" : ""}${((todayP / inrFxRate)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
+                      Unrealized Live Floating: ₹{(funds?.unrealizedPnlINR ?? 0).toLocaleString("en-IN")} (${(((funds?.unrealizedPnlINR ?? 0) / inrFxRate)).toFixed(2)})
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* 4. Total All-Time Profit */}
+              {(() => {
+                const totP = funds?.realizedPnlINR ?? 0;
+                const isPos = totP >= 0;
+                return (
+                  <div style={{ background: "linear-gradient(145deg, #0f172a 0%, #0a1120 100%)", border: `1px solid ${isPos ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"}`, borderRadius: 14, padding: "16px 18px", boxShadow: "0 4px 20px rgba(0,0,0,0.35)", position: "relative", overflow: "hidden" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(16, 185, 129, 0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <Award size={16} color="#34d399" />
+                        </div>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Realized Profit</span>
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: "#38bdf8", background: "rgba(56, 189, 248, 0.12)", padding: "2px 8px", borderRadius: 6 }}>
+                        {closedTrades.length} Trades Settled
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 24, fontWeight: 900, color: isPos ? "#10b981" : "#ef4444", fontFamily: "monospace", marginTop: 10, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                      <span>{isPos ? "+" : ""}₹{totP.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <span style={{ fontSize: 13, opacity: 0.85, fontWeight: 700 }}>({isPos ? "+" : ""}${((totP / inrFxRate)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
+                      Cumulative Settled: ₹{(funds?.cumulativeRealizedNetPnlINR ?? 0).toLocaleString("en-IN")} (${(((funds?.cumulativeRealizedNetPnlINR ?? 0) / inrFxRate)).toFixed(2)})
+                    </div>
+                  </div>
+                );
+              })()}
+
+            </div>
+          );
+        })()}
+
+        {/* AI Auto-Pilot Safety & Control Strip */}
+        <div style={{
+          marginTop: 12,
+          background: autoTradeEnabled
+            ? "linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(15, 23, 42, 0.8) 100%)"
+            : "linear-gradient(90deg, rgba(100, 116, 139, 0.15) 0%, rgba(15, 23, 42, 0.8) 100%)",
+          border: `1px solid ${autoTradeEnabled ? "rgba(16, 185, 129, 0.4)" : "rgba(100, 116, 139, 0.3)"}`,
+          borderRadius: 12,
+          padding: "12px 18px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 12,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{
+              width: 12, height: 12, borderRadius: "50%",
+              background: autoTradeEnabled ? "#10b981" : "#64748b",
+              boxShadow: autoTradeEnabled ? "0 0 12px #10b981" : "none",
+              animation: autoTradeEnabled ? "pulse 2s infinite" : "none",
+            }} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: autoTradeEnabled ? "#34d399" : "#cbd5e1", display: "flex", alignItems: "center", gap: 8 }}>
+                <span>{autoTradeEnabled ? "🤖 AI Auto-Trader is Active (Default: ON)" : "⏸️ AI Auto-Trader is Paused"}</span>
+                <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,0.08)", color: "#94a3b8", fontWeight: 600 }}>
+                  Capital Safety Guard Active
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                {autoTradeEnabled
+                  ? "The AI automatically scans NIFTY/BANKNIFTY every 10 seconds, selects low-risk entries, and guards your capital with automated stop-loss protection."
+                  : "Automatic trade execution is paused. You can click Resume Auto-Trade to let the AI resume autonomous trading."}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleToggleAutoTrade}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "7px 16px",
+              borderRadius: 8,
+              border: autoTradeEnabled ? "1px solid rgba(239, 68, 68, 0.4)" : "none",
+              cursor: "pointer",
+              fontWeight: 800,
+              fontSize: 12,
+              background: autoTradeEnabled ? "rgba(239, 68, 68, 0.2)" : "#10b981",
+              color: autoTradeEnabled ? "#f87171" : "#fff",
+              transition: "all 0.15s",
+            }}
+          >
+            {autoTradeEnabled ? <Square size={13} fill="#f87171" /> : <Play size={13} fill="#fff" />}
+            <span>{autoTradeEnabled ? "Pause Auto-Trade" : "Resume Auto-Trade"}</span>
+          </button>
+        </div>
+      </div>
+
       {/* ─── 2. LIVE INDICES & MARKET REGIME STRIP ─────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
         
@@ -636,14 +1026,14 @@ export default function IndianMarketPage() {
                 borderRadius: 4,
               }}
             >
-              {regimeAnalysis?.regime || "TRENDING_BULL"}
+              {regimeAnalysis?.regime || "SIDEWAYS"}
             </span>
           </div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", marginTop: 6 }}>
-            Recommended: {regimeAnalysis?.recommendedStrategies?.[0] || "BULL_CALL_SPREAD"}
+            Recommended: {regimeAnalysis?.recommendedStrategies?.[0] || "NONE"}
           </div>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
-            ADX: {regimeAnalysis?.adx || 29} • Bandwidth: {regimeAnalysis?.bollingerBandwidthPct || 1.8}% • Conf: {regimeAnalysis?.confidence || 85}%
+            ADX: {regimeAnalysis?.adx ?? 0} • Bandwidth: {regimeAnalysis?.bollingerBandwidthPct ?? 0}% • Conf: {regimeAnalysis?.confidence ?? 0}%
           </div>
         </div>
 
@@ -659,16 +1049,16 @@ export default function IndianMarketPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>Derivatives Win Rate</span>
             <span style={{ fontSize: 11, fontWeight: 800, color: "#34d399" }}>
-              PF: {analytics?.profitFactor || "1.85"}
+              PF: {analytics?.profitFactor ? Number(analytics.profitFactor).toFixed(2) : "0.00"}
             </span>
           </div>
           <div style={{ fontSize: 22, fontWeight: 800, color: "#10b981", marginTop: 4 }}>
-            {analytics?.winRate || "62.5"}%
+            {analytics?.winRate !== undefined ? `${analytics.winRate}%` : "0.0%"}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginTop: 6 }}>
-            <span>Trades: {analytics?.totalTrades || 48}</span>
-            <span>Net: +₹{analytics?.netPnL?.toLocaleString("en-IN") || "42,850"}</span>
-            <span>Max DD: {analytics?.maxDrawdown || "-4.2%"}</span>
+            <span>Trades: {analytics?.totalTrades ?? 0}</span>
+            <span>Net: {analytics?.netPnL !== undefined ? (analytics.netPnL >= 0 ? `+₹${analytics.netPnL.toLocaleString("en-IN")}` : `-₹${Math.abs(analytics.netPnL).toLocaleString("en-IN")}`) : "₹0"}</span>
+            <span>Max DD: {analytics?.maxDrawdown || "0.0%"}</span>
           </div>
         </div>
       </div>
@@ -686,7 +1076,7 @@ export default function IndianMarketPage() {
         {[
           { key: "COMMAND_CENTER", label: "Strategy Command Center", icon: Zap },
           { key: "OPTION_CHAIN", label: "Option Chain & Greeks", icon: Activity },
-          { key: "POSITIONS", label: `Open Positions (${positions.length})`, icon: Layers },
+          { key: "POSITIONS", label: `Positions (${positions.length}) • History (${closedTrades.length})`, icon: Layers },
           { key: "STRATEGIES", label: `Strategies Registry (${strategies.length})`, icon: Sliders },
           { key: "AUDIT_LOGS", label: `Audit & Rejections (${auditLogs.length})`, icon: ShieldCheck },
           { key: "ANALYTICS", label: "Performance Analytics", icon: BarChart3 },
@@ -1057,85 +1447,419 @@ export default function IndianMarketPage() {
         </div>
       )}
 
-      {/* TAB 3: OPEN POSITIONS & SPREADS */}
+      {/* TAB 3: POSITIONS & CLOSED TRADE HISTORY */}
       {activeTab === "POSITIONS" && (
         <div style={{ background: "#0a1120", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18 }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: "#fff", marginBottom: 14 }}>
-            Active Open Positions & Multi-Leg Spreads
-          </div>
-
-          {positions.length === 0 ? (
-            <div style={{ padding: 40, textAlign: "center", color: "#64748b" }}>
-              <Layers size={36} style={{ margin: "0 auto 12px", opacity: 0.5 }} />
-              <div>No open Indian derivatives positions.</div>
-              <div style={{ fontSize: 12, marginTop: 4 }}>Execute a strategy or turn on Auto-Trade.</div>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {positions.map((pos) => (
-                <div
-                  key={pos.tradeId}
+          {/* Sub-Header with Segmented Control & Timeframe Filter */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+            <div style={{ display: "flex", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 4, gap: 4 }}>
+              <button
+                onClick={() => setPositionSubTab("OPEN")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 16px",
+                  borderRadius: 7,
+                  border: "none",
+                  background: positionSubTab === "OPEN" ? "#2563eb" : "transparent",
+                  color: positionSubTab === "OPEN" ? "#fff" : "#94a3b8",
+                  fontWeight: 800,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+              >
+                <Layers size={14} />
+                <span>Active Open Positions</span>
+                <span
                   style={{
-                    background: "rgba(255,255,255,0.02)",
-                    border: "1px solid rgba(255,255,255,0.06)",
+                    background: positionSubTab === "OPEN" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)",
+                    padding: "2px 7px",
                     borderRadius: 10,
-                    padding: "14px 16px",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    gap: 12,
+                    fontSize: 11,
+                    fontWeight: 800,
                   }}
                 >
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{pos.symbol}</span>
-                      <span
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 800,
-                          padding: "2px 6px",
-                          borderRadius: 4,
-                          background: pos.side === "BUY" ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)",
-                          color: pos.side === "BUY" ? "#34d399" : "#f87171",
-                        }}
-                      >
-                        {pos.side} • {pos.quantity} QTY
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
-                      Entry: ₹{pos.entryPrice} • LTP: ₹{pos.currentPrice} • SL: ₹{pos.sl || "N/A"} • TP: ₹{pos.tp || "N/A"}
-                    </div>
-                  </div>
+                  {positions.length}
+                </span>
+              </button>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: pos.unrealizedPnl >= 0 ? "#10b981" : "#ef4444" }}>
-                        {pos.unrealizedPnl >= 0 ? "+" : ""}{formatINR(pos.unrealizedPnl)}
-                      </div>
-                      <div style={{ fontSize: 11, color: pos.unrealizedPnl >= 0 ? "#34d399" : "#f87171" }}>
-                        {pos.unrealizedPnlPct?.toFixed(2)}%
-                      </div>
-                    </div>
+              <button
+                onClick={() => setPositionSubTab("CLOSED")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 16px",
+                  borderRadius: 7,
+                  border: "none",
+                  background: positionSubTab === "CLOSED" ? "#2563eb" : "transparent",
+                  color: positionSubTab === "CLOSED" ? "#fff" : "#94a3b8",
+                  fontWeight: 800,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+              >
+                <History size={14} />
+                <span>Closed Order History</span>
+                <span
+                  style={{
+                    background: positionSubTab === "CLOSED" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)",
+                    padding: "2px 7px",
+                    borderRadius: 10,
+                    fontSize: 11,
+                    fontWeight: 800,
+                  }}
+                >
+                  {closedTrades.length}
+                </span>
+              </button>
+            </div>
 
+            {positionSubTab === "CLOSED" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 12, color: "#64748b" }}>Timeframe:</span>
+                <div style={{ display: "flex", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: 3, gap: 2 }}>
+                  {[
+                    { id: "daily", label: "Today" },
+                    { id: "weekly", label: "7 Days" },
+                    { id: "monthly", label: "30 Days" },
+                    { id: "all", label: "All Records" },
+                  ].map((tf) => (
                     <button
-                      onClick={() => handleClosePosition(pos.tradeId)}
+                      key={tf.id}
+                      onClick={() => setHistoryTimeframe(tf.id as any)}
                       style={{
-                        padding: "8px 14px",
-                        background: "rgba(239,68,68,0.15)",
-                        border: "1px solid rgba(239,68,68,0.3)",
-                        color: "#f87171",
+                        background: historyTimeframe === tf.id ? "#3b82f6" : "transparent",
+                        color: historyTimeframe === tf.id ? "#fff" : "#94a3b8",
+                        border: "none",
+                        padding: "5px 11px",
                         borderRadius: 6,
+                        fontSize: 11,
                         fontWeight: 700,
-                        fontSize: 12,
                         cursor: "pointer",
+                        transition: "all 0.15s",
                       }}
                     >
-                      Square Off
+                      {tf.label}
                     </button>
-                  </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+            )}
+          </div>
+
+          {/* SUB-VIEW 1: ACTIVE OPEN POSITIONS */}
+          {positionSubTab === "OPEN" && (
+            <div>
+              {positions.length === 0 ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#64748b" }}>
+                  <Layers size={36} style={{ margin: "0 auto 12px", opacity: 0.5 }} />
+                  <div>No open Indian derivatives positions.</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>Execute a strategy or turn on Auto-Trade.</div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {positions.map((pos) => (
+                    <div
+                      key={pos.tradeId}
+                      style={{
+                        background: "rgba(255,255,255,0.02)",
+                        border: "1px solid rgba(255,255,255,0.06)",
+                        borderRadius: 10,
+                        padding: "14px 16px",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 12,
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{pos.symbol}</span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              background: pos.side === "BUY" ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)",
+                              color: pos.side === "BUY" ? "#34d399" : "#f87171",
+                            }}
+                          >
+                            {pos.side} • {pos.remainingQty ?? pos.quantity} QTY
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              background: pos.targetStatus === "HIT" ? "rgba(16,185,129,0.2)" : "rgba(148,163,184,0.1)",
+                              color: pos.targetStatus === "HIT" ? "#34d399" : "#94a3b8",
+                            }}
+                          >
+                            Target: {pos.targetStatus === "HIT" ? "HIT" : "PENDING"}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              background: pos.stopStatus === "HIT" ? "rgba(239,68,68,0.2)" : "rgba(148,163,184,0.1)",
+                              color: pos.stopStatus === "HIT" ? "#f87171" : "#94a3b8",
+                            }}
+                          >
+                            Stop: {pos.stopStatus === "HIT" ? "HIT" : "PENDING"}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 800,
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              background: pos.autoPilotStatus === "EXIT_PENDING" ? "rgba(245,158,11,0.2)" : "rgba(56,189,248,0.2)",
+                              color: pos.autoPilotStatus === "EXIT_PENDING" ? "#fbbf24" : "#38bdf8",
+                            }}
+                          >
+                            Auto-Pilot: {pos.autoPilotStatus || "ARMED"}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+                          Entry: ₹{pos.entryPrice} • LTP: ₹{pos.currentPrice} • SL: ₹{pos.sl || "N/A"} • TP: ₹{pos.tp || "N/A"}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: pos.unrealizedPnl >= 0 ? "#10b981" : "#ef4444" }}>
+                            {pos.unrealizedPnl >= 0 ? "+" : ""}{formatINR(pos.unrealizedPnl)}
+                          </div>
+                          <div style={{ fontSize: 11, color: pos.unrealizedPnl >= 0 ? "#34d399" : "#f87171" }}>
+                            {pos.unrealizedPnlPct?.toFixed(2)}%
+                          </div>
+                        </div>
+
+                        {pos.positionStatus === "CLOSED" ? (
+                          <span style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>EXIT FILLED</span>
+                        ) : pos.autoPilotStatus === "EXIT_PENDING" ? (
+                          <span
+                            style={{
+                              padding: "6px 12px",
+                              background: "rgba(245,158,11,0.15)",
+                              border: "1px solid rgba(245,158,11,0.4)",
+                              color: "#fbbf24",
+                              borderRadius: 6,
+                              fontWeight: 800,
+                              fontSize: 11,
+                            }}
+                          >
+                            EXIT PENDING
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleClosePosition(pos.tradeId)}
+                            style={{
+                              padding: "8px 14px",
+                              background: "rgba(239,68,68,0.15)",
+                              border: "1px solid rgba(239,68,68,0.3)",
+                              color: "#f87171",
+                              borderRadius: 6,
+                              fontWeight: 700,
+                              fontSize: 12,
+                              cursor: "pointer",
+                            }}
+                            title="Square off position immediately"
+                          >
+                            EXIT AVAILABLE
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SUB-VIEW 2: CLOSED ORDER HISTORY LEDGER */}
+          {positionSubTab === "CLOSED" && (
+            <div>
+              {/* Scorecard Summary Bar */}
+              {(() => {
+                const totalRealized = closedTrades.reduce((acc, t) => acc + (t.realizedPnl || 0), 0);
+                const totalNet = closedTrades.reduce((acc, t) => acc + (t.netPnl ?? (t.realizedPnl - (t.charges || 0))), 0);
+                const totalCharges = closedTrades.reduce((acc, t) => acc + (t.charges || 0), 0);
+                const wins = closedTrades.filter((t) => (t.realizedPnl || 0) > 0).length;
+                const winRate = closedTrades.length > 0 ? ((wins / closedTrades.length) * 100).toFixed(1) : "0.0";
+
+                return (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gap: 12,
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, padding: 12 }}>
+                      <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Total Closed Orders</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: "#fff", marginTop: 4 }}>
+                        {closedTrades.length} Trades
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{wins} Won / {closedTrades.length - wins} Lost</div>
+                    </div>
+
+                    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, padding: 12 }}>
+                      <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Win Rate</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: Number(winRate) >= 50 ? "#10b981" : "#38bdf8", marginTop: 4 }}>
+                        {winRate}%
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>Based on realized profit</div>
+                    </div>
+
+                    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, padding: 12 }}>
+                      <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Gross Realized P&L</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: totalRealized >= 0 ? "#10b981" : "#ef4444", marginTop: 4 }}>
+                        {totalRealized >= 0 ? "+" : ""}{formatINR(totalRealized)}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>Before STT & Charges</div>
+                    </div>
+
+                    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, padding: 12 }}>
+                      <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Net Realized P&L</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: totalNet >= 0 ? "#10b981" : "#ef4444", marginTop: 4 }}>
+                        {totalNet >= 0 ? "+" : ""}{formatINR(totalNet)}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#f59e0b", marginTop: 2 }}>Est. Charges: ~{formatINR(totalCharges)}</div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {closedTrades.length === 0 ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#64748b" }}>
+                  <History size={36} style={{ margin: "0 auto 12px", opacity: 0.5 }} />
+                  <div>No closed Indian market orders found for this timeframe.</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>Orders squared off manually or triggered by SL/TP will appear here.</div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {closedTrades.map((t) => {
+                    const isProfit = (t.realizedPnl || 0) >= 0;
+                    const closedTime = t.closedAt ? new Date(t.closedAt).toLocaleString("en-IN", {
+                      timeZone: "Asia/Kolkata",
+                      day: "2-digit",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: true,
+                    }) + " IST" : "N/A";
+
+                    return (
+                      <div
+                        key={t.tradeId}
+                        style={{
+                          background: "rgba(255,255,255,0.02)",
+                          border: `1px solid ${isProfit ? "rgba(16,185,129,0.15)" : "rgba(239,68,68,0.15)"}`,
+                          borderRadius: 10,
+                          padding: "14px 16px",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                          gap: 12,
+                          transition: "all 0.15s ease",
+                        }}
+                      >
+                        <div style={{ flex: "1 1 320px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{t.symbol}</span>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 800,
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                background: t.side === "BUY" ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)",
+                                color: t.side === "BUY" ? "#34d399" : "#f87171",
+                              }}
+                            >
+                              {t.side} • {t.quantity} QTY
+                            </span>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                background: "rgba(59,130,246,0.15)",
+                                color: "#60a5fa",
+                              }}
+                            >
+                              {t.productType || "MIS"}
+                            </span>
+                            {t.strategy && (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  padding: "2px 6px",
+                                  borderRadius: 4,
+                                  background: "rgba(255,255,255,0.05)",
+                                  color: "#94a3b8",
+                                }}
+                              >
+                                {t.strategy}
+                              </span>
+                            )}
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 800,
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                background: "rgba(100,116,139,0.2)",
+                                color: "#94a3b8",
+                              }}
+                            >
+                              CLOSED
+                            </span>
+                          </div>
+
+                          <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 6 }}>
+                            Entry: <b style={{ color: "#fff" }}>₹{t.entryPrice?.toFixed(2) || "0.00"}</b> → Exit: <b style={{ color: "#fff" }}>₹{t.exitPrice?.toFixed(2) || "0.00"}</b>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "#64748b", marginTop: 4, flexWrap: "wrap" }}>
+                            <span>Closed: <b style={{ color: "#94a3b8" }}>{closedTime}</b></span>
+                            <span>•</span>
+                            <span style={{ color: isProfit ? "#34d399" : "#f87171" }}>
+                              Exit Reason: <b>{t.exitReason || "SQUARED_OFF"}</b>
+                            </span>
+                          </div>
+                        </div>
+
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 18, fontWeight: 900, color: isProfit ? "#10b981" : "#ef4444" }}>
+                            {isProfit ? "+" : ""}{formatINR(t.realizedPnl || 0)}
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: isProfit ? "#34d399" : "#f87171" }}>
+                            {isProfit ? "+" : ""}{t.realizedPnlPct ? `${t.realizedPnlPct.toFixed(2)}%` : "0.00%"}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>
+                            Est. Charges: ~{formatINR(t.charges || 20)} • Net: <b style={{ color: (t.netPnl ?? 0) >= 0 ? "#10b981" : "#ef4444" }}>{formatINR(t.netPnl || 0)}</b>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1271,14 +1995,14 @@ export default function IndianMarketPage() {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
             {[
-              { label: "Total Completed Trades", val: analytics?.totalTrades || 48 },
-              { label: "Win Rate", val: `${analytics?.winRate || 62.5}%`, color: "#10b981" },
-              { label: "Profit Factor", val: analytics?.profitFactor || 1.85, color: "#38bdf8" },
-              { label: "Net Realized P&L", val: `₹${analytics?.netPnL?.toLocaleString("en-IN") || "42,850"}`, color: "#10b981" },
-              { label: "Average Winner", val: `₹${analytics?.avgWinner || 2250}` },
-              { label: "Average Loser", val: `₹${analytics?.avgLoser || 1100}` },
-              { label: "Max Drawdown", val: analytics?.maxDrawdown || "-4.2%", color: "#f87171" },
-              { label: "Expectancy", val: analytics?.expectancy || "₹892/trade" },
+              { label: "Total Completed Trades", val: analytics?.totalTrades || 0 },
+              { label: "Win Rate", val: `${analytics?.winRate || 0}%`, color: "#10b981" },
+              { label: "Profit Factor", val: analytics?.profitFactor || 0, color: "#38bdf8" },
+              { label: "Net Realized P&L", val: `₹${analytics?.netPnL?.toLocaleString("en-IN") || "0"}`, color: "#10b981" },
+              { label: "Average Winner", val: `₹${analytics?.avgWinner || 0}` },
+              { label: "Average Loser", val: `₹${analytics?.avgLoser || 0}` },
+              { label: "Max Drawdown", val: analytics?.maxDrawdown || "0%", color: "#f87171" },
+              { label: "Expectancy", val: analytics?.expectancy || "₹0/trade" },
             ].map((metric) => (
               <div
                 key={metric.label}

@@ -15,7 +15,11 @@ export type TradeStatus =
   | "CANCELLED" 
   | "PENDING_CLOSE" 
   | "CLOSE_FAILED" 
-  | "MANUAL_INTERVENTION_REQUIRED";
+  | "MANUAL_INTERVENTION_REQUIRED"
+  | "TARGET_TRIGGERED"
+  | "STOP_TRIGGERED"
+  | "EXIT_PENDING"
+  | "EXIT_PARTIALLY_FILLED";
 
 export interface ITrade extends Document {
   userId: Types.ObjectId;
@@ -125,7 +129,11 @@ const TradeSchema = new Schema<ITrade>({
       "CANCELLED", 
       "PENDING_CLOSE", 
       "CLOSE_FAILED", 
-      "MANUAL_INTERVENTION_REQUIRED"
+      "MANUAL_INTERVENTION_REQUIRED",
+      "TARGET_TRIGGERED",
+      "STOP_TRIGGERED",
+      "EXIT_PENDING",
+      "EXIT_PARTIALLY_FILLED"
     ],
     default: "OPEN",
   },
@@ -186,5 +194,28 @@ TradeSchema.index({ userId: 1, status: 1, archived: 1, closedAt: -1 });
 TradeSchema.index({ userId: 1, mode: 1, openedAt: -1 });
 TradeSchema.index({ userId: 1, mode: 1, status: 1, openedAt: -1 });
 TradeSchema.index({ userId: 1, mode: 1, closedAt: -1 });
+
+// Fast position lookup & reconciliation without userId full-table scans
+TradeSchema.index({ status: 1, accountType: 1 });
+TradeSchema.index({ accountType: 1, status: 1, openedAt: -1 });
+TradeSchema.index({ symbol: 1, status: 1 });
+TradeSchema.index({ accountType: 1, closedAt: -1 });
+
+// 🛡️ FINANCIAL INTEGRITY: Strict Append-Only Protection (Requirement 21)
+// Live trades (mode: "LIVE") or finalized historical trades (status: "CLOSED")
+// can NEVER be deleted. Corrections must be handled via compensating records.
+if (typeof (TradeSchema as any)?.pre === "function") {
+  TradeSchema.pre(["deleteOne", "deleteMany", "findOneAndDelete"], function (next) {
+    const filter = this.getFilter() || {};
+    // LIVE trades are the real-money ledger and can never be deleted; PAPER
+    // trades are simulation state that boot-time hydration cleanup and account
+    // resets legitimately purge, so those must not be blocked (an earlier
+    // blanket production guard aborted hydrate() and silently no-op'd reset).
+    if (filter.mode === "LIVE") {
+      return next(new Error("[FINANCIAL_AUDIT_VIOLATION] Cannot delete LIVE trade records. Financial ledger is strictly append-only."));
+    }
+    next();
+  });
+}
 
 export const Trade = mongoose.model<ITrade>("Trade", TradeSchema);

@@ -72,6 +72,12 @@ export async function buildContext(
   userId: string,
   accountTypeArg?: "SPOT" | "FUTURES",
 ): Promise<AgentContext> {
+  // Funding rate depends on nothing computed below and is only consumed at
+  // the very end of this function — start it now so its network latency
+  // overlaps the DB/indicator/prediction work instead of being paid for
+  // serially at the end (previously the last `await` in the function).
+  const fundingRatePromise = binance.getLatestFundingRate(symbol).catch(() => 0);
+
   /* 1. Fetch last 200 bars (5m) for indicators */
   const klines: Kline[] = await binance.getKlines(symbol, "5m", undefined, undefined, 200);
   const bars: OHLC[] = klines.map((k) => ({
@@ -192,22 +198,23 @@ export async function buildContext(
     applyDynamicMarketWeights(volRatio, ind.adx14);
   }
 
-  /* 5. HTF trend — check 1h EMA alignment via a quick 55‑bar fetch */
-  let htfTrendBullish = true;
-  if (!settings?.bypassConsensusLag && !settings?.bypassHtfTrendGate) {
-    try {
-      const htfKlines = await binance.getKlines(symbol, "1h", undefined, undefined, 60);
-      const htfBars = htfKlines.map((k) => ({
-        open: parseFloat(k.open), high: parseFloat(k.high),
-        low: parseFloat(k.low), close: parseFloat(k.close),
-      }));
-      const htfInd = computeSnapshot(htfBars);
-      htfTrendBullish =
-        htfInd.ema9 !== null && htfInd.ema21 !== null && htfInd.ema9 > htfInd.ema21;
-    } catch {
-      /* fallback to true if data unavailable */
-    }
-  }
+  /* 5. HTF trend — check 1h EMA alignment via a quick 55‑bar fetch.
+   * Kicked off here but only awaited alongside the ML/DL predictions below
+   * (step 8/9) — it doesn't depend on them or they on it, so there's no
+   * reason to pay its network latency serially before that Promise.all. */
+  const htfTrendPromise: Promise<boolean> =
+    !settings?.bypassConsensusLag && !settings?.bypassHtfTrendGate
+      ? binance.getKlines(symbol, "1h", undefined, undefined, 60)
+          .then((htfKlines) => {
+            const htfBars = htfKlines.map((k) => ({
+              open: parseFloat(k.open), high: parseFloat(k.high),
+              low: parseFloat(k.low), close: parseFloat(k.close),
+            }));
+            const htfInd = computeSnapshot(htfBars);
+            return htfInd.ema9 !== null && htfInd.ema21 !== null && htfInd.ema9 > htfInd.ema21;
+          })
+          .catch(() => true) // fallback to true if data unavailable
+      : Promise.resolve(true);
 
   /* 6. Volatility ratio */
   const volatilityRatio =
@@ -221,9 +228,10 @@ export async function buildContext(
     ind, weights, dailyPnl, riskConfig.maxDailyLoss, tradesToday, openPositionCount,
   );
   const seqInput = buildSequenceInput(symbol, "5m", bars, 60);
-  const [mlPrediction, dlPrediction] = await Promise.all([
+  const [mlPrediction, dlPrediction, htfTrendBullish] = await Promise.all([
     mlPredict(mlFeatures).catch(() => ({ profitProbability: 0.5, expectedReturn: 0, confidence: 0, modelName: "stub" })),
     dlPredict(seqInput).catch(() => ({ directionScore: 0.5, predictedMove: 0, confidence: 0, modelName: "stub" })),
+    htfTrendPromise,
   ]);
 
   // Merge AI-configurable thresholds into riskConfig so checklist can read them
@@ -251,6 +259,6 @@ export async function buildContext(
     noLossMode: settings?.noLossMode ?? false,
     saraswatiAlphaThreshold: settings?.saraswatiAlphaThreshold ?? 45,
     // Real funding rate from Binance (neutral 0 on failure — never a fabricated value).
-    fundingRate: await binance.getLatestFundingRate(symbol).catch(() => 0),
+    fundingRate: await fundingRatePromise,
   };
 }

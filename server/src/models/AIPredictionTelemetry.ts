@@ -24,6 +24,19 @@ export interface IAIPredictionTelemetry extends Document {
    *  (25m) with NEUTRAL excluded from the sample. Absent/1 = legacy 60m
    *  grading where NEUTRAL counted as incorrect. */
   gradingVersion?: number;
+
+  /** True when this prediction came from the predictor's own hardcoded
+   *  technical-indicator fallback (e.g. TransformerPredictor's internal
+   *  catch block), not the actual model/checkpoint — set whenever the
+   *  underlying predictor's runInference() result carries a meta.model
+   *  ending in "_LOCAL". Absent for historical rows written before this
+   *  field existed (2026-09-15) — do not treat absence as "not fallback"
+   *  for anything predating that. */
+  isFallback?: boolean;
+  /** Raw meta.model marker from the predictor, when present (e.g.
+   *  "TRANSFORMER_ATTENTION_ALIGNMENT_LOCAL"). Undefined for a genuine
+   *  model-backed prediction, which sets no such marker. */
+  sourceModel?: string;
 }
 
 const AIPredictionTelemetrySchema = new Schema<IAIPredictionTelemetry>({
@@ -44,6 +57,9 @@ const AIPredictionTelemetrySchema = new Schema<IAIPredictionTelemetry>({
   outcome25m: { type: String, enum: ["WIN", "LOSS", "NEUTRAL"] },
   outcome30m: { type: String, enum: ["WIN", "LOSS", "NEUTRAL"] },
   outcome60m: { type: String, enum: ["WIN", "LOSS", "NEUTRAL"] },
+
+  isFallback: { type: Boolean, index: true },
+  sourceModel: { type: String },
   isCorrect: { type: Boolean },
   gradingVersion: { type: Number }
 });

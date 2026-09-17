@@ -55,7 +55,7 @@ export class IndianCostModel {
     if (!isBuy) {
       if (instrumentType === "FUTURE") {
         stt = turnover * 0.0002; // 0.02%
-      } else if (instrumentType === "CE" || instrumentType === "PE") {
+      } else if (instrumentType === "CE" || instrumentType === "PE" || (instrumentType as any) === "OPTION") {
         stt = turnover * 0.001; // 0.1% on option premium sell
       }
     }
@@ -66,7 +66,7 @@ export class IndianCostModel {
     let exchangeTxn = 0;
     if (instrumentType === "FUTURE") {
       exchangeTxn = turnover * 0.000019;
-    } else if (instrumentType === "CE" || instrumentType === "PE") {
+    } else if (instrumentType === "CE" || instrumentType === "PE" || (instrumentType as any) === "OPTION") {
       exchangeTxn = turnover * 0.0005;
     } else {
       exchangeTxn = turnover * 0.0000345; // Cash Equity
@@ -82,7 +82,7 @@ export class IndianCostModel {
     if (isBuy) {
       if (instrumentType === "FUTURE") {
         stampDuty = turnover * 0.00002;
-      } else if (instrumentType === "CE" || instrumentType === "PE") {
+      } else if (instrumentType === "CE" || instrumentType === "PE" || (instrumentType as any) === "OPTION") {
         stampDuty = turnover * 0.00003;
       } else {
         stampDuty = turnover * 0.00015;

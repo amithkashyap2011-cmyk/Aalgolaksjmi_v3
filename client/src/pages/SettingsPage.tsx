@@ -48,6 +48,7 @@ export default function SettingsPage() {
     dynamicSLTP, defaultSL,
     setDynamicSLTP, setDefaultSL,
     aiConsensusGate, setAiConsensusGate,
+    shadowMode, setShadowMode,
     orderFlowVotingEnabled, setOrderFlowVotingEnabled,
     smartMoneyVotingEnabled, setSmartMoneyVotingEnabled,
     liveNewsSentimentEnabled, setLiveNewsSentimentEnabled,
@@ -272,6 +273,7 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [keysSaved, setKeysSaved] = useState(false);
+  const [binanceConnected, setBinanceConnected] = useState<boolean | null>(null);
   const [apiKeyDisplay, setApiKeyDisplay] = useState("");
   const [apiSecretDisplay, setApiSecretDisplay] = useState("");
   const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -288,6 +290,7 @@ export default function SettingsPage() {
     if (tab === "API_KEYS") {
       api.getApiKeysStatus().then((res) => {
         setKeysSaved(res.saved);
+        setBinanceConnected(Boolean(res.connected));
         if (res.saved) {
           setApiKeyDisplay(res.apiKey || "••••••••••••••••••••");
           setApiSecretDisplay(res.apiSecret || "••••••••••••••••••••");
@@ -398,11 +401,27 @@ export default function SettingsPage() {
                
                {tab === "API_KEYS" && (
                   <div className="fade-in max-w-2xl">
-                     <div className="d-flex align-items-center gap-3 mb-4">
-                        <Key size={20} className="text-primary" />
-                        <h4 className="text-dark font-bold tracking-tight m-0">Financial Connectivity Layer</h4>
+                     <div className="d-flex align-items-center justify-content-between mb-3">
+                        <div className="d-flex align-items-center gap-3">
+                           <Key size={20} className="text-primary" />
+                           <h4 className="text-dark font-bold tracking-tight m-0">Binance API Connectivity (Crypto Spot & Futures)</h4>
+                        </div>
+                        <span className={clsx(
+                           "badge font-bold px-3 py-1.5 rounded-full text-xs d-flex align-items-center gap-1.5",
+                           binanceConnected 
+                              ? "bg-success bg-opacity-10 text-success border border-success border-opacity-20" 
+                              : keysSaved 
+                                ? "bg-warning bg-opacity-10 text-warning border border-warning border-opacity-20" 
+                                : "bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-20"
+                        )}>
+                           <span className={clsx(
+                              "w-2 h-2 rounded-full",
+                              binanceConnected ? "bg-success" : keysSaved ? "bg-warning" : "bg-secondary"
+                           )} />
+                           {binanceConnected ? "ACTIVE_CONNECTED" : keysSaved ? "PENDING_VERIFICATION" : "NOT_CONNECTED"}
+                        </span>
                      </div>
-                     <p className="text-secondary text-sm mb-5 font-medium">Authentication credentials are encrypted using bank-grade AES-256 protocols. Required for high-frequency routing.</p>
+                     <p className="text-secondary text-sm mb-4 font-medium">Financial Connectivity Layer: Authentication credentials are encrypted using bank-grade AES-256 protocols. Required for live exchange order routing.</p>
                      
                      <div className="mb-4">
                         <label className="text-[11px] font-bold text-secondary uppercase tracking-widest mb-2 d-block">Binance API Key</label>
@@ -436,6 +455,7 @@ export default function SettingsPage() {
                               await api.saveApiKeys(apiKey, apiSecret);
                               setKeyMsg({ ok: true, text: "KEYS_ENCRYPTED_AND_STORED" });
                               setKeysSaved(true);
+                              setBinanceConnected(false);
                               setApiKeyDisplay("••••••••••••••••••••");
                               setApiSecretDisplay("••••••••••••••••••••");
                               setApiKey("");
@@ -459,11 +479,14 @@ export default function SettingsPage() {
                                 res = await api.testApiKeys();
                               }
                               if (res.ok) {
-                                setKeyMsg({ ok: true, text: "HANDSHAKE_SUCCESSFUL: CONNECTED" });
+                                setBinanceConnected(true);
+                                setKeyMsg({ ok: true, text: "HANDSHAKE_SUCCESSFUL: ACTIVE_CONNECTED" });
                               } else {
+                                setBinanceConnected(false);
                                 setKeyMsg({ ok: false, text: "HANDSHAKE_FAILED" });
                               }
                             } catch (err: any) {
+                              setBinanceConnected(false);
                               setKeyMsg({ ok: false, text: `REJECT: ${err.message}` });
                             }
                           }}
@@ -479,6 +502,7 @@ export default function SettingsPage() {
                               try {
                                 await api.deleteApiKeys();
                                 setKeysSaved(false);
+                                setBinanceConnected(false);
                                 setApiKey("");
                                 setApiSecret("");
                                 setApiKeyDisplay("");
@@ -1059,6 +1083,22 @@ export default function SettingsPage() {
                                  {!aiConsensusGate && (
                                     <p className="text-[10px] text-amber-600 font-bold mt-2 mb-0 border-top border-sky-200 pt-2">⚠ Gate off — entries rely on score threshold only. Models may disagree.</p>
                                  )}
+                              </div>
+
+                              {/* Shadow Mode */}
+                              <div className="bg-rose-50 border border-rose-200 p-4 rounded-financial">
+                                 <div className="d-flex justify-content-between align-items-center">
+                                    <div>
+                                       <div className="text-sm font-black text-dark uppercase tracking-tight mb-1">Shadow Mode</div>
+                                       <p className="text-xs text-rose-600 m-0 font-bold">LOG AI DECISIONS ONLY — NEVER OPEN A REAL POSITION</p>
+                                    </div>
+                                    <TogglePill enabled={shadowMode} onClick={() => setShadowMode(!shadowMode)} />
+                                 </div>
+                                 <p className="text-[10px] text-secondary font-bold mt-2 mb-0 border-top border-rose-200 pt-2">
+                                    {shadowMode
+                                       ? "ON — the 24/7 engine keeps scanning and scoring every symbol, but every LONG/SHORT decision is logged only. No paper or live order is placed."
+                                       : "OFF — decisions that clear the AI's own confidence gate execute normally in the current Paper/Live mode."}
+                                 </p>
                               </div>
 
                               {/* Animal Behaviour Model — HIDDEN.

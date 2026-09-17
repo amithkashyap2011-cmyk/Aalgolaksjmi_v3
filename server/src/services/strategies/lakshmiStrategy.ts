@@ -23,12 +23,12 @@
  *               3. Immediate trailing SL activation on any profit
  *               4. Position sizing limited to Fibonacci levels
  *               5. Gayatri frequency gate (≥ 16/24 minimum)
- *               6. Animal model blend must be positive
+ *               6. Animal model blend non-negative (retired — defaults to pass)
  *
  *  Signal Logic:
  *    BUY  — When ≥ 2 of {Aaryan, Aayush, Gayatri} say BUY
  *           AND Gayatri frequency ≥ 16/24
- *           AND animal blend > 0
+ *           AND animal blend ≥ 0 (retired gate — passes by default; see code)
  *    SELL — When ≥ 2 of {Aaryan, Aayush, Gayatri} say SELL
  *           OR Gayatri frequency < 10/24
  *           OR any single strategy has high-confidence SELL
@@ -135,7 +135,13 @@ export function evaluateLakshmi(
   }
 
   /* ═══════════════ Animal Blend Gate ════════════════════ */
-  const animalPass = animalBlendScore > 0;
+  // The animal behaviour model is retired (off the live path) and every caller
+  // (backtest, manual recommendation) passes no score, so animalBlendScore
+  // defaults to 0. Treat 0 (no data) as PASS so the consensus BUY branch is
+  // reachable at all; a genuinely negative score — if this gate is ever wired to
+  // a real source again — still blocks. Previously `> 0` made a Lakshmi BUY
+  // permanently unreachable except via the rare Ohmkara full-resonance override.
+  const animalPass = animalBlendScore >= 0;
   if (animalPass) {
     reasons.push(`✅ Animal blend positive: ${animalBlendScore.toFixed(4)}`);
   } else {

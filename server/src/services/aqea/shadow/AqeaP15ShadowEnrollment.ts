@@ -443,6 +443,7 @@ export class AqeaP15ShadowEnrollment {
   }
 
   private static emitTelemetry(r: P15ShadowEvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     // 1. [P15_MODEL_HEALTH_TRACE]
     console.log(`[P15_MODEL_HEALTH_TRACE] ` + JSON.stringify({
       phase: "P15",

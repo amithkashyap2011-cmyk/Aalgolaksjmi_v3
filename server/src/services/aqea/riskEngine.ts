@@ -44,12 +44,11 @@ export class RiskEngine {
     const wallet = paper.getWallet(ctx.userId, ctx.mode, ctx.accountType);
     const balance = wallet.get("USDT") ?? 0;
 
-    if (ctx.mode === "LIVE" && balance <= 0) {
+    if (balance <= 0) {
       return this.reject("BALANCE_ZERO");
     }
 
-    // In PAPER mode with 0 balance, use standard $10,000 virtual baseline for hypothetical evidence sizing
-    const effectiveBalance = (ctx.mode === "PAPER" && balance <= 0) ? 10000 : Math.max(0, balance);
+    const effectiveBalance = balance;
 
     // 2. Open Positions Check (Recalculate from actual DB positions)
     // Scoped to this trade's own accountType — SPOT and FUTURES have fully independent wallets
@@ -85,20 +84,34 @@ export class RiskEngine {
     weekStart.setDate(todayStart.getDate() - diffToMonday);
     const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
 
-    const [monthTrades, allTrades] = isDbConnected ? await Promise.all([
-      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, openedAt: { $gte: monthStart } }).lean(),
+    // 🛡️ Drawdown must reflect losses actually REALIZED inside each window —
+    // i.e. bucketed by CLOSE time, not open time. Filtering by openedAt (the
+    // previous behavior) excluded losses realized today on positions opened
+    // earlier, and open positions (pnl still unrealized) never counted at all,
+    // so the daily/weekly/monthly kill-switch systematically under-counted the
+    // real drawdown. We now query CLOSED trades by closedAt and additionally
+    // fold current open *unrealized losses* into the daily figure (open gains
+    // are ignored, so an open winner can never mask a breach).
+    const [closedThisMonth, allTrades] = isDbConnected ? await Promise.all([
+      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED", closedAt: { $gte: monthStart } }).lean(),
       Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED" }).lean(),
     ]) : [[], []];
-    const tradesToday = monthTrades.filter(t => new Date(t.openedAt).getTime() >= todayStart.getTime());
-    const weekTrades = monthTrades.filter(t => new Date(t.openedAt).getTime() >= weekStart.getTime());
 
-    const dailyPnl = tradesToday.reduce((s, t) => s + (t.pnl ?? 0), 0);
+    // Prefer closedAt; fall back to openedAt only for legacy rows missing it.
+    const closeTime = (t: any) => new Date(t.closedAt ?? t.openedAt).getTime();
+    const closedToday = closedThisMonth.filter(t => closeTime(t) >= todayStart.getTime());
+    const closedThisWeek = closedThisMonth.filter(t => closeTime(t) >= weekStart.getTime());
+
+    // Open positions' unrealized losses (negative pnl only) count against today.
+    const openUnrealizedLoss = openTrades.reduce((s, t) => s + Math.min(0, (t.pnl ?? 0)), 0);
+
+    const dailyPnl = closedToday.reduce((s, t) => s + (t.pnl ?? 0), 0) + openUnrealizedLoss;
     if (dailyPnl < 0 && Math.abs(dailyPnl) / effectiveBalance > AQEA_CONFIG.DAILY_DRAWDOWN_LIMIT) {
        return this.reject("DAILY_DRAWDOWN_BREACH");
     }
 
-    const weeklyPnl = weekTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-    const monthlyPnl = monthTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+    const weeklyPnl = closedThisWeek.reduce((s, t) => s + (t.pnl ?? 0), 0);
+    const monthlyPnl = closedThisMonth.reduce((s, t) => s + (t.pnl ?? 0), 0);
     const allTimePnl = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
 
     if (weeklyPnl < 0 && Math.abs(weeklyPnl) / effectiveBalance > AQEA_CONFIG.WEEKLY_DRAWDOWN_LIMIT) {

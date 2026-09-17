@@ -112,9 +112,52 @@ describe("AQEA Risk Engine", () => {
       currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
     };
 
+    // NOTE: drawdown is now bucketed by CLOSE time (closedAt), not open time —
+    // this loss was REALIZED today, so it must count toward the daily figure.
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) }); // open trades
-    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -1500, status: "CLOSED", openedAt: new Date() }]) }); // month-window trades
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -1500, status: "CLOSED", closedAt: new Date() }]) }); // closed-this-month trades
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -1500, status: "CLOSED" }]) }); // all-time trades
+
+    const res = await RiskEngine.validateTrade(ctx);
+    expect(res.allowed).toBe(false);
+    expect(res.reason).toBe("DAILY_DRAWDOWN_BREACH");
+  });
+
+  // 🛡️ Regression for the close-time drawdown fix: a loss on a trade OPENED
+  // days ago but CLOSED (realized) TODAY must count toward the daily figure.
+  // The old openedAt-based filter dropped it entirely, under-counting real
+  // drawdown and letting the daily kill-switch be bypassed.
+  test("counts a loss realized today even when the trade was opened earlier", async () => {
+    const ctx: any = {
+      userId, symbol, mode: "PAPER", accountType: "FUTURES",
+      currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
+    };
+    const openedThreeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) }); // open trades
+    mockTradeFind.mockReturnValueOnce({
+      lean: (jest.fn() as any).mockResolvedValue([
+        { pnl: -1500, status: "CLOSED", openedAt: openedThreeDaysAgo, closedAt: new Date() },
+      ]),
+    }); // closed-this-month trades
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -1500, status: "CLOSED" }]) }); // all-time
+
+    const res = await RiskEngine.validateTrade(ctx);
+    expect(res.allowed).toBe(false);
+    expect(res.reason).toBe("DAILY_DRAWDOWN_BREACH");
+  });
+
+  // 🛡️ Open positions' unrealized losses also count against the daily figure.
+  test("folds open unrealized losses into the daily drawdown figure", async () => {
+    const ctx: any = {
+      userId, symbol, mode: "PAPER", accountType: "FUTURES",
+      currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
+    };
+
+    // One open position sitting on a -1500 unrealized loss; no closed trades.
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ quantity: 0.01, entryPrice: 100000, leverage: 1, pnl: -1500, status: "OPEN" }]) }); // open trades
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) }); // closed-this-month
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) }); // all-time
 
     const res = await RiskEngine.validateTrade(ctx);
     expect(res.allowed).toBe(false);
@@ -140,11 +183,13 @@ describe("AQEA Risk Engine", () => {
     weekStart.setDate(todayStart.getDate() - diffToMonday);
     const earlierThisWeek = new Date(weekStart.getTime() + 3600000);
 
+    // Bucketed by closedAt: -200 realized today (below the daily limit alone),
+    // -2500 realized earlier this week — together they breach the weekly limit.
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) });
     mockTradeFind.mockReturnValueOnce({
       lean: (jest.fn() as any).mockResolvedValue([
-        { pnl: -200, status: "CLOSED", openedAt: now },
-        { pnl: -2500, status: "CLOSED", openedAt: earlierThisWeek },
+        { pnl: -200, status: "CLOSED", closedAt: now },
+        { pnl: -2500, status: "CLOSED", closedAt: earlierThisWeek },
       ]),
     });
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -2900, status: "CLOSED" }]) });
@@ -165,9 +210,11 @@ describe("AQEA Risk Engine", () => {
     };
     const threeWeeksAgo = new Date(new Date().getTime() - 21 * 24 * 60 * 60 * 1000);
 
+    // Realized (closedAt) three weeks ago — inside this month but outside this
+    // week, so it breaches the monthly limit without tripping daily/weekly.
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) });
     mockTradeFind.mockReturnValueOnce({
-      lean: (jest.fn() as any).mockResolvedValue([{ pnl: -3500, status: "CLOSED", openedAt: threeWeeksAgo }]),
+      lean: (jest.fn() as any).mockResolvedValue([{ pnl: -3500, status: "CLOSED", closedAt: threeWeeksAgo }]),
     });
     mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -850, status: "CLOSED" }]) });
 

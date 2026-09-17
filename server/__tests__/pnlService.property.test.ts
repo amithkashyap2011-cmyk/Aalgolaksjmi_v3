@@ -60,23 +60,37 @@ describe("computeUnrealisedPnl — property invariants", () => {
     );
   });
 
-  test("BUY and SELL are mirror images at the same entry/mark/qty (gross PnL sign flips)", () => {
+  // computeUnrealisedPnl is documented as net-of-fees (it mirrors the
+  // real close-position booking, not bare gross PnL), and the round-trip
+  // taker fee (entryPrice*qty*TAKER_FEE + markPrice*qty*TAKER_FEE) is the
+  // same magnitude regardless of side — only the *gross* PnL sign-flips
+  // between BUY and SELL, the fee drag does not. So BUY+SELL at the same
+  // entry/mark/qty cancels the gross component but leaves 2x the fee
+  // drag behind, and a round-trip at entryPrice===markPrice always nets
+  // negative by exactly that fee cost, never a flat 0 — both are true to
+  // how a real trade works: you pay entry+exit fees regardless of
+  // direction or how the price moved.
+  function roundTripFee(entryPrice: number, markPrice: number, qty: number): number {
+    return entryPrice * qty * TAKER_FEE + markPrice * qty * TAKER_FEE;
+  }
+
+  test("BUY and SELL are mirror images at the same entry/mark/qty (gross PnL sign flips, fee drag does not)", () => {
     fc.assert(
       fc.property(priceArb, priceArb, qtyArb, (entryPrice, markPrice, qty) => {
         const buyPnl = computeUnrealisedPnl({ side: "BUY", entryPrice, quantity: qty }, markPrice);
         const sellPnl = computeUnrealisedPnl({ side: "SELL", entryPrice, quantity: qty }, markPrice);
-        // buyPnl = gross, sellPnl = -gross => buyPnl + sellPnl = 0
-        expectRelativelyClose(buyPnl + sellPnl, 0);
+        // buyPnl = gross - fee, sellPnl = -gross - fee => sum = -2*fee
+        expectRelativelyClose(buyPnl + sellPnl, -2 * roundTripFee(entryPrice, markPrice, qty));
       }),
       { numRuns: 1000 }
     );
   });
 
-  test("no price movement at all books 0.00 gross unrealized PnL at trade entry (entryPrice === markPrice)", () => {
+  test("no price movement nets exactly the round-trip fee cost, not 0, at trade entry (entryPrice === markPrice)", () => {
     fc.assert(
       fc.property(priceArb, qtyArb, fc.constantFrom("BUY", "SELL"), (price, qty, side) => {
         const pnl = computeUnrealisedPnl({ side, entryPrice: price, quantity: qty }, price);
-        expectRelativelyClose(pnl, 0);
+        expectRelativelyClose(pnl, -roundTripFee(price, price, qty));
       }),
       { numRuns: 500 }
     );

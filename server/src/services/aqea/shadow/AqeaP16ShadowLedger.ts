@@ -519,6 +519,7 @@ export class AqeaP16ShadowLedger {
   }
 
   private static emitTelemetry(r: P16EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     // 1. [P16_MODEL_HEALTH_TRACE]
     console.log(`[P16_MODEL_HEALTH_TRACE] ` + JSON.stringify({
       phase: "P16", mode: "SHADOW", decisionId: r.decisionId, symbol: r.symbol,

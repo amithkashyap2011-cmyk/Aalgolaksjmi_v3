@@ -53,6 +53,17 @@ export interface RawMarketContext {
     hasTier1Event?: boolean;
     headline?: string;
   };
+  // Live order-flow diagnostics (from OrderFlowEngine.analyze), threaded in by the
+  // AQEA engine. When present these take precedence over the order-book / indicator
+  // defaults below — the live engine does NOT pass a raw order book or ind.cvd, so
+  // without this both imbalance and cvdScore would sit at 0 on every decision (a
+  // dead OrderFlow quant expert, plus a systematic long bias from Gayatri's
+  // `cvd >= 0` / `imbalance >= 0` tie checks, plus a stuck tensorVector[11]).
+  orderFlow?: {
+    bookImbalance?: number;   // ∈ [-1, 1], already correctly scaled
+    cvdNormalized?: number;   // ∈ [-1, 1], scale-free CVD persistence ratio
+    delta?: number;
+  };
 }
 
 export interface Standardized15Features {
@@ -72,7 +83,8 @@ export interface Standardized15Features {
     spread: number;
   };
   cvd: {
-    cvdScore: number;
+    cvdScore: number;       // raw cumulative delta (legacy; 0 on the live path)
+    cvdNormalized: number;  // ∈ [-1, 1] — scale-free CVD persistence ratio (0 when no live order flow)
     delta: number;
     buyerRatio: number;
   };
@@ -182,13 +194,33 @@ export class FeaturePipeline {
     const bidVol = Number(ob.bidVol ?? 100);
     const askVol = Number(ob.askVol ?? 100);
     const totalVol = bidVol + askVol;
-    const imbalance = totalVol > 0 ? (bidVol - askVol) / totalVol : 0;
+    const imbalanceRaw = totalVol > 0 ? (bidVol - askVol) / totalVol : 0;
     const spread = Math.max(0, (high - low) * 0.05);
 
     // 3. CVD
-    const cvdScore = Number(ind.cvd ?? 0);
-    const delta = Number(ind.delta ?? 0);
-    const buyerRatio = totalVol > 0 ? bidVol / totalVol : 0.5;
+    const cvdScore = Number(ind.cvd ?? 0);   // raw cumulative delta (legacy field, kept as-is)
+    const deltaRaw = Number(ind.delta ?? 0);
+    const buyerRatioRaw = totalVol > 0 ? bidVol / totalVol : 0.5;
+
+    // Live order-flow override: when the AQEA engine supplies real diagnostics,
+    // prefer them over the order-book/indicator defaults (which the live caller
+    // never populates — without this, imbalance would sit at 0 on every decision,
+    // starving the OrderFlow expert, Gayatri's imbalance check, and tensorVector[11]
+    // fed to the DL models). cvdNormalized is a dedicated, always-bounded [-1, 1]
+    // field so the OrderFlow expert's threshold is portable across symbols; it is 0
+    // for callers that pass no order flow (matching prior behaviour). Values are
+    // clamped so a bad upstream number can never push a feature out of contract.
+    const of = ctx.orderFlow;
+    const hasOf = !!of && Number.isFinite(of.bookImbalance as number);
+    const imbalance = hasOf
+      ? Math.max(-1, Math.min(1, of!.bookImbalance as number))
+      : imbalanceRaw;
+    const cvdNormalized = of && Number.isFinite(of.cvdNormalized as number)
+      ? Math.max(-1, Math.min(1, of.cvdNormalized as number))
+      : 0;
+    const delta = of && Number.isFinite(of.delta as number) ? Number(of.delta) : deltaRaw;
+    // Keep buyerRatio algebraically consistent with the chosen imbalance.
+    const buyerRatio = hasOf ? (imbalance + 1) / 2 : buyerRatioRaw;
 
     // 4. Funding Rate
     const funding = Number(ctx.marketData?.fundingRate ?? 0);
@@ -274,7 +306,7 @@ export class FeaturePipeline {
     return {
       ohlcv: { open, high, low, close, volume, vwap },
       orderBook: { bidVol, askVol, imbalance: Number(imbalance.toFixed(4)), spread: Number(spread.toFixed(4)) },
-      cvd: { cvdScore: Number(cvdScore.toFixed(2)), delta: Number(delta.toFixed(2)), buyerRatio: Number(buyerRatio.toFixed(4)) },
+      cvd: { cvdScore: Number(cvdScore.toFixed(2)), cvdNormalized: Number(cvdNormalized.toFixed(4)), delta: Number(delta.toFixed(2)), buyerRatio: Number(buyerRatio.toFixed(4)) },
       fundingRate: { rate: funding, annualizedRate: Number((annFunding * 100).toFixed(2)), bias: fundingBias },
       openInterest: { oi, oiExpansion: oiExp, trend: oiTrend },
       volatility: { realizedVol: Number(realizedVol.toFixed(4)), parkinsonVol: Number(parkinsonVol.toFixed(4)), ratio: Number(volRatio.toFixed(2)) },

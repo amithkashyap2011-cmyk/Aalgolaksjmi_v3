@@ -274,7 +274,7 @@ describe("AQEA 2026-27 P4 Zero Paper Trade Execution Regression Suite", () => {
 
   // TC07: paper wallet is correctly visible to execution
   test("TC07: paper wallet is correctly visible to execution", async () => {
-    paper.ensurePaperWalletFunded(userId, "PAPER", "FUTURES");
+    await paper.ensurePaperWalletFunded(userId, "PAPER", "FUTURES", 10000);
     const wallet = paper.getWallet(userId, "PAPER", "FUTURES");
     expect(wallet.get("USDT")).toBe(10000);
   });

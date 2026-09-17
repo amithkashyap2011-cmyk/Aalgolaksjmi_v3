@@ -16,6 +16,7 @@ export class MambaPredictor extends BasePredictor {
   protected modelName = "MAMBA_V1";
   private neutralCount = 0;
   private isDegraded = false;
+  private static mambaCache = new Map<string, { expiresAt: number; result: any }>();
 
   public async isHealthy(): Promise<boolean> {
     try {
@@ -45,6 +46,12 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
       return { direction: "HOLD", confidence: 0, probability: 0.5 };
   }
 
+  const cacheKey = `${features.symbol}:${features.market?.close || 0}`;
+  const cached = MambaPredictor.mambaCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt && process.env.NODE_ENV !== "test") {
+    return cached.result;
+  }
+
   try {
       const payload = {
         sequence: [
@@ -57,7 +64,7 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(1000)
+        signal: AbortSignal.timeout(4000)
       });
 
       if (!res.ok) throw new Error(`Python Mamba service error: ${res.status}`);
@@ -85,11 +92,16 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
       if (data.directionScore > 0.6) direction = "LONG";
       else if (data.directionScore < 0.4) direction = "SHORT";
 
-      return {
+      const result = {
         direction,
         confidence: data.confidence,
         probability: data.directionScore
       };
+
+      if (MambaPredictor.mambaCache.size > 200) MambaPredictor.mambaCache.clear();
+      MambaPredictor.mambaCache.set(cacheKey, { expiresAt: Date.now() + 30_000, result });
+
+      return result;
     } catch (err) {
       // 🧠 Mamba State Space Sequential Trend Persistence Fallback
       const adx = features.market?.adx ?? 25;

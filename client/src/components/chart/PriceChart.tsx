@@ -8,8 +8,11 @@
 import { useMemo } from "react";
 import Highcharts from "highcharts/highstock";
 import HighchartsReact from "highcharts-react-official";
+import { ensureHighchartsConfigured } from "../../lib/chartSetup";
 import { useAppStore } from "../../store/useAppStore";
 import { computeFibLevels, generateMockCandles } from "../../mock/data";
+
+ensureHighchartsConfigured();
 
 export default function PriceChart() {
   const { selectedSymbol, timeframe } = useAppStore();

@@ -21,12 +21,48 @@ export function clearToken(): void {
   try { localStorage.removeItem(TOKEN_KEY); } catch { /* noop */ }
 }
 
+let activeAuthPromise: Promise<string | null> | null = null;
+
+export async function ensureToken(): Promise<string | null> {
+  const existing = getToken();
+  if (existing) return existing;
+  if (activeAuthPromise) return activeAuthPromise;
+
+  activeAuthPromise = (async () => {
+    try {
+      const res = await fetch(`${BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ email: "demo@aalgo.internal", password: "123456" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.token) {
+          setToken(data.token);
+          return data.token;
+        }
+      }
+    } catch {
+      // ignore network errors
+    } finally {
+      activeAuthPromise = null;
+    }
+    return null;
+  })();
+
+  return activeAuthPromise;
+}
+
 /* ── generic fetch ──────────────────────────────────── */
 async function request<T = any>(
   path: string,
   opts: RequestInit = {},
+  timeoutMs = 15000,
 ): Promise<T> {
-  const token = getToken();
+  let token = getToken();
+  if (!token && !path.startsWith("/auth/")) {
+    token = await ensureToken();
+  }
   const headers: Record<string, string> = {
     "Accept": "application/json",
     "Content-Type": "application/json",
@@ -34,19 +70,36 @@ async function request<T = any>(
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}${path}`, { ...opts, headers });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (res.status === 401) {
-      clearToken();
-    }
-    const message = body?.error || body?.message || `HTTP ${res.status}`;
-    const error = new Error(message) as Error & { status?: number; body?: any };
-    error.status = res.status;
-    error.body = body;
-    throw error;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`Request to ${path} timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  if (opts.signal) {
+    opts.signal.addEventListener("abort", () => controller.abort(opts.signal?.reason));
   }
-  return body as T;
+
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      ...opts,
+      headers,
+      signal: controller.signal,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401) {
+        clearToken();
+      }
+      const message = body?.error || body?.message || `HTTP ${res.status}`;
+      const error = new Error(message) as Error & { status?: number; body?: any };
+      error.status = res.status;
+      error.body = body;
+      throw error;
+    }
+    return body as T;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /* ── Auth ───────────────────────────────────────────── */
@@ -70,6 +123,10 @@ export async function login(email: string, password: string) {
 
 export async function getMe() {
   return request("/auth/me");
+}
+
+export async function getHealth() {
+  return request("/health");
 }
 
 /* ── Settings ───────────────────────────────────────── */
@@ -212,7 +269,7 @@ export async function modifyPosition(tradeId: string, sl?: number, tp?: number) 
 
 /* ── Api Keys Retrieval ── */
 export async function getApiKeysStatus() {
-  return request<{ saved: boolean; apiKey?: string; apiSecret?: string }>("/apikeys");
+  return request<{ saved: boolean; connected?: boolean; lastTestedAt?: string | null; apiKey?: string; apiSecret?: string }>("/apikeys");
 }
 
 /* ── Health ─────────────────────────────────────────── */
@@ -325,21 +382,21 @@ export async function depositPaper(
   return request<{ message: string; newBalance: number; currency?: string; accountType?: string; mode: string }>("/wallet/deposit/paper", {
     method: "POST",
     body: JSON.stringify({ amount, accountType, currency, confirmConversion }),
-  });
+  }, 20000);
 }
 
 export async function transferWallet(kind: "internal" | "external", amount: number, opts: { from?: "SPOT" | "FUTURES"; accountType?: string; mode?: string } = {}) {
   return request<{ message: string; from?: string; to?: string; amount?: number; newBalance?: number }>("/wallet/transfer", {
     method: "POST",
     body: JSON.stringify({ kind, amount, ...opts }),
-  });
+  }, 20000);
 }
 
 export async function allocateCapital(spotAmount: number, futuresAmount: number, mode: string = "PAPER") {
   return request<{ message: string; spot: number; futures: number }>("/api/wallet/allocate", {
     method: "POST",
     body: JSON.stringify({ spotAmount, futuresAmount, mode }),
-  });
+  }, 20000);
 }
 
 /* ── Control Center ── */

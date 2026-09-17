@@ -36,4 +36,11 @@ if __name__ == "__main__":
     save_port(port)
     os.environ["QUANT_PORT"] = str(port)
     print(f"Starting Quant Engine on dynamically allocated port: {port}")
-    uvicorn.run("main:app", host="127.0.0.1", port=port, log_level="info")
+    # log_config=None: uvicorn's default logging setup calls
+    # logging.config.dictConfig() with disable_existing_loggers=True,
+    # which silently kills every module logger (TrainingScheduler,
+    # RegistryClient, ...) configured above via basicConfig() before this
+    # call — that's why the continuous-learning loop's own log lines never
+    # reached quant-out.log despite basicConfig() looking correct in
+    # isolation. Passing None here tells uvicorn to leave logging alone.
+    uvicorn.run("main:app", host="127.0.0.1", port=port, log_level="info", log_config=None)

@@ -12,6 +12,8 @@ import { BrokerAdapter, PaperExecutionAdapter, LiveBrokerExecutionAdapter } from
 import { IndianAuditLogger } from "./auditLogger.js";
 import mongoose from "mongoose";
 
+import { AutoPilotStateMachine } from "./autoPilotStateMachine.js";
+
 export interface ReconciliationDiscrepancy {
   type: "MISSING_IN_BROKER" | "MISSING_IN_LOCAL" | "QUANTITY_MISMATCH" | "STATUS_MISMATCH";
   symbol: string;
@@ -34,6 +36,9 @@ export class IndianReconciliationService {
       return { checked: 0, discrepancies: [] };
     }
 
+    // Recover any in-flight pending exits from crashes/restarts
+    await AutoPilotStateMachine.recoverPendingExits();
+
     const adapter: BrokerAdapter =
       mode === "LIVE" ? new LiveBrokerExecutionAdapter() : new PaperExecutionAdapter();
 
@@ -43,9 +48,9 @@ export class IndianReconciliationService {
       // 1. Fetch authoritative broker positions
       const brokerPositions = await adapter.getPositions(userId);
 
-      // 2. Fetch local active OPEN trades from MongoDB
+      // 2. Fetch local active OPEN/PARTIALLY_FILLED trades from MongoDB
       const localTrades = await Trade.find({
-        status: "OPEN",
+        status: { $in: ["OPEN", "TARGET_TRIGGERED", "STOP_TRIGGERED", "EXIT_PARTIALLY_FILLED"] },
         accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
       }).lean();
 
@@ -75,6 +80,41 @@ export class IndianReconciliationService {
               },
             }
           );
+        } else if (matchingBrokerPos && matchingBrokerPos.quantity !== trade.quantity) {
+          // Quantity mismatch detected (e.g. partial fill external or manual partial exit)
+          discrepancies.push({
+            type: "QUANTITY_MISMATCH",
+            symbol: trade.symbol,
+            localState: { quantity: trade.quantity },
+            brokerState: { quantity: matchingBrokerPos.quantity },
+            remedyApplied: `Synced local quantity from ${trade.quantity} to ${matchingBrokerPos.quantity}`,
+          });
+
+          await Trade.updateOne(
+            { _id: trade._id },
+            {
+              $set: {
+                quantity: matchingBrokerPos.quantity,
+                "meta.reconciledAt": new Date().toISOString(),
+              },
+            }
+          );
+        }
+      }
+
+      // Check broker positions missing in local state
+      if (mode === "LIVE") {
+        for (const bp of brokerPositions) {
+          const match = localTrades.find((t) => t.symbol === bp.tradingSymbol);
+          if (!match && bp.quantity > 0) {
+            discrepancies.push({
+              type: "MISSING_IN_LOCAL",
+              symbol: bp.tradingSymbol,
+              localState: null,
+              brokerState: bp,
+              remedyApplied: "Logged emergency discrepancy (Broker open position absent locally)",
+            });
+          }
         }
       }
 
@@ -83,7 +123,7 @@ export class IndianReconciliationService {
 
       if (discrepancies.length > 0) {
         IndianAuditLogger.log({
-          eventType: "POSITION_CLOSED",
+          eventType: "POSITION_RECONCILED",
           details: { discrepanciesCount: discrepancies.length, discrepancies },
           reason: "Broker reconciliation corrected state discrepancies",
         });
@@ -94,6 +134,77 @@ export class IndianReconciliationService {
       console.warn(`[INDIAN_RECONCILIATION] Reconciliation warning: ${err.message}`);
       return { checked: 0, discrepancies: [] };
     }
+  }
+
+  /**
+   * Pure position reconciliation comparator
+   */
+  public static async reconcilePositions(
+    localPositions: Array<{ symbol: string; quantity: number; averagePrice?: number }>,
+    brokerPositions: Array<{ symbol: string; quantity: number; averagePrice?: number }>
+  ): Promise<{ matched: boolean; discrepancies: Array<{ type: string; symbol: string; localQty: number; brokerQty: number }> }> {
+    const discrepancies: Array<{ type: string; symbol: string; localQty: number; brokerQty: number }> = [];
+
+    for (const lp of localPositions) {
+      const bp = brokerPositions.find((b) => b.symbol === lp.symbol);
+      if (!bp) {
+        discrepancies.push({ type: "MISSING_IN_BROKER", symbol: lp.symbol, localQty: lp.quantity, brokerQty: 0 });
+      } else if (bp.quantity !== lp.quantity) {
+        discrepancies.push({ type: "QUANTITY_MISMATCH", symbol: lp.symbol, localQty: lp.quantity, brokerQty: bp.quantity });
+      }
+    }
+
+    for (const bp of brokerPositions) {
+      const lp = localPositions.find((l) => l.symbol === bp.symbol);
+      if (!lp && bp.quantity > 0) {
+        discrepancies.push({ type: "MISSING_IN_LOCAL", symbol: bp.symbol, localQty: 0, brokerQty: bp.quantity });
+      }
+    }
+
+    return { matched: discrepancies.length === 0, discrepancies };
+  }
+
+  /**
+   * Pure order reconciliation comparator
+   */
+  public static async reconcileOrders(
+    localOrders: Array<{ orderId: string; status: string; quantity: number }>,
+    brokerOrders: Array<{ orderId: string; status: string; quantity: number }>
+  ): Promise<{ matched: boolean; discrepancies: Array<{ type: string; orderId: string; localStatus: string; brokerStatus: string }> }> {
+    const discrepancies: Array<{ type: string; orderId: string; localStatus: string; brokerStatus: string }> = [];
+
+    for (const lo of localOrders) {
+      const bo = brokerOrders.find((b) => b.orderId === lo.orderId);
+      if (!bo) {
+        discrepancies.push({ type: "MISSING_IN_BROKER", orderId: lo.orderId, localStatus: lo.status, brokerStatus: "NONE" });
+      } else if (bo.status !== lo.status) {
+        discrepancies.push({ type: "STATUS_MISMATCH", orderId: lo.orderId, localStatus: lo.status, brokerStatus: bo.status });
+      }
+    }
+
+    return { matched: discrepancies.length === 0, discrepancies };
+  }
+
+  /**
+   * Pure account balance reconciliation comparator
+   */
+  public static async reconcileAccount(
+    localAccount: { availableCash: number; usedMargin: number },
+    brokerAccount: { availableCash: number; usedMargin: number }
+  ): Promise<{ matched: boolean; discrepancies: Array<{ type: string; field: string; localValue: number; brokerValue: number; diff: number }> }> {
+    const discrepancies: Array<{ type: string; field: string; localValue: number; brokerValue: number; diff: number }> = [];
+
+    const cashDiff = Math.abs(localAccount.availableCash - brokerAccount.availableCash);
+    if (cashDiff > 0.01) {
+      discrepancies.push({ type: "CASH_MISMATCH", field: "availableCash", localValue: localAccount.availableCash, brokerValue: brokerAccount.availableCash, diff: cashDiff });
+    }
+
+    const marginDiff = Math.abs(localAccount.usedMargin - brokerAccount.usedMargin);
+    if (marginDiff > 0.01) {
+      discrepancies.push({ type: "MARGIN_MISMATCH", field: "usedMargin", localValue: localAccount.usedMargin, brokerValue: brokerAccount.usedMargin, diff: marginDiff });
+    }
+
+    return { matched: discrepancies.length === 0, discrepancies };
   }
 
   public static startDaemon(): void {

@@ -272,11 +272,14 @@ router.get("/", async (req: AuthRequest, res) => {
     let userId = req.userId || "";
     if (!userId && req.headers.authorization?.startsWith("Bearer ")) {
       try {
-        const payload = jwt.verify(
-          req.headers.authorization.slice(7),
-          process.env.JWT_SECRET || "default_jwt_secret_aalgo"
-        ) as { sub: string };
-        userId = payload.sub;
+        const secret = process.env.JWT_SECRET;
+        if (secret) {
+          const payload = jwt.verify(
+            req.headers.authorization.slice(7),
+            secret
+          ) as { sub: string };
+          userId = payload.sub;
+        }
       } catch {}
     }
 

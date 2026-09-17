@@ -12,16 +12,18 @@
  * HiveMindPanel, ProbabilityScores, OhmSyncPanel,
  * BehaviorModifiers, AlertsFeed.
  */
+import { lazy, Suspense } from "react";
 import SymbolSelector from "../ui/SymbolSelector";
 import TimeframeTabs from "../ui/TimeframeTabs";
-import PriceChart from "../components/chart/PriceChart";
 import ActivePositionsCard from "../components/dashboard/ActivePositionsCard";
 import OrderPanel from "../components/dashboard/OrderPanel";
 import HiveMindPanel from "../components/ai/HiveMindPanel";
 import ProbabilityScores from "../components/ai/ProbabilityScores";
-import OhmSyncPanel from "../components/ai/OhmSyncPanel";
 import BehaviorModifiers from "../components/ai/BehaviorModifiers";
 import AlertsFeed from "../components/ai/AlertsFeed";
+
+const PriceChart = lazy(() => import("../components/chart/PriceChart"));
+const OhmSyncPanel = lazy(() => import("../components/ai/OhmSyncPanel"));
 import AILearningProgressPanel from "../components/ai/AILearningProgressPanel";
 import StrategyPanel from "../components/ai/StrategyPanel";
 import GayatriFrequencyPanel from "../components/ai/GayatriFrequencyPanel";
@@ -53,7 +55,9 @@ export default function DashboardPage() {
         <section className="golden-major space-y-phi-4 animate-in" aria-label="Chart and orders">
           {/* Price chart with Fibonacci bands */}
           <div className="card-phi">
-            <PriceChart />
+            <Suspense fallback={<div className="h-64 flex items-center justify-center text-slate-500 text-xs">Loading Chart Engine...</div>}>
+              <PriceChart />
+            </Suspense>
           </div>
 
           {/* Positions + Orders row */}
@@ -74,7 +78,9 @@ export default function DashboardPage() {
           <GayatriFrequencyPanel />
           <HiveMindPanel />
           <ProbabilityScores />
-          <OhmSyncPanel />
+          <Suspense fallback={<div className="p-4 text-center text-slate-500 text-xs">Loading Telemetry...</div>}>
+            <OhmSyncPanel />
+          </Suspense>
           <BehaviorModifiers />
           <AlertsFeed />
         </aside>

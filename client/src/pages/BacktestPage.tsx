@@ -1,9 +1,12 @@
 import React, { useState, useRef } from "react";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
+import { ensureHighchartsConfigured } from "../lib/chartSetup";
 import { useAppStore } from "../store/useAppStore";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { Play, RotateCcw, TrendingUp, TrendingDown, BarChart3, Target, Zap, Shield } from "lucide-react";
+
+ensureHighchartsConfigured();
 
 const STRATEGIES = [
   { id: "LAKSHMI",     label: "Lakshmi",      desc: "Master: risk allocation + Ohmkara gate",          tag: "MASTER"  },

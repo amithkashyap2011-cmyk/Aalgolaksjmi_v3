@@ -17,6 +17,7 @@ import {
   buyP2pOffer,
 } from "../lib/api";
 import { useAppStore } from "../store/useAppStore";
+import { DEFAULT_INR_RATE } from "../lib/currency";
 
 type Tab = "balance" | "upi" | "p2p";
 
@@ -84,6 +85,8 @@ export default function WalletPage() {
 
 function BalanceTab({ mode }: { mode: string }) {
   const [bal, setBal] = useState<any>(null);
+  const [spotBal, setSpotBal] = useState<any>(null);
+  const [indianInr, setIndianInr] = useState(0);
   const [txns, setTxns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [depositAmount, setDepositAmount] = useState("50000");
@@ -94,11 +97,22 @@ function BalanceTab({ mode }: { mode: string }) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [b, t] = await Promise.all([
-        getWalletBalance(mode),
+      const token = localStorage.getItem("aalgo_jwt");
+      const headers: any = token ? { Authorization: `Bearer ${token}` } : {};
+      // Fetch every account leg so the cross-asset total is a real aggregate
+      // (FUTURES + SPOT + INDIAN_*), and the Spot card shows real spot funds
+      // rather than a hardcoded fraction of the futures balance.
+      const [f, s, nse, bse, nifty, t] = await Promise.all([
+        getWalletBalance(mode, "FUTURES").catch(() => null),
+        getWalletBalance(mode, "SPOT").catch(() => null),
+        fetch(`/wallet/balance?accountType=INDIAN_NSE&mode=${mode}`, { headers }).then((r) => r.json()).catch(() => null),
+        fetch(`/wallet/balance?accountType=INDIAN_BSE&mode=${mode}`, { headers }).then((r) => r.json()).catch(() => null),
+        fetch(`/wallet/balance?accountType=INDIAN_NIFTY50&mode=${mode}`, { headers }).then((r) => r.json()).catch(() => null),
         getWalletTransactions(20),
       ]);
-      setBal(b);
+      setBal(f);
+      setSpotBal(s);
+      setIndianInr((nse?.inr ?? 0) + (bse?.inr ?? 0) + (nifty?.inr ?? 0));
       setTxns(t.transactions ?? []);
     } catch {
       /* silent */
@@ -143,9 +157,19 @@ function BalanceTab({ mode }: { mode: string }) {
     );
   }
 
-  const rate = bal?.inrRate ?? 83.5;
-  const inrTotal = bal?.inrEquivalent ?? 0;
-  const usdtTotal = bal?.usdt ?? 0;
+  const rate = bal?.inrRate ?? spotBal?.inrRate ?? DEFAULT_INR_RATE;
+
+  // Per-account USDT balances (real values, no fabricated fractions).
+  const futuresUsdt = bal?.usdt ?? 0;
+  const spotUsdt = spotBal?.usdt ?? 0;
+
+  // Cross-asset net worth = crypto (futures + spot, in INR) + Indian wallets
+  // (already native INR). The ≈ USDT figure is the INR total converted back.
+  const cryptoInr =
+    (bal?.inrEquivalent ?? futuresUsdt * rate) +
+    (spotBal?.inrEquivalent ?? spotUsdt * rate);
+  const inrTotal = cryptoInr + indianInr;
+  const usdtTotal = rate > 0 ? inrTotal / rate : futuresUsdt + spotUsdt;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -228,14 +252,14 @@ function BalanceTab({ mode }: { mode: string }) {
             </div>
 
             <div style={{ fontSize: 24, fontWeight: 900, color: "#fff", fontFamily: "monospace", marginBottom: 14 }}>
-              {fmtUSDT(usdtTotal)}
-              <span style={{ fontSize: 11, color: "#94a3b8", display: "block", fontWeight: 500 }}>≈ {fmtINR(usdtTotal * rate)}</span>
+              {fmtUSDT(futuresUsdt)}
+              <span style={{ fontSize: 11, color: "#94a3b8", display: "block", fontWeight: 500 }}>≈ {fmtINR(futuresUsdt * rate)}</span>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 11 }}>
               <div style={{ background: "rgba(255,255,255,0.03)", padding: 10, borderRadius: 8 }}>
                 <span style={{ color: "#94a3b8", fontSize: 10, display: "block" }}>Available Margin</span>
-                <span style={{ color: "#34d399", fontWeight: 800, fontFamily: "monospace" }}>{fmtUSDT(bal?.usdt ?? 0)}</span>
+                <span style={{ color: "#34d399", fontWeight: 800, fontFamily: "monospace" }}>{fmtUSDT(futuresUsdt)}</span>
               </div>
               <div style={{ background: "rgba(255,255,255,0.03)", padding: 10, borderRadius: 8 }}>
                 <span style={{ color: "#94a3b8", fontSize: 10, display: "block" }}>Locked Margin</span>
@@ -252,18 +276,18 @@ function BalanceTab({ mode }: { mode: string }) {
             </div>
 
             <div style={{ fontSize: 24, fontWeight: 900, color: "#fff", fontFamily: "monospace", marginBottom: 14 }}>
-              {fmtUSDT((bal?.usdt ?? 0) * 0.95)}
-              <span style={{ fontSize: 11, color: "#94a3b8", display: "block", fontWeight: 500 }}>≈ {fmtINR((bal?.usdt ?? 0) * 0.95 * rate)}</span>
+              {fmtUSDT(spotUsdt)}
+              <span style={{ fontSize: 11, color: "#94a3b8", display: "block", fontWeight: 500 }}>≈ {fmtINR(spotUsdt * rate)}</span>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 11 }}>
               <div style={{ background: "rgba(255,255,255,0.03)", padding: 10, borderRadius: 8 }}>
                 <span style={{ color: "#94a3b8", fontSize: 10, display: "block" }}>Available Spot</span>
-                <span style={{ color: "#34d399", fontWeight: 800, fontFamily: "monospace" }}>{fmtUSDT((bal?.usdt ?? 0) * 0.95)}</span>
+                <span style={{ color: "#34d399", fontWeight: 800, fontFamily: "monospace" }}>{fmtUSDT(spotUsdt)}</span>
               </div>
               <div style={{ background: "rgba(255,255,255,0.03)", padding: 10, borderRadius: 8 }}>
                 <span style={{ color: "#94a3b8", fontSize: 10, display: "block" }}>Savings / LDUSDT</span>
-                <span style={{ color: "#c084fc", fontWeight: 800, fontFamily: "monospace" }}>{fmtUSDT(bal?.savingsUsdt ?? 0)}</span>
+                <span style={{ color: "#c084fc", fontWeight: 800, fontFamily: "monospace" }}>{fmtUSDT(spotBal?.savingsUsdt ?? 0)}</span>
               </div>
             </div>
           </div>
@@ -315,7 +339,7 @@ function BalanceTab({ mode }: { mode: string }) {
                 Cancel
               </button>
               <button
-                onClick={() => handleAddMoneyInr(Number(depositAmount) || 50000)}
+                onClick={() => { const amt = Number(depositAmount); if (amt > 0) handleAddMoneyInr(amt); }}
                 style={{ flex: 1, padding: "10px", borderRadius: 8, background: "#10b981", color: "#000", fontWeight: 800, fontSize: 12, border: "none", cursor: "pointer" }}
               >
                 Confirm Deposit
@@ -618,9 +642,9 @@ function P2pTab() {
 }
 
 function IndianWalletsSection({ mode }: { mode: string }) {
-  const [nseBal, setNseBal] = useState(500000);
-  const [bseBal, setBseBal] = useState(500000);
-  const [nifty50Bal, setNifty50Bal] = useState(1000000);
+  const [nseBal, setNseBal] = useState(0);
+  const [bseBal, setBseBal] = useState(0);
+  const [nifty50Bal, setNifty50Bal] = useState(0);
 
   const [nseStats, setNseStats] = useState({ pnl: 0, winRate: 0.0, pf: 0.00, locked: 0, trades: 0 });
   const [bseStats, setBseStats] = useState({ pnl: 0, winRate: 0.0, pf: 0.00, locked: 0, trades: 0 });
@@ -669,11 +693,11 @@ function IndianWalletsSection({ mode }: { mode: string }) {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ accountType: addingAcc, amount: Number(amount) || 100000, mode, currency: "INR" }),
+        body: JSON.stringify({ accountType: addingAcc, amount: Number(amount), mode, currency: "INR" }),
       });
       const data = await res.json();
       if (res.ok) {
-        setMsg(`Success: Added ₹${(Number(amount) || 100000).toLocaleString("en-IN")} test funds`);
+        setMsg(`Success: Added ₹${Number(amount).toLocaleString("en-IN")} test funds`);
         fetchWallets();
         setTimeout(() => { setAddingAcc(null); setMsg(null); }, 1500);
       } else {

@@ -69,7 +69,7 @@ router.post("/allocation", (req, res) => {
       { strategyId: "STRAT_MEAN_REVERSION", strategyName: "Mean Reversion", expectedEdgeR: 0.82, healthScore: 85, sharpeRatio: 1.85, maxDrawdownPct: 4.0, volatilityRatio: 1.1 },
       { strategyId: "STRAT_BREAKOUT", strategyName: "Breakout", expectedEdgeR: 0.78, healthScore: 80, sharpeRatio: 1.70, maxDrawdownPct: 4.8, volatilityRatio: 1.2 },
     ];
-    const totalCapital = req.body.totalCapital || 10000;
+    const totalCapital = Number(req.body.totalCapital) || 0;
     const alloc = CapitalAllocationOptimizer.calculateDynamicAllocation(strategies, totalCapital);
     res.json(alloc);
   } catch (err: any) {

@@ -25,12 +25,21 @@ import {
   MOCK_CANDLES,
 } from "../mock/data";
 import * as api from "../lib/api";
+import { DEFAULT_INR_RATE } from "../lib/currency";
 import { socket, subscribeTicker, unsubscribeTicker, type TickData } from "../lib/socket";
 import type { EnsembleReport } from "../types/ensemble";
 
 // Socket connection state listeners for reactive Online/Offline badge updates
-socket.on("connect", () => {
+socket.on("connect", async () => {
   useAppStore.setState({ connected: true });
+  await ensureDemoAuthSession().catch(() => {});
+  const st = useAppStore.getState();
+  if (st.ready) {
+    st.refreshWallet();
+    st.refreshPositions();
+    st.refreshMarketCheck();
+    st.refreshEnsembleReport();
+  }
 });
 socket.on("disconnect", () => {
   useAppStore.setState({ connected: false });
@@ -48,7 +57,7 @@ async function ensureDemoAuthSession(): Promise<void> {
     return demoAuthBootstrap;
   }
 
-  demoAuthBootstrap = (async () => {
+  const runBootstrap = async () => {
     try {
       await api.login(DEMO_EMAIL, DEMO_PASSWORD);
       return;
@@ -64,7 +73,14 @@ async function ensureDemoAuthSession(): Promise<void> {
         throw registerErr;
       }
     }
-  })().finally(() => {
+  };
+
+  demoAuthBootstrap = Promise.race([
+    runBootstrap(),
+    new Promise<void>((_, reject) =>
+      setTimeout(() => reject(new Error("Demo auth bootstrap timed out")), 8000)
+    ),
+  ]).finally(() => {
     demoAuthBootstrap = null;
   });
 
@@ -195,6 +211,8 @@ interface AppState {
   mode: Mode;
   accountType: AccountType;
   execMode: ExecMode;
+  activeMarket: "INDIA" | "CRYPTO" | "GLOBAL";
+  setActiveMarket: (market: "INDIA" | "CRYPTO" | "GLOBAL") => void;
   selectedSymbol: string;
   selectedSymbols: string[];
   allowedSymbols: string[];
@@ -290,6 +308,7 @@ interface AppState {
   noLossMode: boolean;
   dynamicSLTP: boolean;
   aiConsensusGate: boolean;
+  shadowMode: boolean;
   orderFlowVotingEnabled: boolean;
   smartMoneyVotingEnabled: boolean;
   liveNewsSentimentEnabled: boolean;
@@ -327,6 +346,7 @@ interface AppState {
   setNoLossMode: (v: boolean) => Promise<void>;
   setDynamicSLTP: (v: boolean) => Promise<void>;
   setAiConsensusGate: (v: boolean) => Promise<void>;
+  setShadowMode: (v: boolean) => Promise<void>;
   setOrderFlowVotingEnabled: (v: boolean) => Promise<void>;
   setSmartMoneyVotingEnabled: (v: boolean) => Promise<void>;
   setLiveNewsSentimentEnabled: (v: boolean) => Promise<void>;
@@ -390,7 +410,7 @@ const THEME_MODE: Record<string, "light" | "dark"> = Object.fromEntries(THEMES.m
 /** Apply a theme id to <html>: toggles the .dark class (Tailwind) + sets data-theme (CSS tokens). */
 export function applyThemeToDom(id: string): void {
   if (typeof document === "undefined") return;
-  const mode = THEME_MODE[id] ?? "light";
+  const mode = THEME_MODE[id] ?? (id === "light" || id === "solar" ? "light" : "dark");
   const root = document.documentElement;
   root.classList.toggle("dark", mode === "dark");
   root.setAttribute("data-theme", id);
@@ -401,12 +421,33 @@ export const useAppStore = create<AppState>((set, get) => ({
   userId: null,
   userEmail: null,
   connected: false,
-  inrRate: MOCK_WALLET.inrRate ?? 83.5,
+  inrRate: MOCK_WALLET.inrRate ?? DEFAULT_INR_RATE,
 
   mode: "PAPER",
   accountType: (getStoredItem("aalgo_account_type") as AccountType) || "BOTH",
   execMode: "AUTO",
-  theme: getStoredItem("aalgo_theme") || "light",
+  activeMarket: ((typeof window !== "undefined" && (getStoredItem("aalgo_active_market") as "INDIA" | "CRYPTO" | "GLOBAL")) || "CRYPTO"),
+  setActiveMarket: (market: "INDIA" | "CRYPTO" | "GLOBAL") => {
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.setItem("aalgo_active_market", market);
+      }
+    } catch {}
+    set({ activeMarket: market });
+  },
+  theme: (() => {
+    const saved = getStoredItem("aalgo_theme");
+    // If no theme or legacy fallback "light", default to dark institutional theme
+    if (!saved || saved === "light") {
+      try {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("aalgo_theme", "dark");
+        }
+      } catch {}
+      return "dark";
+    }
+    return saved;
+  })(),
   density: (getStoredItem("aalgo_density") as "COMPACT" | "COMFORTABLE" | "SPACIOUS") || "COMFORTABLE",
   selectedSymbol: getStoredItem("aalgo_last_symbol") || (SYMBOLS.includes("BTCUSDT" as any) ? "BTCUSDT" as any : SYMBOLS[0]),
   selectedSymbols: [getStoredItem("aalgo_last_symbol") || (SYMBOLS.includes("BTCUSDT" as any) ? "BTCUSDT" as any : SYMBOLS[0])],
@@ -441,6 +482,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   noLossMode: false,
   dynamicSLTP: true,
   aiConsensusGate: true,
+  shadowMode: false,
   orderFlowVotingEnabled: true,
   smartMoneyVotingEnabled: true,
   liveNewsSentimentEnabled: true,
@@ -582,6 +624,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           noLossMode: s?.noLossMode ?? false,
           dynamicSLTP: s?.riskConfig?.dynamicSLTP ?? true,
           aiConsensusGate: s?.aiConsensusGate ?? true,
+          shadowMode: s?.shadowMode ?? false,
           orderFlowVotingEnabled: s?.orderFlowVotingEnabled ?? true,
           smartMoneyVotingEnabled: s?.smartMoneyVotingEnabled ?? true,
           liveNewsSentimentEnabled: s?.liveNewsSentimentEnabled ?? true,
@@ -631,14 +674,14 @@ export const useAppStore = create<AppState>((set, get) => ({
               realizedBalance: w.realizedBalance ?? 0,
               bookedProfit: w.bookedProfit ?? 0,
               inrEquivalent: w.inrEquivalent ?? 0, 
-              inrRate: w.inrRate ?? 83.5,
+              inrRate: w.inrRate ?? DEFAULT_INR_RATE,
               savingsUsdt: w.savingsUsdt ?? 0,
               isUnactivated: w.isUnactivated ?? false,
               totalDeposited: w.totalDeposited ?? 0,
               totalWithdrawn: w.totalWithdrawn ?? 0,
               realizedPnL: w.realizedPnL ?? 0
             },
-            inrRate: w.inrRate ?? 83.5,
+            inrRate: w.inrRate ?? DEFAULT_INR_RATE,
           });
         }
 
@@ -758,13 +801,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    set({ ready: true, connected, userId, userEmail });
+    const finalConnected = connected || (typeof socket !== "undefined" && socket.connected);
+    set({ ready: true, connected: finalConnected, userId, userEmail });
     if (typeof window !== "undefined") {
       get().refreshMarketCheck();
       get().refreshEnsembleReport();
       get().refreshSpectralRegime();
     }
+    } catch (bootErr) {
+      console.warn("[store] Boot caught non-fatal error, falling back to offline/mock seed:", bootErr);
     } finally {
+      // Invariant: UI must ALWAYS become ready after boot completes to avoid infinite loaders
+      set({ ready: true });
       isBooting = false;
     }
   },
@@ -897,7 +945,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             return {
               usdt: sum("usdt"), totalBalance: sum("totalBalance"), lockedMargin: sum("lockedMargin"),
               realizedBalance: sum("realizedBalance"), bookedProfit: sum("bookedProfit"),
-              inrEquivalent: sum("inrEquivalent"), inrRate: s?.inrRate ?? f?.inrRate ?? 83.5,
+              inrEquivalent: sum("inrEquivalent"), inrRate: s?.inrRate ?? f?.inrRate ?? DEFAULT_INR_RATE,
               savingsUsdt: sum("savingsUsdt"), isUnactivated: false,
               totalDeposited: sum("totalDeposited"), totalWithdrawn: sum("totalWithdrawn"),
               realizedPnL: sum("realizedPnL"),
@@ -915,21 +963,26 @@ export const useAppStore = create<AppState>((set, get) => ({
             realizedBalance: w.realizedBalance ?? 0,
             bookedProfit: w.bookedProfit ?? 0,
             inrEquivalent: w.inrEquivalent ?? 0,
-            inrRate: w.inrRate ?? 83.5,
+            inrRate: w.inrRate ?? DEFAULT_INR_RATE,
             savingsUsdt: w.savingsUsdt ?? 0,
             isUnactivated: w.isUnactivated ?? false,
             totalDeposited: w.totalDeposited ?? 0,
             totalWithdrawn: w.totalWithdrawn ?? 0,
             realizedPnL: w.realizedPnL ?? 0
           },
-          inrRate: w.inrRate ?? 83.5,
+          inrRate: w.inrRate ?? DEFAULT_INR_RATE,
         });
       }
     } catch (err: any) {
       if (isAuthError(err)) {
-        console.warn("[store] refreshWallet unauthorized, disabling backend connection");
+        console.warn("[store] refreshWallet unauthorized, re-authenticating demo session");
         api.clearToken();
-        set({ connected: false });
+        ensureDemoAuthSession().then(() => {
+          set({ connected: true });
+          get().refreshWallet();
+        }).catch(() => {
+          set({ connected: false });
+        });
       } else {
         if (get().connected) console.warn("[store] refreshWallet failed, keeping current data");
       }
@@ -978,7 +1031,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         const currentPrice = livePrices[mapped.symbol];
         if (currentPrice) {
-          const pnl = mapped.side === "BUY"
+          // Treat both "BUY" and "LONG" as long (short is "SELL"/"SHORT"),
+          // matching the live-tick handler — otherwise a "LONG" position took
+          // the short branch and showed inverted PnL until the next tick.
+          const isLong = mapped.side === "BUY" || mapped.side === "LONG";
+          const pnl = isLong
             ? (currentPrice - mapped.entry) * mapped.qty
             : (mapped.entry - currentPrice) * mapped.qty;
           mapped.pnl = +pnl.toFixed(4);
@@ -1146,7 +1203,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set((st) => ({
       positions: [newPos, ...st.positions],
-      wallet: { balance: st.wallet.balance - quantity * price },
+      // Merge into the existing wallet so derived fields (inrRate,
+      // inrEquivalent, totalBalance, …) survive — replacing the object
+      // dropped them and made INR renders NaN/₹0.
+      wallet: { ...st.wallet, balance: st.wallet.balance - quantity * price },
     }));
     get().addAlert("GREEN", `${side} ${quantity} ${symbol} filled (mock)`);
     return { ok: true };
@@ -1225,6 +1285,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ noLossMode: v });
     if (get().connected) {
       await api.updateSettings({ noLossMode: v }).catch(console.error);
+    }
+  },
+
+  setShadowMode: async (v) => {
+    set({ shadowMode: v });
+    if (get().connected) {
+      await api.updateSettings({ shadowMode: v }).catch(console.error);
     }
   },
 
@@ -1606,8 +1673,37 @@ function setupSocketListeners(
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let spectralTimer: ReturnType<typeof setInterval> | null = null;
 let tickerPricesTimer: ReturnType<typeof setInterval> | null = null;
+let reconnectProbeTimer: ReturnType<typeof setInterval> | null = null;
 
 function startAutoRefresh(set: any, get: () => AppState) {
+  if (!reconnectProbeTimer) {
+    reconnectProbeTimer = setInterval(async () => {
+      const state = get();
+      if (!state.ready || state.connected) return;
+      try {
+        if (typeof socket !== "undefined" && socket.connected) {
+          set({ connected: true });
+          state.refreshWallet();
+          state.refreshPositions();
+          state.refreshMarketCheck();
+          return;
+        }
+        await api.getHealth();
+        if (!api.getToken()) {
+          await ensureDemoAuthSession();
+        }
+        set({ connected: true });
+        state.refreshWallet();
+        state.refreshPositions();
+        state.refreshMarketCheck();
+        state.refreshEnsembleReport();
+        console.log("[store] Reconnected to trading gateway -> ONLINE");
+      } catch {
+        // Still offline, will retry next interval
+      }
+    }, 5000);
+  }
+
   if (!refreshTimer) {
     refreshTimer = setInterval(() => {
       const state = get();

@@ -476,8 +476,33 @@ export async function predictSequence(input: SequenceInput, endpointPath = "/res
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DL_TIMEOUT_MS);
+    // 🛡️ The transformer-micro endpoint's model was built with input_dim=20
+    // (quant_engine/transformerPredictor.py:25) — this row was only ever 10
+    // wide, so quant_engine/main.py's clean_vector() silently zero-padded it
+    // on literally every single call ("Auto-padding vector from 10 to 20" —
+    // found spamming logs 2026-09-15). No training script for this model
+    // exists anywhere in this repo (confirmed by a full search), so there is
+    // no ground truth for what the other 10 dimensions "should" semantically
+    // be — TransformerPredictor.ts's own 20-value layout for the same
+    // endpoint isn't a verified schema either, it's mostly its own zero
+    // placeholders plus two fixed constants, and adopting it here would mean
+    // *discarding* the real rsi/macdHist values this row already carries in
+    // favor of that layout's unrelated placeholder slots — a guess replacing
+    // a different guess, not a verified improvement. Padding explicitly to
+    // 20 here instead has the model receive the exact same tensor as before
+    // (zeros in zeros out) while making the padding an intentional, visible
+    // part of this contract instead of a silent server-side correction —
+    // safe, behavior-preserving, and it stops the log spam. A real fix needs
+    // the actual training feature schema, which doesn't exist in this repo.
+    const TRANSFORMER_INPUT_DIM = 20;
     const payload = endpointPath.includes("transformer-micro")
-      ? { data: input.window.map(b => [b.open, b.high, b.low, b.close, b.volume, b.rsi ?? 50, b.macdHist ?? 0, b.atr ?? 0, b.imbalance ?? 0, b.cvd ?? 0]) }
+      ? {
+          data: input.window.map(b => {
+            const row = [b.open, b.high, b.low, b.close, b.volume, b.rsi ?? 50, b.macdHist ?? 0, b.atr ?? 0, b.imbalance ?? 0, b.cvd ?? 0];
+            while (row.length < TRANSFORMER_INPUT_DIM) row.push(0);
+            return row;
+          }),
+        }
       : input;
 
     const res = await fetch(serviceUrl, {
@@ -508,6 +533,53 @@ export async function predictSequence(input: SequenceInput, endpointPath = "/res
   } catch (err) {
     console.warn(`[dl] predictSequence error — local transformer fallback:`, (err as Error).message);
     return predictSequenceLocalTransformer(input);
+  }
+}
+
+/* ════════════════════════════════════════════════════════
+ *  callQuantEngine() — honest POST to a real quant-engine model
+ *
+ *  Unlike predictSequence(), this does NOT fall back to a local JS
+ *  heuristic on failure. It returns the parsed JSON on success, or
+ *  `null` when the quant engine is offline / errors / returns a
+ *  non-OK or error payload. Callers use `null` to zero-weight the
+ *  model instead of substituting a heuristic dressed as that model.
+ * ════════════════════════════════════════════════════════ */
+export async function callQuantEngine(
+  endpointPath: string,
+  body: unknown,
+  timeoutMs = DL_TIMEOUT_MS,
+): Promise<any | null> {
+  if (process.env.NODE_ENV === "test") return null;
+
+  let serviceUrl = "";
+  try {
+    const { getQuantEngineURL, isQuantEngineAvailable } = await import("../config/serviceDiscovery.js");
+    if (!(await isQuantEngineAvailable())) return null;
+    const base = await getQuantEngineURL();
+    serviceUrl = `${base}${endpointPath}`;
+  } catch {
+    if (!DL_SERVICE_URL) return null;
+    serviceUrl = `${DL_SERVICE_URL}${endpointPath}`;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(serviceUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data && typeof data === "object" && "error" in data && (data as any).error) return null;
+    return data;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

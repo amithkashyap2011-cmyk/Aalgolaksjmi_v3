@@ -362,7 +362,10 @@ export class StreamingADX {
   get value(): number | null { return this._value; }
 
   update(bar: OHLC): number | null {
-    if (this.prevBar === null) { this.prevBar = bar; this.count++; return null; }
+    // Seed only — the first bar yields no +DM/-DM/TR (they need a previous
+    // bar), so it must NOT count toward the period. Counting it made the
+    // warm-up accumulate period-1 DM/TR values instead of period.
+    if (this.prevBar === null) { this.prevBar = bar; return null; }
 
     const upMove = bar.high - this.prevBar.high;
     const downMove = this.prevBar.low - bar.low;
@@ -467,39 +470,47 @@ export function computeSupertrend(bars: OHLCVol[], period = 10, multiplier = 3):
   }
 
   const atrCalc = new StreamingATR(period);
-  let finalUpper: number | null = null;
-  let finalLower: number | null = null;
-  let direction: "bull" | "bear" | "neutral" = "neutral";
+  let prevFinalUpper: number | null = null;
+  let prevFinalLower: number | null = null;
   let prevClose: number | null = null;
-  let resultValue: number | null = null;
+  let prevSupertrend: number | null = null;
+  let direction: "bull" | "bear" | "neutral" = "neutral";
+  let supertrend: number | null = null;
 
   for (const bar of bars) {
     const atr = atrCalc.update(bar);
+    if (atr === null) { prevClose = bar.close; continue; } // wait for ATR warm-up
+
     const mid = (bar.high + bar.low) / 2;
-    const basicUpper = atr !== null ? mid + multiplier * atr : mid;
-    const basicLower = atr !== null ? mid - multiplier * atr : mid;
+    const basicUpper = mid + multiplier * atr;
+    const basicLower = mid - multiplier * atr;
 
-    if (finalUpper === null || basicUpper < finalUpper || (prevClose !== null && prevClose > finalUpper)) {
-      finalUpper = basicUpper;
-    }
-    if (finalLower === null || basicLower > finalLower || (prevClose !== null && prevClose < finalLower)) {
-      finalLower = basicLower;
+    // Final bands carry over unless the basic band tightens or price pierces them.
+    const finalUpper: number = (prevFinalUpper === null || basicUpper < prevFinalUpper || (prevClose !== null && prevClose > prevFinalUpper))
+      ? basicUpper : prevFinalUpper;
+    const finalLower: number = (prevFinalLower === null || basicLower > prevFinalLower || (prevClose !== null && prevClose < prevFinalLower))
+      ? basicLower : prevFinalLower;
+
+    // Trend flips only on a genuine band crossover — the previous supertrend
+    // tells us which band was active (upper = downtrend, lower = uptrend).
+    if (prevSupertrend === null) {
+      direction = bar.close >= finalUpper ? "bull" : "bear";
+    } else if (prevSupertrend === prevFinalUpper) {
+      direction = bar.close > finalUpper ? "bull" : "bear";
+    } else {
+      direction = bar.close < finalLower ? "bear" : "bull";
     }
 
-    if (prevClose !== null) {
-      if (bar.close > (finalLower ?? bar.close)) {
-        direction = "bull";
-      } else if (bar.close < (finalUpper ?? bar.close)) {
-        direction = "bear";
-      }
-    }
+    supertrend = direction === "bull" ? finalLower : finalUpper;
 
-    resultValue = direction === "bull" ? finalLower : finalUpper;
+    prevFinalUpper = finalUpper;
+    prevFinalLower = finalLower;
+    prevSupertrend = supertrend;
     prevClose = bar.close;
   }
 
   return {
-    value: resultValue,
+    value: supertrend,
     direction,
   };
 }

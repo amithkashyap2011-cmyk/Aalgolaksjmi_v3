@@ -161,27 +161,19 @@ class CNNPredictor:
             normalized = (window - self.schema.MEANS) / (self.schema.STDS + 1e-8)
             input_tensor = torch.from_numpy(normalized).unsqueeze(0).permute(0, 2, 1)
         else:
-            # Legacy single-bar path for callers that don't pass a symbol.
-            # 🛡️ V8.3 Feature Vector Assembly
-            raw_features = np.array(ohlcv_latest + indicators_latest, dtype=np.float32)
-
-            if len(raw_features) != self.schema.DIMENSION:
-                 raise RuntimeError(f"AQEA_FEATURE_SCHEMA_ERROR: Received {len(raw_features)} features, expected {self.schema.DIMENSION}")
-
-            # 🛡️ NORMALIZATION (Z-Score from Schema)
-            features = self.schema.normalize(raw_features)
-
-            # Validation: Check for NaN or Inf
-            if not np.isfinite(features).all():
-                return {
-                    "direction": "HOLD",
-                    "probability": 0.5,
-                    "confidence": 0.0,
-                    "error": "INVALID_FEATURES"
-                }
-
-            # Simulate 64-bar sequence for 1D CNN by repeating the current vector
-            input_tensor = torch.tensor(features).repeat(1, 64, 1).permute(0, 2, 1)
+            # No-symbol path. The CNN was trained on real 64-bar windows;
+            # broadcasting a single bar across all 64 timesteps feeds it a
+            # constant sequence, which is out-of-distribution and carries zero
+            # temporal signal, so any "prediction" from it is meaningless.
+            # Return a neutral HOLD instead of a misleading confident call —
+            # callers that want a real inference must pass a symbol so the
+            # true window can be fetched.
+            return {
+                "direction": "HOLD",
+                "probability": 0.5,
+                "confidence": 0.0,
+                "error": "SYMBOL_REQUIRED_FOR_WINDOW",
+            }
 
         with torch.no_grad():
             output = self.model(input_tensor)
@@ -220,15 +212,13 @@ class CNNPredictor:
         
         norm_features = self.schema.normalize(raw_features)
         input_tensor = torch.tensor(norm_features).repeat(1, 64, 1).permute(0, 2, 1)
-        
+
         with torch.no_grad():
-            # Run manually to get logits
-            x = self.model.relu(self.model.conv1(input_tensor))
-            x = self.model.relu(self.model.conv2(x))
-            x = self.model.pool(x).squeeze(2)
-            x = self.model.relu(self.model.fc1(x))
-            logits = self.model.fc2(x).numpy()[0]
-            
+            # Use the real forward pass so the forensic logits match production
+            # inference exactly. The previous manual path skipped every
+            # BatchNorm layer AND the third conv block, so it computed a
+            # different function than model.forward() and misreported logits.
+            logits = self.model(input_tensor).numpy()[0]
             probs = torch.softmax(torch.tensor(logits).unsqueeze(0), dim=1).numpy()[0]
             
         directions = ["LONG", "SHORT", "HOLD"]

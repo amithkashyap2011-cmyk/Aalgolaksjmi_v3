@@ -91,24 +91,23 @@ export class SystemManager extends EventEmitter {
   }
 
   public heartbeat(name: string, health: any): boolean {
-    let service = this.services.get(name);
-    if (!service && name === "quant_engine") {
-      const portFile = path.join(findQuantEngineDir(), "runtime", "port.json");
-      let url = process.env.QUANT_URL || "http://127.0.0.1:8000";
-      if (fs.existsSync(portFile)) {
-        try {
-          const { port } = JSON.parse(fs.readFileSync(portFile, "utf8"));
-          if (port) url = `http://127.0.0.1:${port}`;
-        } catch {}
-      }
-      this.registerService({
-        name: "quant_engine",
-        url,
-        version: "2.0.0",
-        health: health || { status: "Online" }
-      });
-      service = this.services.get(name);
-    }
+    // 🛡️ Root cause of a long-standing "every model falls back" bug (found
+    // 2026-09-15): this used to auto-register an unrecognized "quant_engine"
+    // heartbeat using a hardcoded 'http://127.0.0.1:8000' fallback URL —
+    // nothing has ever listened on 8000, so every model call silently
+    // routed nowhere and fell back to its own local heuristic. It fired on
+    // essentially every aqea-server restart: Python's registry_client.py
+    // heartbeat_loop runs independently of Node's process lifecycle and
+    // keeps sending heartbeats through a restart that wipes this in-memory
+    // map — so the FIRST post-restart heartbeat always hit this branch
+    // before any real /system/register call could land. registry_client.py
+    // already has correct, race-free re-registration logic (on a 404 it
+    // sets registered=False and re-POSTs /system/register with its actual,
+    // freshly-known port) — it just never ran, because this special case
+    // masked the 404 with a guess. Falling through to the same "unknown
+    // service" rejection as every other service name now lets that
+    // existing self-healing logic do its job with the real port instead.
+    const service = this.services.get(name);
 
     if (service) {
       service.lastHeartbeat = Date.now();
@@ -212,16 +211,32 @@ export class SystemManager extends EventEmitter {
       const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(800) });
       if (!res.ok) return false;
 
-      // Pull model health so the AI-consensus gate sees CNN/PPO status right away;
-      // the engine's own heartbeat refreshes it on the next cycle regardless.
-      let health: any = { status: "Online" };
+      // IDENTITY CHECK — port.json holds an EPHEMERAL, OS-assigned port. After a
+      // quant crash/restart some unrelated process can be reusing that exact
+      // port, and a bare `/health` 200 would let us register it as the quant
+      // engine. Verify identity against a quant-SPECIFIC endpoint before trusting
+      // it: /health/models must return the model-health map (cnn + ppo keys).
+      // A generic 200 from a foreign process won't satisfy this shape.
+      let health: any;
       try {
         const mh = await fetch(`${url}/health/models`, { signal: AbortSignal.timeout(800) });
-        if (mh.ok) health = await mh.json();
-      } catch { /* health blob is best-effort */ }
+        if (!mh.ok) return false;
+        const body = await mh.json();
+        const looksLikeQuant =
+          body && typeof body === "object" &&
+          "cnn" in body && "ppo" in body;
+        if (!looksLikeQuant) {
+          console.warn(`[SystemManager] Port ${port} answered /health but /health/models is not the quant engine — refusing to register.`);
+          return false;
+        }
+        health = body;
+      } catch {
+        // Could not confirm identity — do NOT register an unverified process.
+        return false;
+      }
 
       this.registerService({ name: "quant_engine", url, version: "recovered", health });
-      console.log(`[SystemManager] Recovered already-running quant engine at ${url}`);
+      console.log(`[SystemManager] Recovered already-running quant engine at ${url} (identity verified via /health/models)`);
       return true;
     } catch {
       return false;

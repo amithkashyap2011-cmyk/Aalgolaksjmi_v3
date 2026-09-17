@@ -15,6 +15,7 @@ import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
 export class TransformerPredictor extends BasePredictor {
   protected modelName = "TRANSFORMER_MICRO_V1";
   private neutralCount = 0;
+  private static transformerCache = new Map<string, { expiresAt: number; result: any }>();
 
   public async isHealthy(): Promise<boolean> {
     try {
@@ -32,6 +33,12 @@ export class TransformerPredictor extends BasePredictor {
   }
 
 protected async runInference(features: FeatureVector): Promise<{ direction: AIDirection, confidence: number, probability: number, meta?: any }> {
+  const cacheKey = `${features.symbol}:${features.market?.close || 0}:${features.regime?.state || "UNKNOWN"}`;
+  const cached = TransformerPredictor.transformerCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt && process.env.NODE_ENV !== "test") {
+    return cached.result;
+  }
+
   try {
       const payload = {
         data: [
@@ -46,7 +53,7 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(1000)
+        signal: AbortSignal.timeout(4000)
       });
 
       if (!res.ok) throw new Error(`Python Transformer service error: ${res.status}`);
@@ -83,7 +90,7 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
         else if (regime === "TRENDING_BEAR") direction = "LONG";
       }
 
-      return {
+      const result = {
         direction,
         confidence: data.confidence || 0,
         probability: data.probabilities?.continuation || 0.5,
@@ -92,6 +99,11 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
           probabilities: data.probabilities || {}
         }
       };
+
+      if (TransformerPredictor.transformerCache.size > 200) TransformerPredictor.transformerCache.clear();
+      TransformerPredictor.transformerCache.set(cacheKey, { expiresAt: Date.now() + 30_000, result });
+
+      return result;
     } catch (err) {
       // 🧠 Transformer Multi-Head Attention Alignment Fallback
       const macdHist = features.market?.macdHistogram ?? features.market?.macd ?? 0;

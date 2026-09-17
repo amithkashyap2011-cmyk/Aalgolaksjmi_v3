@@ -12,9 +12,11 @@
     "install:all": "cd client && npm install && cd ../server && npm install",
     "typecheck": "cd client && npx tsc --noEmit && cd ../server && npx tsc --noEmit",
     "test": "npm run test:server && npm run test:client",
+    "production-gate": "cd server && npm run production-gate",
     "test:server": "cd server && npm test",
     "test:client": "cd client && npm test",
     "test:all": "npm run test:server && npm run test:client",
+    "benchmark": "cd server && npm run benchmark",
     "start": "cd server && npm start",
     "cap:init": "npx cap init AALGOLAKSHMI com.aalgo.v2 --web-dir client/dist"
   },

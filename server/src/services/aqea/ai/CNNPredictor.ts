@@ -39,6 +39,8 @@ export class CNNPredictor extends BasePredictor {
     }
   }
 
+  private static cnnCache = new Map<string, { expiresAt: number; result: { direction: AIDirection, confidence: number, probability: number, meta?: any } }>();
+
 protected async runInference(features: FeatureVector): Promise<{ direction: AIDirection, confidence: number, probability: number, meta?: any }> {
   const startTime = Date.now();
   console.log(`[CNN_V1] ENTER runInference() symbol=${features.symbol}`);
@@ -46,6 +48,12 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
   if (!AQEA_CONFIG.AI_ENABLED) {
      console.log(`[CNN_V1] EXIT runInference() - AI_DISABLED`);
      return { direction: "HOLD", confidence: 0, probability: 0.5 };
+  }
+
+  const cacheKey = `${features.symbol}:${features.market?.close || 0}`;
+  const cached = CNNPredictor.cnnCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt && process.env.NODE_ENV !== "test") {
+    return cached.result;
   }
 
   try {
@@ -123,7 +131,7 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(1000)
+        signal: AbortSignal.timeout(4000)
       });
 
       if (!res.ok) {
@@ -151,6 +159,9 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
 
       const latency = Date.now() - startTime;
       console.log(`[CNN_V1] EXIT runInference() - latency=${latency}ms direction=${data.direction}`);
+
+      if (CNNPredictor.cnnCache.size > 200) CNNPredictor.cnnCache.clear();
+      CNNPredictor.cnnCache.set(cacheKey, { expiresAt: Date.now() + 30_000, result: data });
 
       return data;
 

@@ -93,6 +93,10 @@ export interface ISettings extends Document {
   driftHaltThreshold: number;   // Capital drift score above which all entries halt
   driftReduceThreshold: number; // Capital drift score above which risk is halved
   aiConsensusGate: boolean;
+  /** When on, the autonomous engine still scans/scores every symbol and logs
+   *  its decisions as usual, but never opens a real (paper or live) position —
+   *  useful for watching what the AI would do without risking capital. */
+  shadowMode: boolean;
   behaviourModelEnabled: boolean;
   /** AQEA voting-layer toggles — per-user control for each of the 10 AI models. */
   orderFlowVotingEnabled: boolean;
@@ -212,6 +216,7 @@ const SettingsSchema = new Schema<ISettings>({
   driftHaltThreshold:      { type: Number, default: 80, min: 50, max: 100 },
   driftReduceThreshold:    { type: Number, default: 60, min: 30, max: 80 },
   aiConsensusGate: { type: Boolean, default: true },
+  shadowMode: { type: Boolean, default: false },
   behaviourModelEnabled: { type: Boolean, default: true },
   orderFlowVotingEnabled:    { type: Boolean, default: true },
   smartMoneyVotingEnabled:   { type: Boolean, default: true },

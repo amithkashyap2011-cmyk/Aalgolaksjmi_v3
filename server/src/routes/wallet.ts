@@ -120,6 +120,12 @@ export async function computeAccountBalance(userId: string, mode: "PAPER" | "LIV
   let savingsUsdt = 0;
   let isUnactivated = false;
   let realizedBalance = 0;
+  // A failed LIVE Binance fetch used to fall through silently to the
+  // usdt=0/totalBalance=0 defaults above — indistinguishable from a real
+  // empty account. balanceUnknown lets callers tell "queried, genuinely
+  // zero" apart from "the query itself failed" without changing the
+  // existing numeric fields' shape for callers that don't check it yet.
+  let balanceUnknown = false;
 
   if (mode === "LIVE" && mongoose.connection.readyState === 1 && userId && userId !== "guest-user") {
     try {
@@ -152,6 +158,7 @@ export async function computeAccountBalance(userId: string, mode: "PAPER" | "LIV
       }
     } catch (binanceErr: any) {
       console.error(`[wallet] Binance LIVE ${accountType} error:`, binanceErr.message);
+      balanceUnknown = true;
     }
   } else {
     // PAPER mode - instant in-memory lookup
@@ -194,6 +201,7 @@ export async function computeAccountBalance(userId: string, mode: "PAPER" | "LIV
     lockedMargin: +lockedMargin.toFixed(4),
     savingsUsdt: +savingsUsdt.toFixed(4),
     isUnactivated,
+    balanceUnknown,
     realizedBalance: +realizedBalance.toFixed(4),
     bookedProfit: +bookedProfit.toFixed(4),
     inrEquivalent: isIndianAcc ? +totalBalance.toFixed(2) : +(totalBalance * rate).toFixed(2),
@@ -246,21 +254,17 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
     const balanceData = await computeAccountBalance(userId, mode, accountType, rate);
     res.json(balanceData);
   } catch (err: any) {
+    // Used to swallow ANY error here (a DB outage, a decrypt failure,
+    // anything) and answer with a 200 of all-zero balance fields —
+    // indistinguishable from a real, verified empty account. A caller
+    // (UI, risk sizing) had no way to tell "your account really has $0"
+    // apart from "we couldn't find out." Fail loudly instead.
     console.error("[wallet] /balance error:", err);
-    res.json({
-      usdt: 0,
-      totalBalance: 0,
-      lockedMargin: 0,
-      savingsUsdt: 0,
-      isUnactivated: false,
-      realizedBalance: 0,
-      bookedProfit: 0,
-      inrEquivalent: 0,
-      inrRate: CurrencyService.getRate(),
-      totalDeposited: 0,
-      totalWithdrawn: 0,
-      realizedPnL: 0,
-      userId: req.userId
+    res.status(502).json({
+      error: "BALANCE_UNKNOWN",
+      message: "Could not determine the account balance. Do not treat this as a zero balance.",
+      detail: err.message,
+      userId: req.userId,
     });
   }
 });
@@ -269,7 +273,10 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
 router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
   try {
     const { amount, accountType = "INDIAN_NSE", mode = "PAPER", currency = "INR" } = req.body;
-    const depositAmount = Number(amount) || 10000;
+    const depositAmount = Number(amount);
+    if (isNaN(depositAmount) || depositAmount <= 0) {
+      return res.status(400).json({ error: "Invalid deposit amount. Must be greater than 0." });
+    }
     const userId = req.userId!;
 
     const isIndian = accountType.startsWith("INDIAN_");
@@ -278,7 +285,7 @@ router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
     const currentBal = wallet.get(currKey) ?? 0;
     const newBal = currentBal + depositAmount;
 
-    await paper.setWalletBalance(userId, mode, currKey, newBal, accountType);
+    await paper.setWalletBalance(userId, mode, currKey, newBal, accountType, "PAPER_INITIALIZATION");
     if (isIndian) {
       await paper.setWalletBalance(userId, mode, "USDT", 0, accountType);
     } else {
@@ -292,6 +299,7 @@ router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
           userId: new mongoose.Types.ObjectId(userId),
           type: "DEPOSIT",
           method: "DEBUG",
+          capitalSource: "PAPER_INITIALIZATION",
           amount: depositAmount,
           currency: currKey,
           status: "COMPLETED",
@@ -314,6 +322,38 @@ router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/* ── Authoritative Idempotent Paper Account Initialization ── */
+router.post("/initialize-paper", optionalAuth, async (req: AuthRequest, res) => {
+  try {
+    const { amount, accountType = "INDIAN_NSE", currency = "INR", txnRef } = req.body || {};
+    const userId = req.userId || (req.body?.userId && mongoose.Types.ObjectId.isValid(req.body.userId) ? String(req.body.userId) : "6a39c0e7a5e2995ed257ca68");
+
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      res.status(400).json({ success: false, error: "Explicit positive 'amount' is required for paper initialization. No default capital will be invented." });
+      return;
+    }
+
+    const result = await paper.initializePaperAccount(
+      userId,
+      accountType,
+      parsedAmount,
+      currency,
+      txnRef || `USER_PAPER_INIT_${parsedAmount}_${currency}`
+    );
+
+    clearDashboardCache();
+
+    res.json({
+      ...result,
+      userId,
+      accountMode: "PAPER"
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -717,7 +757,7 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
     const acctType = accountType;
     const wallet = paper.getWallet(userId, mode, acctType);
     const isIndian = acctType.startsWith("INDIAN_");
-    const rate = await getUsdtInrRate();
+    const rate = getUsdtInrRate();
 
     let newBalance = 0;
     let creditedCurrency = "USDT";
@@ -818,25 +858,22 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
       }
     }
 
-    // Persist auditable transaction record
+    // Persist the auditable transaction record before responding — the balance
+    // was already mutated above, so returning 200 without the ledger row would
+    // leave a silent gap in the append-only audit trail.
     if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
-      try {
-        await WalletTransaction.create({
-          userId: new mongoose.Types.ObjectId(userId),
-          type: "DEPOSIT",
-          method: "DEBUG",
-          amount: creditedAmount,
-          currency: creditedCurrency,
-          status: "COMPLETED",
-          txnRef: `PAPER${Date.now()}`,
-          note,
-          accountType: acctType,
-        });
-
-        log(`[deposit] PAPER deposit persisted for user ${userId} (${acctType}). Auto-trade NOT touched — requires explicit user action.`);
-      } catch (dbErr: any) {
-        console.warn("[wallet] Failed to persist dummy deposit in DB:", dbErr.message);
-      }
+      await WalletTransaction.create({
+        userId: new mongoose.Types.ObjectId(userId),
+        type: "DEPOSIT",
+        method: "DEBUG",
+        amount: creditedAmount,
+        currency: creditedCurrency,
+        status: "COMPLETED",
+        txnRef: `PAPER${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        note,
+        accountType: acctType,
+      });
+      log(`[deposit] PAPER deposit persisted for user ${userId} (${acctType}). Auto-trade NOT touched — requires explicit user action.`);
     } else {
       console.warn("[wallet] Skipping DB transaction (Disconnected, invalid UserID, or guest user). Deposit applied to memory.");
     }
@@ -987,11 +1024,20 @@ router.post("/transfer", authGuard, async (req: AuthRequest, res) => {
       await paper.setWalletBalance(userId, mode, "USDT", toBalance + amount, to);
 
       if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
-        await WalletTransaction.create({
-          userId: new mongoose.Types.ObjectId(userId), type: "ADJUSTMENT", method: "SYSTEM",
-          amount, currency: "USDT", status: "COMPLETED", txnRef: `XFER${Date.now()}`,
-          note: `Internal transfer: ${amount.toFixed(4)} USDT ${from} → ${to}`, accountType: to,
-        });
+        // Awaited, not fire-and-forget: the wallet balances above are already
+        // authoritative, so the ledger record for this transfer must exist
+        // before we tell the caller it succeeded — otherwise a caller could
+        // see 200 OK with no corresponding WalletTransaction (a silent gap
+        // in the audit trail), or a same-request DB read could race the write.
+        try {
+          await WalletTransaction.create({
+            userId: new mongoose.Types.ObjectId(userId), type: "ADJUSTMENT", method: "SYSTEM",
+            amount, currency: "USDT", status: "COMPLETED", txnRef: `XFER${Date.now()}`,
+            note: `Internal transfer: ${amount.toFixed(4)} USDT ${from} → ${to}`, accountType: to,
+          });
+        } catch (err: any) {
+          console.error("[wallet] FAILED to persist internal transfer ledger record — balances already moved:", err.message);
+        }
       }
 
       res.json({ message: `Transferred ${amount.toFixed(2)} USDT from ${from} to ${to}.`, from, to, amount });
@@ -1010,12 +1056,16 @@ router.post("/transfer", authGuard, async (req: AuthRequest, res) => {
       await paper.setWalletBalance(userId, mode, "USDT", balance - amount, accountType);
 
       if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
-        await WalletTransaction.create({
-          userId: new mongoose.Types.ObjectId(userId), type: "WITHDRAW", method: "SYSTEM",
-          amount, currency: "USDT", status: "COMPLETED", txnRef: `BNBXFER${Date.now()}`,
-          note: `Simulated transfer to Binance main account (${amount.toFixed(4)} USDT) — no real transfer occurred, dummy funds only.`,
-          accountType,
-        });
+        try {
+          await WalletTransaction.create({
+            userId: new mongoose.Types.ObjectId(userId), type: "WITHDRAW", method: "SYSTEM",
+            amount, currency: "USDT", status: "COMPLETED", txnRef: `BNBXFER${Date.now()}`,
+            note: `Simulated transfer to Binance main account (${amount.toFixed(4)} USDT) — no real transfer occurred, dummy funds only.`,
+            accountType,
+          });
+        } catch (err: any) {
+          console.error("[wallet] FAILED to persist external transfer (WITHDRAW) ledger record — balance already debited:", err.message);
+        }
       }
 
       res.json({ message: `Simulated: ${amount.toFixed(2)} USDT sent to your Binance main account (dummy funds, no real transfer).`, newBalance: balance - amount });
@@ -1045,21 +1095,21 @@ router.post("/allocate", optionalAuth, async (req: AuthRequest, res) => {
     await paper.setWalletBalance(userId, mode, "USDT", futuresAmount, "FUTURES");
 
     if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
-      try {
-        await WalletTransaction.create({
-          userId: new mongoose.Types.ObjectId(userId),
-          type: "ADJUSTMENT",
-          method: "SYSTEM",
-          amount: spotAmount + futuresAmount,
-          currency: "USDT",
-          status: "COMPLETED",
-          txnRef: `ALLOC${Date.now()}`,
-          note: `Capital Allocation: ${spotAmount.toFixed(2)} USDT (Spot) / ${futuresAmount.toFixed(2)} USDT (Futures)`,
-          accountType: "BOTH",
-        });
-      } catch (dbErr: any) {
-        console.warn("[wallet] Failed to persist allocation transaction:", dbErr.message);
-      }
+      // Persist before responding so the balance change always has a matching
+      // ledger row. accountType uses a valid enum value ("FUTURES"); the note
+      // records the full spot/futures split (the schema has no "BOTH" member,
+      // which previously made this write fail enum validation silently).
+      await WalletTransaction.create({
+        userId: new mongoose.Types.ObjectId(userId),
+        type: "ADJUSTMENT",
+        method: "SYSTEM",
+        amount: spotAmount + futuresAmount,
+        currency: "USDT",
+        status: "COMPLETED",
+        txnRef: `ALLOC${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        note: `Capital Allocation: ${spotAmount.toFixed(2)} USDT (Spot) / ${futuresAmount.toFixed(2)} USDT (Futures)`,
+        accountType: "FUTURES",
+      });
     }
 
     res.json({

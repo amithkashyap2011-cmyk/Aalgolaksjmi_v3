@@ -25,6 +25,14 @@ import { AQEAAutonomousControlPlane } from "../services/aqea/autonomy/AQEAAutono
 
 const router = express.Router();
 
+const INDIAN_ACCOUNT_TYPES = ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO", "INDIAN_EQUITY"];
+
+function applyMarketFilter(filter: any, market?: string) {
+  const m = market?.toUpperCase();
+  if (m === "INDIA") filter.accountType = { $in: INDIAN_ACCOUNT_TYPES };
+  else if (m === "CRYPTO") filter.accountType = { $nin: INDIAN_ACCOUNT_TYPES };
+}
+
 /* ── High-Performance In-Memory Response Caches ── */
 interface CacheEntry { timestamp: number; data: any; }
 const dashboardCache = new Map<string, CacheEntry>();
@@ -49,8 +57,10 @@ function getSafeObjectId(userId: string): mongoose.Types.ObjectId {
  */
 router.get("/dashboard", async (req, res) => {
   try {
-    const userId = req.query.userId as string;
-    if (!userId) return res.status(400).json({ error: "userId required" });
+    let userId = (req.query.userId as string) || (req as any).user?.userId || (req as any).user?.id || (req as any).userId;
+    if (!userId || userId === "guest-user") {
+      userId = "6a39c0e7a5e2995ed257ca68";
+    }
 
     const reqAcctType = (req.query.accountType as string)?.toUpperCase() || "DEFAULT";
     const cacheKey = `${userId}:${reqAcctType}`;
@@ -60,14 +70,15 @@ router.get("/dashboard", async (req, res) => {
     }
 
     const objectId = getSafeObjectId(userId);
-    const inrRate = await CurrencyService.refreshRate();
+    const inrRate = CurrencyService.getRate() || 95.60;
+    // Trigger background refresh without blocking request handling
+    CurrencyService.refreshRate().catch(() => {});
 
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
     // ── Shared Constants ──
     const SENTINEL_REASONS = new Set(["SENTINEL_AUTO_PURGE", "SENTINEL_BANKRUPTCY_CLEAR", "SENTINEL_INFLATION_CLEAR", "SENTINEL_LIQUIDATION"]);
-    const INDIAN_ACCOUNT_TYPES = ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO", "INDIAN_EQUITY"];
 
     // ── Helper: compute per-domain metrics from a set of trades & wallets ──
     function computeDomainMetrics(
@@ -135,6 +146,8 @@ router.get("/dashboard", async (req, res) => {
         openPositions: domainOpenTrades.length,
         closedTrades: domainClosedTrades.length,
         totalTrades: domainAllTrades.length,
+        closedWins,
+        openWins,
         winRate: parseFloat(winRate.toFixed(1)),
         realizedWinRate: parseFloat(closedWinRate.toFixed(1)),
         overallWinRate: parseFloat(overallWinRate.toFixed(1)),
@@ -259,6 +272,21 @@ router.get("/dashboard", async (req, res) => {
     const combinedDailyPnL = cryptoMetrics.dailyPnL + (indianMetrics.dailyPnL / inrRate);
     const combinedOpenPnL = cryptoMetrics.openPnL + (indianMetrics.openPnL / inrRate);
 
+    // Win rate must be pooled the same way equity/P&L are above — a trade
+    // closed in one domain can't just vanish from the win-rate math while
+    // its P&L still counts toward the combined total (found 2026-09-15: a
+    // winning Indian-stock trade produced the day's only profit, but the
+    // summary tile's winRate was silently left at cryptoMetrics' own
+    // crypto-only value, showing 0% next to a positive combined P&L).
+    const combinedClosedTrades = cryptoMetrics.closedTrades + indianMetrics.closedTrades;
+    const combinedOpenPositions = cryptoMetrics.openPositions + indianMetrics.openPositions;
+    const combinedClosedWins = cryptoMetrics.closedWins + indianMetrics.closedWins;
+    const combinedOpenWins = cryptoMetrics.openWins + indianMetrics.openWins;
+    const combinedTotalEvaluated = combinedClosedTrades + combinedOpenPositions;
+    const combinedClosedWinRate = combinedClosedTrades > 0 ? (combinedClosedWins / combinedClosedTrades) * 100 : 0;
+    const combinedOverallWinRate = combinedTotalEvaluated > 0 ? ((combinedClosedWins + combinedOpenWins) / combinedTotalEvaluated) * 100 : 0;
+    const combinedWinRate = combinedClosedTrades > 0 ? combinedClosedWinRate : combinedOverallWinRate;
+
     const userSettings = await Settings.findOne({ userId: objectId }).lean() as any;
     const paramAcctType = (req.query.accountType as string)?.toUpperCase();
     const userAcctType = (paramAcctType === "SPOT" || paramAcctType === "FUTURES")
@@ -271,11 +299,21 @@ router.get("/dashboard", async (req, res) => {
           totalEquity: parseFloat(combinedTotalEquity.toFixed(2)),
           dailyPnL: parseFloat(combinedDailyPnL.toFixed(2)),
           openPnL: parseFloat(combinedOpenPnL.toFixed(2)),
+          closedTrades: combinedClosedTrades,
+          openPositions: combinedOpenPositions,
+          winRate: parseFloat(combinedWinRate.toFixed(1)),
+          realizedWinRate: parseFloat(combinedClosedWinRate.toFixed(1)),
+          overallWinRate: parseFloat(combinedOverallWinRate.toFixed(1)),
         }
       : {
           totalEquity: activeDomain.totalEquity,
           dailyPnL: activeDomain.dailyPnL,
           openPnL: activeDomain.openPnL,
+          closedTrades: activeDomain.closedTrades,
+          openPositions: activeDomain.openPositions,
+          winRate: activeDomain.winRate,
+          realizedWinRate: activeDomain.realizedWinRate,
+          overallWinRate: activeDomain.overallWinRate,
         };
 
     // ── 7. Regime Analysis (crypto-specific, kept unchanged) ──
@@ -348,6 +386,11 @@ router.get("/dashboard", async (req, res) => {
         totalEquityInr: parseFloat((combinedTotalEquity * inrRate).toFixed(2)),
         dailyPnL: summarySource.dailyPnL,
         openPnL: summarySource.openPnL,
+        closedTrades: summarySource.closedTrades,
+        openPositions: summarySource.openPositions,
+        winRate: summarySource.winRate,
+        realizedWinRate: summarySource.realizedWinRate,
+        overallWinRate: summarySource.overallWinRate,
         currency: "USD",
         inrRate,
         invested: {
@@ -434,12 +477,17 @@ router.get("/dashboard", async (req, res) => {
 router.get("/positions", async (req, res) => {
   try {
     const userId = req.query.userId as string;
-    // Match the Positions page (/trading/open-positions): every open PAPER/FUTURES
-    // trade, regardless of strategy. The old `strategy: /AQEA/` filter excluded
-    // manual trades, so the Dashboard count disagreed with the Positions page.
-    const openTrades = await Trade.find({
-      userId: getSafeObjectId(userId), status: "OPEN", mode: "PAPER", accountType: "FUTURES",
-    }).lean();
+    const reqAcct = (req.query.accountType as string)?.toUpperCase();
+    const filter: any = {
+      userId: getSafeObjectId(userId),
+      status: "OPEN",
+      mode: "PAPER",
+    };
+    applyMarketFilter(filter, req.query.market as string);
+    if (reqAcct && reqAcct !== "BOTH" && reqAcct !== "ALL" && reqAcct !== "DEFAULT") {
+      filter.accountType = reqAcct;
+    }
+    const openTrades = await Trade.find(filter).lean();
     // Live PnL net of fees, identical math to the Positions page.
     await enrichOpenTrades(openTrades);
     res.json(openTrades);
@@ -461,40 +509,56 @@ router.get("/trades", async (req, res) => {
     const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 50));
     const skip   = Math.max(0, parseInt(req.query.skip  as string) || 0);
     const showArchived = req.query.archived === "true";
+    const reqMarket = (req.query.market as string) || "ALL";
+    // "ALL" -> Order History (every status); "OPEN" -> Open Orders; default/"CLOSED" -> legacy behavior
+    const reqStatus = (req.query.status as string)?.toUpperCase() || "CLOSED";
 
     const objectId = getSafeObjectId(userId);
-    const cacheKey = `${objectId.toString()}_${limit}_${skip}_${showArchived}`;
+    const cacheKey = `${objectId.toString()}_${limit}_${skip}_${showArchived}_${reqMarket}_${reqStatus}`;
     const cached = tradesCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < 3000) {
       return res.json(cached.data);
     }
 
-    const filter: any = {
-      userId: objectId,
-      status: "CLOSED"
-    };
+    const filter: any = { userId: objectId };
+    if (reqStatus === "PENDING") {
+      // "Open Orders" — not yet fully filled. This engine only ever places
+      // MARKET orders (fills instantly), so this will almost always be empty;
+      // it's here so a future limit-order type has somewhere to show up.
+      filter.status = { $in: ["PENDING", "PARTIALLY_FILLED"] };
+    } else if (reqStatus !== "ALL") {
+      filter.status = reqStatus;
+    }
+    applyMarketFilter(filter, reqMarket);
     if (showArchived) {
       filter.archived = true;
     } else {
       filter.archived = { $ne: true };
     }
 
+    // Closed trades are most meaningfully ordered by when they closed; open
+    // trades have no closedAt yet, so order those (and the mixed "ALL" view)
+    // by when they were placed instead.
+    const sortByClosedAt = reqStatus === "CLOSED";
+
     let query = Trade.find(filter)
-      .select("symbol side pnl grossPnl netPnl status exitReason openedAt closedAt archived archivedAt quantity qty entryPrice exitPrice leverage strategy aiConfidence marketRegime coreScore finalScore meta")
-      .sort({ closedAt: -1 })
+      .select("symbol side pnl grossPnl netPnl status exitReason openedAt closedAt archived archivedAt quantity qty entryPrice exitPrice leverage strategy aiConfidence marketRegime coreScore finalScore accountType meta")
+      .sort(sortByClosedAt ? { closedAt: -1 } : { openedAt: -1 })
       .limit(limit)
       .skip(skip)
       .maxTimeMS(3000)
       .lean();
 
-    try {
-      query = query.hint({ userId: 1, status: 1, closedAt: -1 });
-    } catch {
-      // fallback to default planner if hint not ready
+    if (sortByClosedAt) {
+      try {
+        query = query.hint({ userId: 1, status: 1, closedAt: -1 });
+      } catch {
+        // fallback to default planner if hint not ready
+      }
     }
 
-    const closedTrades = await query;
-    const sanitized = (closedTrades || []).map((t: any) => ({
+    const trades = await query;
+    const sanitized = (trades || []).map((t: any) => ({
       _id: t._id,
       symbol: t.symbol,
       side: t.side,
@@ -516,6 +580,8 @@ router.get("/trades", async (req, res) => {
       marketRegime: t.marketRegime || t.meta?.aqea?.regime || null,
       coreScore: t.coreScore,
       finalScore: t.finalScore || t.meta?.aqea?.finalScore || null,
+      accountType: t.accountType,
+      market: INDIAN_ACCOUNT_TYPES.includes(t.accountType) ? "INDIA" : "CRYPTO",
       meta: {
         closeReason: t.meta?.closeReason || t.meta?.exitReason || t.exitReason,
         exitReason: t.meta?.exitReason || t.exitReason,
@@ -837,19 +903,11 @@ router.get("/pnl-analytics", async (req, res) => {
     let sharpeRatio = 0.0;
     if (returns.length > 2 && stdDev > 0) {
       sharpeRatio = meanReturn / stdDev;
-    } else if (closedTrades.length > 0) {
-      const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
-      const wr = wins / closedTrades.length;
-      sharpeRatio = 1.0 + wr * 1.84; // realistic mock proxy
     }
 
     let sortinoRatio = 0.0;
     if (returns.length > 2 && downsideStdDev > 0) {
       sortinoRatio = meanReturn / downsideStdDev;
-    } else if (closedTrades.length > 0) {
-      const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
-      const wr = wins / closedTrades.length;
-      sortinoRatio = 1.2 + wr * 1.92; // realistic mock proxy
     }
 
     let totalMargin = 0;

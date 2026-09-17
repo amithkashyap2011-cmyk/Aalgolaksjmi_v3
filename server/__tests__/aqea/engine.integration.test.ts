@@ -148,6 +148,7 @@ jest.unstable_mockModule("../../src/services/aqea/AqeaAudit.js", () => ({
 }));
 
 let AQEAEngine: any, ShadowSimulator: any, AQEA_CONFIG: any, Settings: any, PredictorRegistry: any, RegimeEngine: any;
+let LakshmiMasterRouter: any, __origRoute: any;
 let currentPreds: any[] = [];
 
 beforeAll(async () => {
@@ -157,6 +158,15 @@ beforeAll(async () => {
   ({ AQEA_CONFIG } = await import("../../src/services/aqea/config.js") as any);
   ({ PredictorRegistry } = await import("../../src/services/aqea/ai/PredictorRegistry.js") as any);
   ({ RegimeEngine } = await import("../../src/services/aqea/regimeEngine.js") as any);
+  // The real ensemble fusion is structurally sub-hurdle (evPassesGate === false,
+  // expectedValue 0) on this suite's synthetic inputs. Post-fix, that EV veto
+  // now (correctly) blocks the technical fallback — so to keep exercising this
+  // suite's actual subject (layer alignment / directional decisions), we run the
+  // REAL router and only force evPassesGate=true, i.e. reproduce the legitimate-
+  // signal path where the ensemble does NOT veto. A dedicated test below asserts
+  // the blocked path (evPassesGate=false → HOLD) separately.
+  ({ LakshmiMasterRouter } = await import("../../src/services/aqea/router/LakshmiMasterRouter.js") as any);
+  __origRoute = LakshmiMasterRouter.route.bind(LakshmiMasterRouter);
 });
 
 afterAll(async () => {
@@ -184,6 +194,13 @@ describe("AQEA Engine Integration", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Force the ensemble EV gate to PASS (see beforeAll note) so legitimate
+    // directional signals still flow through the technical fallback.
+    LakshmiMasterRouter.route = async (...args: any[]) => {
+      const r: any = await __origRoute(...args);
+      if (r?.ensembleFusion) r.ensembleFusion.evPassesGate = true;
+      return r;
+    };
     (AQEA_CONFIG as any).AI_ENABLED = false;
     (AQEA_CONFIG as any).CNN_VOTING_ENABLED = false;
 
@@ -232,6 +249,35 @@ describe("AQEA Engine Integration", () => {
     expect(res.decision).toBe("LONG");
     expect(res.riskApproved).toBe(true);
     expect(res.reasons).toContain("TRENDING_BULL");
+  });
+
+  // 🛡️ Regression for the negative-EV fallback fix: the SAME strongly-aligned
+  // technical setup that produces LONG above must stay HOLD once the ensemble
+  // EV gate explicitly fails (evPassesGate === false). Previously the finalScore
+  // fallback ignored the EV veto and opened the trade anyway.
+  test("EV gate (evPassesGate=false) blocks the technical fallback → HOLD", async () => {
+    (AQEA_CONFIG as any).AI_ENABLED = true;
+    (AQEA_CONFIG as any).CNN_VOTING_ENABLED = true;
+
+    // Same aligned inputs as the LONG test, but the ensemble now vetoes on EV.
+    LakshmiMasterRouter.route = async (...args: any[]) => {
+      const r: any = await __origRoute(...args);
+      if (r?.ensembleFusion) r.ensembleFusion.evPassesGate = false;
+      return r;
+    };
+
+    mockRegimeAnalyze.mockReturnValue({ state: "TRENDING_BULL", score: 80, confidence: 80 });
+    mockMultiTFCalculate.mockResolvedValue({ score: 85, direction: "BULLISH" });
+    mockValidateTrade.mockResolvedValue({ allowed: true, positionSize: 200, riskScore: 90 });
+
+    currentPreds = [{ predictor: "CNN_1D_V1", direction: "LONG", confidence: 0.85, probability: 0.85 }];
+    mockGetAllPredictions.mockResolvedValue(currentPreds);
+    mockGetAuthorizedPredictions.mockResolvedValue(currentPreds);
+
+    const res = await AQEAEngine.decide(symbol, userId, baseContext);
+
+    expect(res.decision).toBe("HOLD");
+    expect(res.reasons.some((r: string) => r.includes("EV_GATE: BLOCKED_NEGATIVE_EV_FALLBACK"))).toBe(true);
   });
 
   test("Generate HOLD decision if regime score is too low", async () => {

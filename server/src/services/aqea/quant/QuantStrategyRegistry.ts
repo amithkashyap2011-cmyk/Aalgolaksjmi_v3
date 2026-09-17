@@ -2,6 +2,14 @@
  * ═══════════════════════════════════════════════════════════════════
  *  AQEA 2026–27 — Quant Strategy Specialists Layer (Phase 4)
  * ═══════════════════════════════════════════════════════════════════
+ *
+ *  ⚠️  THIS is the LIVE strategy layer (autoTradeEngine → AQEAEngine.decide →
+ *  LakshmiMasterRouter → QuantStrategyRegistry.evaluateAll). It is a SEPARATE
+ *  implementation from server/src/services/strategies/*.ts (Aaryan / Aayush /
+ *  Gayatri / Ohmkara / Lakshmi), which run ONLY in the backtester and the
+ *  manual recommendation endpoint. The two share names, not logic, inputs, or
+ *  outputs — do NOT assume a backtest of a name validates the live behaviour of
+ *  the same name. See services/strategies/index.ts for the other side of this.
  */
 
 import { Standardized15Features } from "../pipeline/FeaturePipeline.js";
@@ -21,14 +29,21 @@ export interface QuantExpertSignal {
 
 export class QuantStrategyRegistry {
   public static evaluateAaryan(f: Standardized15Features, regime: AnyRegime): QuantExpertSignal {
-    const maFast = f.tensorVector[8];
-    const maSlow = f.tensorVector[9];
+    // tensorVector[8]/[9] are (ema9-close)/price and (ema21-close)/price. The
+    // `>` comparison is algebraically identical to ema9 vs ema21 (the shared
+    // -close and /price cancel), so this reads as a fast/slow MA cross despite
+    // the transformed values — the names reflect that they are EMA distances.
+    const emaFastDist = f.tensorVector[8];
+    const emaSlowDist = f.tensorVector[9];
     const macdHist = f.macd.histogram;
-    const isBull = (maFast > maSlow || f.macd.momentum.includes("BULL")) && f.rsi.rsi14 >= 45 && f.rsi.rsi14 <= 75;
-    const isBear = (maFast < maSlow || f.macd.momentum.includes("BEAR")) && f.rsi.rsi14 <= 55 && f.rsi.rsi14 >= 25;
+    const isBull = (emaFastDist > emaSlowDist || f.macd.momentum.includes("BULL")) && f.rsi.rsi14 >= 45 && f.rsi.rsi14 <= 75;
+    const isBear = (emaFastDist < emaSlowDist || f.macd.momentum.includes("BEAR")) && f.rsi.rsi14 <= 55 && f.rsi.rsi14 >= 25;
 
-    let direction: "LONG" | "SHORT" | "HOLD" = isBull ? "LONG" : (isBear ? "SHORT" : "HOLD");
-    let confidence = isBull || isBear ? 0.76 : 0.40;
+    // Contradictory evidence (both true, e.g. bull MA cross but bearish MACD
+    // momentum in the 45-55 RSI overlap) or no evidence (both false) → HOLD,
+    // instead of silently defaulting to LONG on a mixed signal.
+    const direction: "LONG" | "SHORT" | "HOLD" = isBull === isBear ? "HOLD" : (isBull ? "LONG" : "SHORT");
+    const confidence = direction === "HOLD" ? 0.40 : 0.76;
     const rStr = String(regime || ""); const isTrending = rStr.includes("TRENDING") || rStr === "BREAKOUT";
 
     return {
@@ -40,7 +55,7 @@ export class QuantStrategyRegistry {
       timeHorizon: "INTRADAY",
       riskScore: isTrending ? 0.20 : 0.60,
       regimeCompatibility: isTrending ? 0.95 : 0.45,
-      meta: { maDiff: maFast - maSlow, macdHist }
+      meta: { maDiff: emaFastDist - emaSlowDist, macdHist }
     };
   }
 
@@ -69,8 +84,10 @@ export class QuantStrategyRegistry {
     const hasBullSMC = (f.smc.orderBlock || f.smc.fvg || f.smc.bos) && f.smc.structuralTrend !== "BEARISH";
     const hasBearSMC = (f.smc.orderBlock || f.smc.fvg || f.smc.choch) && f.smc.structuralTrend !== "BULLISH";
 
-    let direction: "LONG" | "SHORT" | "HOLD" = hasBullSMC ? "LONG" : (hasBearSMC ? "SHORT" : "HOLD");
-    let confidence = hasBullSMC || hasBearSMC ? 0.82 : 0.40;
+    // A NEUTRAL-structure order block / FVG satisfies BOTH sides; resolve that
+    // contradiction (and the no-signal case) to HOLD rather than forcing LONG.
+    const direction: "LONG" | "SHORT" | "HOLD" = hasBullSMC === hasBearSMC ? "HOLD" : (hasBullSMC ? "LONG" : "SHORT");
+    const confidence = direction === "HOLD" ? 0.40 : 0.82;
 
     return {
       strategyId: "SMC_INSTITUTIONAL",
@@ -86,11 +103,23 @@ export class QuantStrategyRegistry {
   }
 
   public static evaluateOrderFlow(f: Standardized15Features, regime: AnyRegime): QuantExpertSignal {
-    const isAbsorptionBuy = f.cvd.cvdScore > 10 || f.orderBook.imbalance > 0.10;
-    const isAbsorptionSell = f.cvd.cvdScore < -10 || f.orderBook.imbalance < -0.10;
+    // f.cvd.cvdNormalized is a NORMALIZED CVD persistence ratio ∈ [-1, 1]
+    // (OrderFlowEngine.cvdNormalized = EMA(net delta)/EMA(|delta|), threaded in via
+    // FeaturePipeline.orderFlow), so this fixed threshold is portable across BTC and
+    // low-volume alts — unlike the old raw-cumulative ±10 gate on f.cvd.cvdScore,
+    // whose magnitude drifted with session length and symbol volume. The ±0.25 bar
+    // means "sustained one-sided flow ≥ 25% of gross flow". f.orderBook.imbalance
+    // (∈ [-1, 1]) is the instantaneous book skew; the two OR-terms fire on either
+    // persistent CVD pressure or a strong instantaneous skew. Callers that pass no
+    // live order flow leave cvdNormalized at 0, so that term never fires and the
+    // signal reduces to the imbalance test — matching the backtest/shadow paths.
+    const isAbsorptionBuy = f.cvd.cvdNormalized > 0.25 || f.orderBook.imbalance > 0.10;
+    const isAbsorptionSell = f.cvd.cvdNormalized < -0.25 || f.orderBook.imbalance < -0.10;
 
-    let direction: "LONG" | "SHORT" | "HOLD" = isAbsorptionBuy ? "LONG" : (isAbsorptionSell ? "SHORT" : "HOLD");
-    let confidence = isAbsorptionBuy || isAbsorptionSell ? 0.75 : 0.45;
+    // Divergent flow (both true, e.g. positive CVD but negative book imbalance)
+    // or flat (both false) → HOLD, not a forced LONG.
+    const direction: "LONG" | "SHORT" | "HOLD" = isAbsorptionBuy === isAbsorptionSell ? "HOLD" : (isAbsorptionBuy ? "LONG" : "SHORT");
+    const confidence = direction === "HOLD" ? 0.45 : 0.75;
 
     return {
       strategyId: "ORDER_FLOW_CVD",
@@ -101,7 +130,7 @@ export class QuantStrategyRegistry {
       timeHorizon: "SCALP",
       riskScore: 0.22,
       regimeCompatibility: 0.90,
-      meta: { cvd: f.cvd.cvdScore, imbalance: f.orderBook.imbalance }
+      meta: { cvd: f.cvd.cvdScore, cvdNormalized: f.cvd.cvdNormalized, imbalance: f.orderBook.imbalance }
     };
   }
 
@@ -134,7 +163,7 @@ export class QuantStrategyRegistry {
       timeHorizon: "INTRADAY",
       riskScore: 0.20,
       regimeCompatibility: 0.90,
-      meta: { alignedBullish, alignedBearish, totalChecks: 24, harmonicRatio: bullRatio - bearRatio }
+      meta: { alignedBullish, alignedBearish, totalChecks, harmonicRatio: bullRatio - bearRatio }
     };
   }
 

@@ -34,13 +34,15 @@ export function computeUnrealisedPnl(trade: any, markPrice: number): number {
     ? (markPrice - entryPrice) * qty
     : (entryPrice - markPrice) * qty;
 
-  if (trade.accountType === "FUTURES") {
-    const entryFee = entryPrice * qty * TAKER_FEE;
-    const exitFee = markPrice * qty * TAKER_FEE;
-    return grossPnl - entryFee - exitFee;
-  }
-
-  return grossPnl;
+  // Fees apply to every *crypto* account type (SPOT and FUTURES), not just
+  // FUTURES — matches handleExit()'s close-time fee math (autoTradeEngine.ts).
+  // Indian accounts use a separate cost model (brokerage/STT/etc.) and have no
+  // Binance mark price, so applying the crypto taker fee here would fabricate a
+  // negative unrealised PnL on a flat position; exclude them.
+  const isCrypto = !(trade.accountType || "FUTURES").startsWith("INDIAN_");
+  const entryFee = isCrypto ? entryPrice * qty * TAKER_FEE : 0;
+  const exitFee = isCrypto ? markPrice * qty * TAKER_FEE : 0;
+  return grossPnl - entryFee - exitFee;
 }
 
 /**
@@ -71,25 +73,33 @@ export async function enrichOpenTrades(trades: any[]): Promise<any[]> {
           trade.margin = Number(margin.toFixed(2));
           trade.unrealisedPnlPct = Number(pnlPercent.toFixed(2));
 
-          console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
-            symbol: trade.symbol,
-            side: trade.side,
-            quantity: qty,
-            entryPrice,
-            markPrice,
-            leverage,
-            notional,
-            margin,
-            unrealizedPnl: trade.unrealisedPnl,
-            pnlPercent: trade.unrealisedPnlPct,
-            source: "BACKEND_PNL_SERVICE"
-          })}`);
+          if (process.env.DEBUG_TRACES === "true") {
+            console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
+              symbol: trade.symbol,
+              side: trade.side,
+              quantity: qty,
+              entryPrice,
+              markPrice,
+              leverage,
+              notional,
+              margin,
+              unrealizedPnl: trade.unrealisedPnl,
+              pnlPercent: trade.unrealisedPnlPct,
+              source: "BACKEND_PNL_SERVICE"
+            })}`);
+          }
           return;
         }
 
         const isFutures = (trade.accountType || "FUTURES") === "FUTURES";
-        let markPrice = binance.getTickerPriceSync(trade.symbol, isFutures);
-        if (!markPrice) markPrice = await binance.getTickerPrice(trade.symbol, isFutures);
+        let markPrice: number = binance.getTickerPriceSync(trade.symbol, isFutures) ?? 0;
+        if (!markPrice) {
+          try {
+            markPrice = (await binance.getTickerPrice(trade.symbol, isFutures)) ?? 0;
+          } catch {
+            markPrice = 0;
+          }
+        }
         if (!markPrice) return;
 
         const entryPrice = trade.entryPrice || trade.entry || 0;
@@ -107,19 +117,21 @@ export async function enrichOpenTrades(trades: any[]): Promise<any[]> {
         trade.margin = margin;
         trade.unrealisedPnlPct = pnlPercent;
 
-        console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
-          symbol: trade.symbol,
-          side: trade.side,
-          quantity: qty,
-          entryPrice,
-          markPrice,
-          leverage,
-          notional,
-          margin,
-          unrealizedPnl: trade.unrealisedPnl,
-          pnlPercent: trade.unrealisedPnlPct,
-          source: "BACKEND_PNL_SERVICE"
-        })}`);
+        if (process.env.DEBUG_TRACES === "true") {
+          console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
+            symbol: trade.symbol,
+            side: trade.side,
+            quantity: qty,
+            entryPrice,
+            markPrice,
+            leverage,
+            notional,
+            margin,
+            unrealizedPnl: trade.unrealisedPnl,
+            pnlPercent: trade.unrealisedPnlPct,
+            source: "BACKEND_PNL_SERVICE"
+          })}`);
+        }
       } catch (err: any) {
         console.error(`[pnlService] Failed to attach live PnL for ${trade.symbol}:`, err.message);
       }

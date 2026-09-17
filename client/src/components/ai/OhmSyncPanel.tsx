@@ -8,8 +8,11 @@
 import { useMemo } from "react";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
+import { ensureHighchartsConfigured } from "../../lib/chartSetup";
 import Card from "../../ui/Card";
 import { generateOhmWave } from "../../mock/data";
+
+ensureHighchartsConfigured();
 
 export default function OhmSyncPanel() {
   const data = useMemo(generateOhmWave, []);

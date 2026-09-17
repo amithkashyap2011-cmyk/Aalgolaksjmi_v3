@@ -12,7 +12,8 @@
 
 import type { IndicatorSnapshot, OHLC, OHLCVol } from "./indicatorService.js";
 import { computeSnapshot, StreamingVWAP, computeSupertrend } from "./indicatorService.js";
-import { buildSequenceInput, predictSequence, predictSequenceLocalAttention, predictSequenceLocalTransformer, predictSequenceLocalMamba, predictSequenceLocalxLSTM, type SequenceInput, type DLPrediction } from "./dlModelService.js";
+import { buildSequenceInput, predictSequence, predictSequenceLocalAttention, predictSequenceLocalTransformer, predictSequenceLocalMamba, predictSequenceLocalxLSTM, callQuantEngine, type SequenceInput, type DLPrediction } from "./dlModelService.js";
+import { getQuantModelHealth, quantModelMayVote, type QuantModelHealthMap, type QuantModelKey } from "./ensemble/modelHealthService.js";
 import { mambaPredictor } from "./aqea/ai/MambaPredictor.js";
 import { transformerPredictor } from "./aqea/ai/TransformerPredictor.js";
 import { buildMLFeatures, type MLFeatures, type MLPrediction } from "./mlModelService.js";
@@ -129,12 +130,21 @@ function detectMarketRegime(ind: IndicatorSnapshot, vwap: number, openInterest: 
   return { regime: "Bear", score: 0.70 + clamp(-orderBookImbalance, 0, 0.15) };
 }
 
-function computeRiskSizing(overallWin: number, expectedReturn: number, volatilityScore: number, drawdownWarning: boolean): RiskSizing {
+export function computeRiskSizing(overallWin: number, expectedReturn: number, volatilityScore: number, drawdownWarning: boolean, expectedDrawdown: number): RiskSizing {
   const baseRisk = 0.03;
   const probabilityFactor = clamp(overallWin - 0.5, 0, 0.4);
   const volatilityFactor = clamp(0.12 - volatilityScore, 0, 0.08);
   const recommendedPositionPct = clamp(baseRisk + probabilityFactor * 0.5 + volatilityFactor * 0.5, 0.01, 0.12);
-  const kellyPct = clamp((overallWin - 0.5) / Math.max(0.05, 1 - overallWin), 0.01, 0.10);
+  // Standard Kelly criterion: f* = W - (1-W)/R, where W is win probability
+  // and R is the payoff ratio (expected win size / expected loss size).
+  // The ensemble already estimates both sides of that ratio per-symbol —
+  // expectedReturn (weighted favorable move) and expectedDrawdown (weighted
+  // adverse move) — they just weren't being used for this. The previous
+  // formula, (overallWin - 0.5) / max(0.05, 1 - overallWin), doesn't match
+  // Kelly under any payoff ratio and silently dropped expectedReturn as an
+  // unused parameter, despite being labeled "Kelly Criterion" in the UI.
+  const payoffRatio = Math.max(0.05, expectedDrawdown > 0 ? expectedReturn / expectedDrawdown : 1);
+  const kellyPct = clamp(overallWin - (1 - overallWin) / payoffRatio, 0, 0.25);
   const volatilityAdjustedPct = clamp(recommendedPositionPct * (1 - volatilityScore), 0.01, 0.12);
 
   return {
@@ -205,6 +215,129 @@ function transformDLResponse(pred: any, name: string, weight: number): ModelCont
     expectedReturn,
     expectedDrawdown: clamp(0.05 + (1 - confidence) * 0.12, 0.03, 0.22),
     notes: `Signal path contribution from ${name}`,
+  };
+}
+
+/* ════════════════════════════════════════════════════════
+ *  Real trained-model wiring (quant engine)
+ * ════════════════════════════════════════════════════════ */
+
+/**
+ * Build the 12-dim institutional feature vector the CNN/LSTM quant models
+ * were trained on (same layout as CNNPredictor/LSTMPredictor):
+ * [open, high, low, close, volume, ret1, vol1, distMa, hiLow, std14, ma9, ma21].
+ */
+function buildInstitutionalVector(bars: OHLCVol[]): number[] {
+  const last = bars[bars.length - 1];
+  const prev = bars.length > 1 ? bars[bars.length - 2] : last;
+  const close = last.close;
+  const ret1 = prev.close > 0 ? close / prev.close - 1 : 0;
+  const vol = last.volume || 1;
+  const vol1 = prev.volume > 0 ? vol / prev.volume - 1 : 0;
+
+  const closes = bars.map((b) => b.close);
+  const last21 = closes.slice(-21);
+  while (last21.length < 21) last21.push(close);
+  const ma21 = last21.reduce((a, b) => a + b, 0) / 21;
+
+  const last9 = closes.slice(-9);
+  while (last9.length < 9) last9.push(close);
+  const ma9 = last9.reduce((a, b) => a + b, 0) / 9;
+
+  const distMa = ma21 > 0 ? close / ma21 - 1 : 0;
+  const hiLow = last.low > 0 ? last.high / last.low - 1 : 0;
+
+  const last14 = closes.slice(-14);
+  while (last14.length < 14) last14.push(close);
+  const m14 = last14.reduce((a, b) => a + b, 0) / 14;
+  const s14 = Math.sqrt(last14.map((x) => (x - m14) ** 2).reduce((a, b) => a + b, 0) / 14);
+  const std14 = m14 > 0 ? s14 / m14 : 0;
+
+  return [last.open, last.high, last.low, close, vol, ret1, vol1, distMa, hiLow, std14, ma9, ma21]
+    .map((v) => (Number.isFinite(v) ? v : 0));
+}
+
+/**
+ * Build a 32-dim PPO execution state vector from the ensemble context.
+ * PPO is an execution/sizing agent, not a directional model, so we only
+ * populate the regime / order-flow / market slots it uses.
+ */
+function buildPpoStateVector(ind: IndicatorSnapshot, regimeScore: number, orderBookImbalance: number, fundingRate: number, liquidityPulse: number, vwap: number): number[] {
+  const close = ind.close || 1;
+  const sv: number[] = [
+    // Regime (5)
+    regimeScore, regimeScore, 0, 0, 0,
+    // Order flow (5)
+    0, 0, 0, fundingRate * 1000, liquidityPulse,
+    // Smart money (5)
+    0, 0, 0, 0, vwap / close,
+    // CNN signal (2)
+    0, 0,
+    // Risk & context (5)
+    0, 0, 0, 0, 0,
+    // Market (5)
+    (ind.rsi14 ?? 50) / 100,
+    (ind.adx14 ?? 0) / 100,
+    (ind.atr14 ?? 0) / close,
+    (ind.macd?.histogram ?? 0) / close,
+    orderBookImbalance,
+  ];
+  while (sv.length < 32) sv.push(0);
+  return sv.slice(0, 32).map((v) => (Number.isFinite(v) ? v : 0));
+}
+
+/**
+ * Map a quant-engine classifier response ({direction, confidence, probs})
+ * into a ModelContribution using the REAL model probabilities. Directional
+ * lean is derived from the true LONG/SHORT class probabilities — no
+ * fabricated confidence.
+ */
+function classifierToContribution(
+  resp: { direction?: string; confidence?: number; probability?: number; probs?: { LONG?: number; SHORT?: number; HOLD?: number } },
+  name: string,
+  category: string,
+  weight: number,
+  notes: string,
+): ModelContribution {
+  const pLongRaw = clamp(resp.probs?.LONG ?? 0, 0, 1);
+  const pShortRaw = clamp(resp.probs?.SHORT ?? 0, 0, 1);
+  // Centre on 0.5 and lean by the real long-vs-short class-probability spread.
+  let longProbability = clamp(0.5 + (pLongRaw - pShortRaw) / 2, 0, 1);
+  if (resp.probs?.LONG === undefined && resp.probs?.SHORT === undefined) {
+    // No class breakdown — fall back to the reported direction + confidence.
+    const conf = clamp(resp.confidence ?? 0.5, 0, 1);
+    longProbability = resp.direction === "LONG" ? clamp(0.5 + conf / 2, 0, 1)
+      : resp.direction === "SHORT" ? clamp(0.5 - conf / 2, 0, 1)
+      : 0.5;
+  }
+  const confidence = clamp(resp.confidence ?? 0, 0, 1);
+  return {
+    modelName: name,
+    category,
+    weight,
+    longProbability,
+    shortProbability: clamp(1 - longProbability, 0, 1),
+    confidence,
+    expectedReturn: 0,
+    expectedDrawdown: clamp(0.05 + (1 - confidence) * 0.12, 0.03, 0.22),
+    notes,
+  };
+}
+
+/** A transparent, non-voting (weight 0) placeholder for a real model that
+ *  was gated out (DEGRADED/stub/offline). Shown in the report so the UI can
+ *  see the model was considered and why it does not contribute. */
+function gatedPlaceholder(name: string, category: string, reason: string): ModelContribution {
+  return {
+    modelName: name,
+    category,
+    weight: 0,
+    longProbability: 0.5,
+    shortProbability: 0.5,
+    confidence: 0,
+    expectedReturn: 0,
+    expectedDrawdown: 0,
+    notes: `Gated to weight 0 — ${reason}. Does not vote.`,
   };
 }
 
@@ -320,9 +453,22 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   );
 
   const activeModels = registry.getEnabledModels();
+  const enabledIds = new Set(activeModels.map((m) => m.id));
   const registryWeights = registry.getEnsembleWeights();
   const modelWeights = getRegimeAdaptiveWeights(registryWeights, regime);
   const models: ModelContribution[] = [];
+
+  // Live health gate: which quant-engine checkpoints are real+loaded right now.
+  const healthMap = await getQuantModelHealth();
+
+  /** Health-gated voting weight for a quant-engine-backed model: its registry
+   *  weight when enabled AND the backing checkpoint is HEALTHY, else 0. */
+  const gatedWeight = (registryId: string, healthKey: QuantModelKey): number => {
+    if (!enabledIds.has(registryId)) return 0;
+    const w = modelWeights[registryId] ?? 0;
+    if (w <= 0) return 0;
+    return quantModelMayVote(healthKey, healthMap) ? w : 0;
+  };
 
   // 2. Prepare Feature Vector for Research Models
   const mockFV: any = {
@@ -354,25 +500,112 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
       .catch(() => null)
   ];
 
-  const activeModelPromises: Promise<ModelContribution | null>[] = [];
-  for (const model of activeModels) {
-    const weight = modelWeights[model.id] ?? 0;
-    if (weight <= 0) continue;
+  // Feature vectors the real trained models were trained on.
+  const institutionalVec = buildInstitutionalVector(bars);
+  const ppoStateVec = buildPpoStateVector(ind, regimeScore, orderBookImbalance, fundingRate, liquidityPulse, vwap);
 
-    if (model.id === "xgboost") {
-      activeModelPromises.push(Promise.resolve(predictLocalClassical("XGBoost", mlFeatures, 0.01, fundingRate, volatilityScore, weight)));
-    } else if (model.id === "lightgbm") {
-      activeModelPromises.push(Promise.resolve(predictLocalClassical("LightGBM", mlFeatures, -0.01, fundingRate, volatilityScore, weight)));
-    } else if (model.id === "transformer") {
-      activeModelPromises.push(predictDeepModel(bars, normalizedSymbol, interval, "transformer-v1", weight).catch(() => null));
-    } else if (model.id === "xlstm") {
-      activeModelPromises.push(predictDeepModel(bars, normalizedSymbol, interval, "xlstm-v1", weight).catch(() => null));
-    } else if (model.id === "ppo-agent") {
-      activeModelPromises.push(Promise.resolve(predictReinforcementModel(regimeScore, orderBookImbalance, fundingRate, weight)));
-    } else if (model.id === "mamba-hybrid") {
-      activeModelPromises.push(predictDeepModel(bars, normalizedSymbol, interval, "mamba-hybrid", weight).catch(() => null));
+  const activeModelPromises: Promise<ModelContribution | null>[] = [];
+
+  // ── Real trained models (quant engine) — health-gated, NO heuristic substitution ──
+  // Each gets its real class probabilities when the checkpoint is HEALTHY and
+  // reachable; otherwise it is shown as a transparent weight-0 placeholder and
+  // does NOT vote (no JS heuristic is dressed up as the model).
+
+  // CNN (1-D convolutional)
+  {
+    const w = gatedWeight("cnn", "cnn");
+    if (w > 0) {
+      activeModelPromises.push(
+        callQuantEngine(AI_ENDPOINTS.CNN, {
+          symbol: normalizedSymbol,
+          features: { ohlcv: institutionalVec.slice(0, 5), indicators: institutionalVec.slice(5) },
+        })
+          .then((resp) => resp
+            ? classifierToContribution(resp, "cnn-1d", "DEEP_LEARNING", w, "Trained 1-D CNN (quant engine): real LONG/SHORT/HOLD class probabilities.")
+            : gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "quant-engine CNN endpoint unavailable"))
+          .catch(() => gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "quant-engine CNN call failed")),
+      );
+    } else if (enabledIds.has("cnn")) {
+      models.push(gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "checkpoint DEGRADED/stub/missing per /health/models"));
     }
   }
+
+  // LSTM (bi-directional)
+  {
+    const w = gatedWeight("lstm-bilstm", "lstm");
+    if (w > 0) {
+      activeModelPromises.push(
+        callQuantEngine(AI_ENDPOINTS.LSTM, { symbol: normalizedSymbol, features: institutionalVec })
+          .then((resp) => resp
+            ? classifierToContribution(resp, "lstm-bilstm", "DEEP_LEARNING", w, "Trained Bi-LSTM (quant engine): real LONG/SHORT/HOLD class probabilities.")
+            : gatedPlaceholder("lstm-bilstm", "DEEP_LEARNING", "quant-engine LSTM endpoint unavailable"))
+          .catch(() => gatedPlaceholder("lstm-bilstm", "DEEP_LEARNING", "quant-engine LSTM call failed")),
+      );
+    } else if (enabledIds.has("lstm-bilstm")) {
+      models.push(gatedPlaceholder("lstm-bilstm", "DEEP_LEARNING", "checkpoint DEGRADED/stub/missing per /health/models"));
+    }
+  }
+
+  // PPO (execution/sizing agent — non-directional by design)
+  {
+    const w = gatedWeight("ppo-agent", "ppo");
+    if (w > 0) {
+      activeModelPromises.push(
+        callQuantEngine(AI_ENDPOINTS.PPO, { symbol: normalizedSymbol, state_vector: ppoStateVec })
+          .then((resp) => {
+            if (!resp) return gatedPlaceholder("ppo-execution", "REINFORCEMENT", "quant-engine PPO endpoint unavailable");
+            const confidence = clamp(resp.confidence ?? 0, 0, 1);
+            return {
+              modelName: "ppo-execution",
+              category: "REINFORCEMENT",
+              weight: w,
+              // PPO's action space is sizing/veto/exit — it has no LONG/SHORT
+              // content, so it contributes real confidence with a neutral
+              // directional lean rather than a fabricated direction.
+              longProbability: 0.5,
+              shortProbability: 0.5,
+              confidence,
+              expectedReturn: 0,
+              expectedDrawdown: clamp(0.05 + (1 - confidence) * 0.12, 0.03, 0.22),
+              notes: `Trained PPO execution agent (quant engine): action=${resp.action ?? "UNKNOWN"}. Sizing/veto agent — non-directional (neutral 0.5/0.5 by design).`,
+            } as ModelContribution;
+          })
+          .catch(() => gatedPlaceholder("ppo-execution", "REINFORCEMENT", "quant-engine PPO call failed")),
+      );
+    } else if (enabledIds.has("ppo-agent")) {
+      models.push(gatedPlaceholder("ppo-execution", "REINFORCEMENT", "checkpoint DEGRADED/stub/missing per /health/models"));
+    }
+  }
+
+  // Transformer micro (real quant model; a KNOWN stub per prior audits → gated in practice)
+  {
+    const w = gatedWeight("transformer", "transformer");
+    if (w > 0) {
+      const seqInput = buildSequenceInput(normalizedSymbol, interval, bars as OHLC[], Math.min(80, bars.length));
+      activeModelPromises.push(
+        predictSequence(seqInput, AI_ENDPOINTS.TRANSFORMER)
+          .then((pred) => {
+            // predictSequence falls back to a local JS heuristic on any error —
+            // never surface that as the real transformer; zero it out instead.
+            if (!pred || /^(local-|stub-)/.test(pred.modelName)) {
+              return gatedPlaceholder("transformer-micro", "DEEP_LEARNING", "quant-engine transformer returned a local fallback");
+            }
+            const c = transformDLResponse(pred, "transformer-micro", w);
+            return { ...c, notes: "Trained Transformer micro (quant engine): attention-based sequence prediction." };
+          })
+          .catch(() => gatedPlaceholder("transformer-micro", "DEEP_LEARNING", "quant-engine transformer call failed")),
+      );
+    } else if (enabledIds.has("transformer")) {
+      models.push(gatedPlaceholder("transformer-micro", "DEEP_LEARNING", "checkpoint DEGRADED/stub/missing per /health/models"));
+    }
+  }
+
+  // ── Heuristic fallback voters (NOT trained models) — always present, low weight ──
+  // These keep the ensemble producing a signal when every real model is gated
+  // out/offline, but are honestly labeled and can never dominate a real model.
+  const HEURISTIC_FALLBACK_WEIGHT = 0.04;
+  models.push(predictHeuristicTabular(mlFeatures, 0.01, fundingRate, volatilityScore, HEURISTIC_FALLBACK_WEIGHT));
+  models.push(predictHeuristicRL(regimeScore, orderBookImbalance, fundingRate, HEURISTIC_FALLBACK_WEIGHT));
 
   const selfLearningPromise = selfLearning.summarize(userId).catch(() => ({
     retrainWeekly: false,
@@ -395,9 +628,11 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
     if (r) models.push(r);
   }
 
-  // Fall back when no *weighted* model contributed
+  // Safety net: the heuristic fallback voters above always carry weight, so a
+  // zero-weight ensemble should never happen — but if it somehow does, add one
+  // honestly-labeled heuristic voter rather than a fake named model.
   if (!models.some((m) => m.weight > 0)) {
-    models.push(predictLocalClassical("XGBoost", mlFeatures, 0.01, fundingRate, volatilityScore, 1.0));
+    models.push(predictHeuristicTabular(mlFeatures, 0.01, fundingRate, volatilityScore, 1.0));
   }
 
   const totalWeight = models.reduce((sum, m) => sum + m.weight, 0) || 1;
@@ -415,7 +650,7 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
       : longProbability > shortProbability ? "LONG" : "SHORT";
 
   const maxWinProb = Math.max(longProbability, shortProbability);
-  const riskSizing = computeRiskSizing(maxWinProb, Math.abs(expectedReturn), volatilityScore, drawdownWarning);
+  const riskSizing = computeRiskSizing(maxWinProb, Math.abs(expectedReturn), volatilityScore, drawdownWarning, expectedDrawdown);
 
   const reportResult: EnsembleReport = {
     symbol: normalizedSymbol,
@@ -447,18 +682,25 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   return reportResult;
 }
 
-function predictLocalClassical(name: string, features: MLFeatures, seed: number, fundingRate: number, volatilityScore: number, weight: number): ModelContribution {
+/**
+ * Hand-written tabular heuristic. This is NOT a trained gradient-boosting
+ * model — there is no XGBoost/LightGBM checkpoint in this system. It is a
+ * deterministic formula over indicators + behaviour weights, kept only as a
+ * clearly-labeled low-weight fallback voter so the ensemble still produces a
+ * signal when every real quant-engine model is offline or gated out.
+ */
+function predictHeuristicTabular(features: MLFeatures, seed: number, fundingRate: number, volatilityScore: number, weight: number): ModelContribution {
   const score = classicalModelScore(features, seed);
   const expectedReturn = classicalExpectedReturn(score, volatilityScore, fundingRate);
   const confidence = clamp(0.55 + Math.abs(score - 0.5) * 0.40, 0.25, 0.92);
   return buildModelContribution({
-    name,
-    category: "CLASSICAL_ML",
+    name: "heuristic-tabular",
+    category: "HEURISTIC",
     weight,
     score,
     confidence,
     expectedReturn,
-    notes: `${name} proxy modeled from indicator fusion and weight patterns`,
+    notes: "Heuristic fallback (NOT a trained model): deterministic tabular formula over indicators + behaviour weights. Low-weight voter used when real quant-engine models are unavailable.",
   });
 }
 
@@ -513,18 +755,24 @@ async function predictDeepModel(bars: OHLCVol[], symbol: string, interval: strin
   };
 }
 
-function predictReinforcementModel(regimeScore: number, orderBookImbalance: number, fundingRate: number, weight: number): ModelContribution {
+/**
+ * Hand-written RL-flavoured heuristic. This is NOT the trained PPO agent
+ * (that is wired separately via the real /predict/ppo-execution endpoint).
+ * It is a deterministic formula over regime + order-book + funding, kept
+ * only as a clearly-labeled low-weight fallback voter.
+ */
+function predictHeuristicRL(regimeScore: number, orderBookImbalance: number, fundingRate: number, weight: number): ModelContribution {
   const score = reinforcementAgentScore(regimeScore, orderBookImbalance, fundingRate);
   const expectedReturn = clamp((score - 0.5) * 0.03, -0.03, 0.05);
   const confidence = clamp(0.45 + Math.abs(score - 0.5) * 0.50, 0.25, 0.88);
   return buildModelContribution({
-    name: "PPO-Agent",
-    category: "REINFORCEMENT",
+    name: "heuristic-rl",
+    category: "HEURISTIC",
     weight,
     score,
     confidence,
     expectedReturn,
-    notes: "Execution-aware RL signal layer using market microstructure cues.",
+    notes: "Heuristic fallback (NOT a trained model): deterministic formula over regime/order-book/funding cues. Low-weight voter used when real quant-engine models are unavailable.",
   });
 }
 

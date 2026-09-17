@@ -11,6 +11,7 @@
 import { Settings, type ISettings } from "../models/Settings.js";
 import { Trade } from "../models/Trade.js";
 import { Alert } from "../models/Alert.js";
+import { safeCreateAlert } from "./alertService.js";
 import { ApiKeys } from "../models/ApiKeys.js";
 import { decrypt } from "../lib/crypto.js";
 import mongoose from "mongoose";
@@ -23,6 +24,7 @@ import { AnalyticsCache } from "./analyticsCache.js";
 import { PlatformTelemetry } from "./platformTelemetry.js";
 import { UITelemetryService } from "./uiTelemetry.js";
 import { toValidObjectId } from "../utils/mongoUtils.js";
+import { getTradingControlStatus } from "./tradingControlStatus.js";
 
 /* ── V8.0 Institutional Imports ───────────────────────── */
 import { TradeQualityEngine } from "./tradeQualityEngine.js";
@@ -30,6 +32,7 @@ import { RegimeDetectionEngine } from "./regimeDetectionEngine.js";
 import { AdaptiveRiskEngine } from "./adaptiveRiskEngine.js";
 import { PortfolioHeatEngine } from "./portfolioHeatEngine.js";
 import { BayesianProbabilityEngine } from "./aqea/bayesianPredictor.js";
+import { AdaptiveBayesianGate } from "./aqea/bayesian/AdaptiveBayesianGate.js";
 import { weatherIntelligenceEngine } from "./weatherIntelligenceEngine.js";
 
 /* ── AQEA Imports ─────────────────────────────────────── */
@@ -49,16 +52,7 @@ import { LiveExecutionBarrier } from "./aqea/governance/LiveExecutionBarrier.js"
 import { SchedulerAccounting } from "./aqea/dataProvenance.js";
 import { ForwardTelemetryStore } from "./aqea/ensemble/ForwardTelemetryStore.js";
 import { AgentKernel } from "../kernel/AgentKernel.js";
-
-async function safeCreateAlert(data: { userId: any; severity: "GREEN" | "AMBER" | "RED"; symbol: string; title: string; message: string }) {
-  try {
-    if (mongoose.connection.readyState !== 1) return;
-    const validUserId = toValidObjectId(data.userId);
-    Alert.create({ ...data, userId: validUserId }).catch(err => console.warn("[Alert] Failed to save alert:", err));
-  } catch (err) {
-    console.warn("[Alert] Failed to save alert:", err);
-  }
-}
+import { MarketIsolationGuard } from "./market/MarketIsolationGuard.js";
 
 /* ── State ────────────────────────────────────────────── */
 
@@ -256,7 +250,9 @@ async function tick(): Promise<void> {
   const tickId = ++globalTickSequence;
   SchedulerAccounting.recordTickScheduled();
   SchedulerAccounting.recordTickStarted(tickId);
-  console.log(`[TRACE] TICK_START tickId=${tickId} activeUsers=${autoEnabledUsers.size}`);
+  if (process.env.DEBUG_TRACES === "true") {
+    console.log(`[TRACE] TICK_START tickId=${tickId} activeUsers=${autoEnabledUsers.size}`);
+  }
 
   const tickExecution = async () => {
     // Weather Intelligence Engine Update (V1.0)
@@ -286,7 +282,9 @@ async function tick(): Promise<void> {
     for (const key of autoEnabledUsers) {
       const { userId, accountType } = parseScanKey(key);
       try {
-        console.log(`[TRACE] TICK_USER user=${userId} accountType=${accountType}`);
+        if (process.env.DEBUG_TRACES === "true") {
+          console.log(`[TRACE] TICK_USER user=${userId} accountType=${accountType}`);
+        }
         await processUser(userId, accountType);
       } catch (err) {
         console.error(`[auto] error for user ${userId} (${accountType}):`, err);
@@ -296,7 +294,7 @@ async function tick(): Promise<void> {
 
   try {
     const globalTimeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Global tick exceeded 45000ms limit")), 45000)
+      setTimeout(() => reject(new Error("Global tick exceeded 55000ms limit")), 55000)
     );
     await Promise.race([tickExecution(), globalTimeout]);
     SchedulerAccounting.recordTickCompleted(tickId, Date.now() - start);
@@ -304,13 +302,17 @@ async function tick(): Promise<void> {
     const isTimeout = err?.message?.includes("Global tick exceeded");
     if (isTimeout) {
       SchedulerAccounting.recordTickTimedOut(tickId);
+      // Clean active processing keys so future ticks are not permanently blocked by aborted execution
+      activeProcessingKeys.clear();
     } else {
       SchedulerAccounting.recordTickErrored(tickId, err?.message || String(err));
     }
     console.error(`[auto] Tick ${tickId} aborted/timed out:`, err?.message || err);
   } finally {
     PlatformTelemetry.recordLatency("tickLatencyMs", Date.now() - start);
-    console.log(`[TRACE] TICK_END tickId=${tickId} latency=${Date.now() - start}ms`);
+    if (process.env.DEBUG_TRACES === "true") {
+      console.log(`[TRACE] TICK_END tickId=${tickId} latency=${Date.now() - start}ms`);
+    }
   }
 }
 
@@ -331,7 +333,9 @@ export async function processUser(userId: string, accountTypeArg?: "SPOT" | "FUT
 }
 
 async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FUTURES"): Promise<void> {
-  console.log(`[TRACE] PROCESS_USER user=${userId}`);
+  if (process.env.DEBUG_TRACES === "true") {
+    console.log(`[TRACE] PROCESS_USER user=${userId}`);
+  }
   if (!userId) {
     console.log(`[PROCESS_USER_EXIT] EMPTY_USER_ID user=${userId}`);
     return;
@@ -370,10 +374,8 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
 
   const mode = settings.defaultMode === "BACKTEST" ? "PAPER" : settings.defaultMode as "PAPER" | "LIVE";
 
-  // Ensure simulated paper capital is available for genuine paper order execution
-  if (mode === "PAPER") {
-    await paper.ensurePaperWalletFunded(userId, mode, accountType, 10000);
-  }
+  // Simulated paper capital: User manages deposits via wallet UI or API
+  // A zero balance proceeds with telemetry accumulation without executing live orders
 
   // Separate Decision Capital Availability from Forward Evidence Collection.
   // In PAPER mode, or for AQEA autonomous forward evidence accumulation, a zero balance
@@ -397,7 +399,9 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
     console.log(`[auto] User ${userId} has $0.00 balance in PAPER ${accountType}. Proceeding with AQEA autonomous decision evaluation and forward telemetry accumulation.`);
   }
 
-  console.log(`[TRACE] PROCESS_USER_SYMBOLS count=${settings.allowedSymbols.length} mode=${mode} heat=${currentHeat.toFixed(1)}%`);
+  if (process.env.DEBUG_TRACES === "true") {
+    console.log(`[TRACE] PROCESS_USER_SYMBOLS count=${settings.allowedSymbols.length} mode=${mode} heat=${currentHeat.toFixed(1)}%`);
+  }
 
   // Bounded parallel symbol evaluation (max 4 concurrent symbols to prevent inference socket saturation)
   const MAX_CONCURRENT_SYMBOLS = 4;
@@ -405,19 +409,23 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
   for (let i = 0; i < symbols.length; i += MAX_CONCURRENT_SYMBOLS) {
     const chunk = symbols.slice(i, i + MAX_CONCURRENT_SYMBOLS);
     const chunkTasks = chunk.map(async (symbol) => {
-      console.log(`[PROCESS_SYMBOL] ${symbol} entered.`);
+      if (process.env.DEBUG_TRACES === "true") {
+        console.log(`[PROCESS_SYMBOL] ${symbol} entered.`);
+      }
       const symStart = Date.now();
       let timeoutId: NodeJS.Timeout | null = null;
       try {
         const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error(`Timeout evaluating symbol ${symbol} after 25000ms`)), 25000);
+          timeoutId = setTimeout(() => reject(new Error(`Timeout evaluating symbol ${symbol} after 35000ms`)), 35000);
         });
         await Promise.race([
           processSymbol(userId, symbol, mode, accountType, settings, currentHeat, balance),
           timeoutPromise
         ]);
         if (timeoutId) clearTimeout(timeoutId);
-        console.log(`[auto] [SYMBOL_TERMINAL] symbol=${symbol} state=EVALUATED latency=${Date.now() - symStart}ms`);
+        if (process.env.DEBUG_TRACES === "true") {
+          console.log(`[auto] [SYMBOL_TERMINAL] symbol=${symbol} state=EVALUATED latency=${Date.now() - symStart}ms`);
+        }
       } catch (symErr: any) {
         if (timeoutId) clearTimeout(timeoutId);
         const isTimeout = symErr?.message?.includes("Timeout evaluating");
@@ -474,6 +482,13 @@ async function processSymbol(
   portfolioHeat: number = 0,
   balance: number = 0,
 ): Promise<void> {
+  // 🛡️ DUAL-MARKET ISOLATION GUARD — Section 6, 14, 55 Invariant
+  // Prevent any Indian symbols from accidentally entering Crypto AutoTradeEngine execution pipeline
+  if (MarketIsolationGuard.resolveDomainFromSymbol(symbol) !== "CRYPTO") {
+    console.warn(`[autoTradeEngine] [MARKET_ISOLATION] Non-crypto symbol ${symbol} rejected from crypto auto-trading loop.`);
+    return;
+  }
+
   // 🛡️ AQEA AGENT KERNEL — Control Mode Invariant Enforcement
   const kernelMode = AgentKernel.getInstance().getControlMode();
   if (kernelMode === "SAFE") {
@@ -525,7 +540,9 @@ async function processSymbol(
     }
   });
   const tDecide = Date.now() - t2;
-  console.log(`[PROCESS_SYMBOL_PROFILE] symbol=${symbol} tContext=${tContext}ms tPerf=${tPerf}ms tDecide=${tDecide}ms decision=${aqeaDecision.decision}`);
+  if (process.env.DEBUG_TRACES === "true") {
+    console.log(`[PROCESS_SYMBOL_PROFILE] symbol=${symbol} tContext=${tContext}ms tPerf=${tPerf}ms tDecide=${tDecide}ms decision=${aqeaDecision.decision}`);
+  }
 
   // Emit real-time decision for dashboard
   UITelemetryService.emitDecision(userId, symbol, aqeaDecision);
@@ -656,6 +673,18 @@ async function processSymbol(
   );
   const posteriorWinProb = bayesTrace.posterior;
 
+  // Persist the 5 evidence scalars so the exit path can feed the realized
+  // outcome back into the calibrated Bayesian model (BayesianProbabilityEngine.recordOutcome).
+  if (aqeaDecision.meta) {
+    (aqeaDecision.meta as any).bayesEvidence = {
+      qualityScore: quality.score,
+      aiConfidence: aqeaDecision.confidence,
+      adxTrendStrength: adxVal,
+      htfConsensus: htfAlignedWithDirection,
+      smartMoneyScore,
+    };
+  }
+
   console.log(`[P6_BAYES_TRACE] ` + JSON.stringify({
     decisionId: decisionId || "UNKNOWN",
     symbol,
@@ -779,7 +808,18 @@ async function processSymbol(
   if (aqeaDecision.decision === "LONG") {
     await handleLong(userId, symbol, mode, accountType, settings, aqeaDecision, riskProfile);
   } else if (aqeaDecision.decision === "SHORT") {
-    await handleShort(userId, symbol, mode, accountType, settings, aqeaDecision, riskProfile);
+    // BUGFIX(spot-short-guard): SPOT accounts cannot hold a short — a LIVE SPOT short
+    // would issue a naked market SELL of an unowned asset. Block it here and treat as
+    // NO_TRADE; only FUTURES may open a short. (handleShort() also self-guards.)
+    if (accountType === "SPOT") {
+      console.log(`[HANDLE_SHORT_SKIP] accountType=SPOT cannot short ${symbol} — treating as NO_TRADE`);
+      const shortDecisionId = aqeaDecision.meta?.decisionId;
+      if (shortDecisionId) {
+        ForwardTelemetryStore.updateTerminalState(shortDecisionId, "NO_TRADE", "SHORT blocked on SPOT account (spot can only go long)", "NO_TRADE");
+      }
+    } else {
+      await handleShort(userId, symbol, mode, accountType, settings, aqeaDecision, riskProfile);
+    }
   }
   
   /* 6. EXIT MONITORING (V4.0 Dynamic AI Position Management) */
@@ -803,12 +843,15 @@ async function processSymbol(
       if (isSlBreached || pnlPct < -2.0 || unrealizedPnl < maxLossThreshold) {
         const exitReason = isSlBreached ? "STOP_LOSS_HIT" : "DYNAMIC_DRAWDOWN_CUT";
         console.error(`[DRAWDOWN_CUT] symbol=${symbol} PnLPct=${pnlPct.toFixed(2)}% unrealizedPnl=${unrealizedPnl.toFixed(2)}USDT reason=${exitReason}`);
-        await handleExit(userId, symbol, mode, accountType, exitReason);
+        await handleExit(userId, symbol, mode, accountType, exitReason, 1.0, currentPrice);
         return;
       }
 
       // 🛡️ V40 FIX: Max Hold Time Guard (4 hours in ranging/loss, 6 hours max hard ceiling)
-      const tradeRecord = await Trade.findById(pos.tradeId).lean() as any;
+      // Fetched once (non-lean) and reused below for AutoCloseEngine.check, which needs
+      // the full Mongoose document — this used to be fetched a second time by tradeId
+      // just a few lines down.
+      const tradeRecord = await Trade.findById(pos.tradeId) as any;
       if (tradeRecord?.openedAt) {
         const holdMs = Date.now() - new Date(tradeRecord.openedAt).getTime();
         const holdHours = holdMs / 3600000;
@@ -816,13 +859,13 @@ async function processSymbol(
         // 🛡️ Stagnant Loss Guard: Cut losing/stagnant trades after 4 hours if no TP hit
         if (holdHours > 4 && (!anyTpHit || unrealizedPnl <= 0)) {
           console.warn(`[STAGNANT_LOSS_GUARD] Cutting stagnant trade symbol=${symbol} holdHours=${holdHours.toFixed(1)} unrealizedPnl=${unrealizedPnl.toFixed(2)}`);
-          await handleExit(userId, symbol, mode, accountType, "STAGNANT_LOSS_EXPIRE_4H");
+          await handleExit(userId, symbol, mode, accountType, "STAGNANT_LOSS_EXPIRE_4H", 1.0, currentPrice);
           return;
         }
 
         if (holdHours > 6 && !anyTpHit) {
           console.error(`[V40_CIRCUIT_BREAKER] MAX_HOLD_TIME symbol=${symbol} holdHours=${holdHours.toFixed(1)}`);
-          await handleExit(userId, symbol, mode, accountType, "V40_MAX_HOLD_TIME_6H");
+          await handleExit(userId, symbol, mode, accountType, "V40_MAX_HOLD_TIME_6H", 1.0, currentPrice);
           return;
         }
       }
@@ -841,7 +884,7 @@ async function processSymbol(
            const lastBar = ctx.bars[ctx.bars.length - 1];
            const prevBar = ctx.bars.length >= 2 ? ctx.bars[ctx.bars.length - 2] : lastBar;
            const barPriceChange = prevBar?.close ? (lastBar.close - prevBar.close) / prevBar.close : 0;
-           autoCloseTrigger = AutoCloseEngine.check(await Trade.findById(pos.tradeId) as any, {
+           autoCloseTrigger = AutoCloseEngine.check(tradeRecord, {
               price: ctx.ind.close,
               regime,
               sentiment: { fearGreed: 50 },
@@ -855,7 +898,7 @@ async function processSymbol(
 
       if (autoCloseTrigger.triggered) {
           if (autoCloseTrigger.action === "CLOSE") {
-             await handleExit(userId, symbol, mode, accountType, autoCloseTrigger.reason);
+             await handleExit(userId, symbol, mode, accountType, autoCloseTrigger.reason, 1.0, ctx.ind.close);
              return;
           } else if (autoCloseTrigger.action === "MOVE_SL_TO_BE") {
              pos.sl = pos.entryPrice;
@@ -892,10 +935,10 @@ async function processSymbol(
       );
 
       if (managementSignal.action === "CLOSE_FULL" && !isFreshPosition) {
-          await handleExit(userId, symbol, mode, accountType, managementSignal.reason);
+          await handleExit(userId, symbol, mode, accountType, managementSignal.reason, 1.0, ctx.ind.close);
           return;
       } else if (managementSignal.action === "CLOSE_PARTIAL" && !isFreshPosition) {
-          await handleExit(userId, symbol, mode, accountType, managementSignal.reason, managementSignal.qtyPct);
+          await handleExit(userId, symbol, mode, accountType, managementSignal.reason, managementSignal.qtyPct, ctx.ind.close);
           return;
       } else if (managementSignal.action === "MODIFY_STOP" && managementSignal.newStopLoss) {
           pos.sl = managementSignal.newStopLoss;
@@ -922,7 +965,7 @@ async function processSymbol(
 
       if (exitSignal.shouldExit) {
           if (exitSignal.type === "PARTIAL") {
-              await handleExit(userId, symbol, mode, accountType, exitSignal.reason, exitSignal.qtyPct);
+              await handleExit(userId, symbol, mode, accountType, exitSignal.reason, exitSignal.qtyPct, ctx.ind.close);
               const rem = paper.getPosition(userId, symbol, mode, accountType);
               if (rem) {
                   const newSl = exitSignal.newStopLoss ?? rem.sl;
@@ -930,12 +973,24 @@ async function processSymbol(
                   if (exitSignal.reason === "TP2_HIT") {
                       const atr = ctx.ind.atr14 || ctx.ind.close * 0.01;
                       const isLong = rem.side === "BUY";
-                      updMeta.trailingStop = ExitEngine.calculateTrailingStop(
+                      // BUGFIX(trailing-stop): IndicatorSnapshot exposes no `ema20`
+                      // (only ema9/ema21/ema55), so `(ctx.ind as any).ema20 ?? close`
+                      // was ALWAYS `close`. calculateTrailingStop() returns Math.max
+                      // (long) of its inputs, so feeding it `close` planted the trail
+                      // AT the current price → the runner was force-closed on the very
+                      // next tick. Use a real EMA, then clamp so the trail always keeps
+                      // a >=1-ATR buffer from price (below for long / above for short).
+                      const emaTrail = ctx.ind.ema21 ?? ctx.ind.ema9 ?? ctx.ind.close;
+                      let trail = ExitEngine.calculateTrailingStop(
                           rem.entryPrice + (isLong ? atr : -atr),
-                          (ctx.ind as any).ema20 ?? ctx.ind.close,
+                          emaTrail,
                           ctx.ind.close - (isLong ? atr : -atr),
                           isLong
                       );
+                      trail = isLong
+                          ? Math.min(trail, ctx.ind.close - atr)   // long: hold >=1 ATR below price
+                          : Math.max(trail, ctx.ind.close + atr);  // short: hold >=1 ATR above price
+                      updMeta.trailingStop = trail;
                   }
                   paper.setPosition(userId, symbol, mode, { ...rem, sl: newSl, meta: updMeta });
                   if (exitSignal.newStopLoss) {
@@ -943,7 +998,24 @@ async function processSymbol(
                   }
               }
           } else {
-              await handleExit(userId, symbol, mode, accountType, exitSignal.reason, 1.0);
+              await handleExit(userId, symbol, mode, accountType, exitSignal.reason, 1.0, ctx.ind.close);
+          }
+      } else if (exitSignal.newStopLoss != null) {
+          // BUGFIX(breakeven-ratchet): a non-exit signal (e.g. BREAKEVEN_ELEVATION)
+          // can still carry a newStopLoss to tighten protection. Previously the stop
+          // was only ever applied inside `if (shouldExit)`, so this value was computed
+          // in ExitEngine then silently discarded and the winning move could still
+          // round-trip to a loss. Ratchet the in-memory + persisted stop, but ONLY in
+          // the favorable direction (never loosen: raise SL for a long, lower it for a
+          // short).
+          const isLong = pos.side === "BUY";
+          const proposed = exitSignal.newStopLoss;
+          const curSl = typeof pos.sl === "number" ? pos.sl : (isLong ? -Infinity : Infinity);
+          const improves = isLong ? proposed > curSl : proposed < curSl;
+          if (improves) {
+              pos.sl = proposed;
+              paper.setPosition(userId, symbol, mode, pos);
+              await Trade.findByIdAndUpdate(pos.tradeId, { sl: proposed });
           }
       }
   }
@@ -951,7 +1023,7 @@ async function processSymbol(
 
 /* ── LONG handler ─────────────────────────────────────── */
 
-async function handleLong(
+export async function handleLong(
   userId: string,
   symbol: string,
   mode: "PAPER" | "LIVE",
@@ -961,6 +1033,18 @@ async function handleLong(
   riskProfile: any
 ): Promise<void> {
   console.log(`[HANDLE_LONG_START] symbol=${symbol}`);
+  // Emergency-stop check — the autonomous loop must respect the same
+  // kill switch a manual /place-order call does. Exits (handleExit) are
+  // deliberately NOT gated by this, so a killed/paused system can still
+  // reduce risk.
+  if (getTradingControlStatus() !== "RUNNING") {
+    console.log(`[HANDLE_LONG_SKIP] trading control status is ${getTradingControlStatus()} — skipping new entry for ${symbol}`);
+    return;
+  }
+  if (settings.shadowMode) {
+    console.log(`[HANDLE_LONG_SKIP] shadowMode is ON — logging decision only, no position opened for ${symbol}`);
+    return;
+  }
   const decisionId = aqeaDecision.meta?.decisionId;
   const dbExisting = await Trade.findOne({
     userId: toValidObjectId(userId),
@@ -1030,6 +1114,8 @@ async function handleLong(
     regime: decisionPath.regime,
     // TA-fallback trades (AI engine offline) are not attributable to any AI model.
     aiAttributable: !decisionPath.aiModelsOffline,
+    // Evidence for the calibrated Bayesian model — read on close by recordOutcome.
+    bayesEvidence: (aqeaDecision.meta as any)?.bayesEvidence,
     decisionPath
   };
 
@@ -1182,7 +1268,7 @@ async function handleLong(
 
 /* ── SHORT handler ────────────────────────────────────── */
 
-async function handleShort(
+export async function handleShort(
   userId: string,
   symbol: string,
   mode: "PAPER" | "LIVE",
@@ -1192,6 +1278,21 @@ async function handleShort(
   riskProfile: any
 ): Promise<void> {
   console.log(`[HANDLE_SHORT_START] symbol=${symbol}`);
+  if (getTradingControlStatus() !== "RUNNING") {
+    console.log(`[HANDLE_SHORT_SKIP] trading control status is ${getTradingControlStatus()} — skipping new entry for ${symbol}`);
+    return;
+  }
+  if (settings.shadowMode) {
+    console.log(`[HANDLE_SHORT_SKIP] shadowMode is ON — logging decision only, no position opened for ${symbol}`);
+    return;
+  }
+  // BUGFIX(spot-short-guard): hard safety net — SPOT can only go long. Never let a
+  // SPOT short reach the LIVE naked market SELL path, regardless of caller. Primary
+  // guard is at the processSymbol dispatch; this backstops any direct caller.
+  if (accountType === "SPOT") {
+    console.log(`[HANDLE_SHORT_SKIP] accountType=SPOT cannot short ${symbol} — spot can only go long`);
+    return;
+  }
   const decisionId = aqeaDecision.meta?.decisionId;
   const dbExisting = await Trade.findOne({
     userId: toValidObjectId(userId),
@@ -1260,6 +1361,8 @@ async function handleShort(
     regime: decisionPath.regime,
     // TA-fallback trades (AI engine offline) are not attributable to any AI model.
     aiAttributable: !decisionPath.aiModelsOffline,
+    // Evidence for the calibrated Bayesian model — read on close by recordOutcome.
+    bayesEvidence: (aqeaDecision.meta as any)?.bayesEvidence,
     decisionPath
   };
 
@@ -1412,13 +1515,14 @@ async function handleShort(
 
 /* ── EXIT handler ─────────────────────────────────────── */
 
-async function handleExit(
+export async function handleExit(
   userId: string,
   symbol: string,
   mode: "PAPER" | "LIVE",
   accountType: string = "FUTURES",
   reason: string = "MANUAL",
-  qtyPct: number = 1.0
+  qtyPct: number = 1.0,
+  triggerPrice?: number
 ): Promise<void> {
   const pos = paper.getPosition(userId, symbol, mode, accountType);
   if (!pos) return;
@@ -1467,9 +1571,19 @@ async function handleExit(
 
   const isPartial = closeQty < pos.quantity - 1e-9;
 
+  // Root cause of exits that booked a loss despite a favorable exitReason
+  // (e.g. "TP3_HIT" closing at a net loss): the exit *decision* is made on
+  // ctx.ind.close (last closed 5m candle, up to ~5min stale), but this
+  // function used to independently re-fetch a fresh 1m kline moments later
+  // to price the fill — a different interval fetched at a different time,
+  // which can (and did) show a materially different, even reversed, price
+  // in a fast-moving market. For PAPER mode there's no real fill to honor,
+  // so book the exit at the exact price that triggered it. LIVE mode is
+  // unaffected — it always prices off the real broker fill (liveExitPrice).
   const liveExitPrice = (pos.meta as any)?.liveExitPrice;
-  const klines = liveExitPrice ? [] : await binance.getKlines(symbol, "1m", undefined, undefined, 1);
-  const exitPrice = liveExitPrice || (klines.length ? parseFloat(klines[0].close) : pos.entryPrice);
+  const usePriceFallbackFetch = !liveExitPrice && !Number.isFinite(triggerPrice);
+  const klines = usePriceFallbackFetch ? await binance.getKlines(symbol, "1m", undefined, undefined, 1) : [];
+  const exitPrice = liveExitPrice || (Number.isFinite(triggerPrice) ? triggerPrice! : (klines.length ? parseFloat(klines[0].close) : pos.entryPrice));
   const entryNotional = pos.entryPrice * closeQty;
   const exitNotional = exitPrice * closeQty;
   const entryFee = entryNotional * TAKER_FEE;
@@ -1493,15 +1607,30 @@ async function handleExit(
     if (reason === "TP2_HIT") updatedMeta.tp2Hit = true;
     updatedMeta.partialPnl = ((updatedMeta.partialPnl as number) || 0) + safeNetPnl;
 
-    paper.setPosition(userId, symbol, mode, { ...pos, quantity: pos.quantity - closeQty, meta: updatedMeta });
-    await Trade.findByIdAndUpdate(pos.tradeId, { meta: updatedMeta });
+    // BUGFIX(partial-fill double-release): persist the REDUCED remaining quantity
+    // (and preserve the original size via meta/origQty), not just meta. Previously
+    // Trade.quantity stayed at the full amount, so on restart hydrate() restored the
+    // full position and the already-released partial margin/PnL was released a SECOND
+    // time on the eventual final close. Downstream full-close accounting reads the
+    // in-memory pos.quantity, which we keep in sync here, so the base qty stays correct.
+    const remainingQty = pos.quantity - closeQty;
+    const origQty = (existingTrade as any)?.origQty ?? (existingTrade as any)?.quantity ?? pos.quantity;
+    updatedMeta.origQty = origQty;
+    paper.setPosition(userId, symbol, mode, { ...pos, quantity: remainingQty, meta: updatedMeta });
+    await Trade.findByIdAndUpdate(pos.tradeId, { quantity: remainingQty, origQty, meta: updatedMeta });
 
     if (mode === "PAPER") {
-      const wallet = paper.getWallet(userId, mode, accountType);
-      const usdt = wallet.get("USDT") ?? 0;
-      const partialMargin = (closeQty * pos.entryPrice) / (pos.leverage || 1);
-      const newBalance = usdt + (Number.isFinite(partialMargin) ? partialMargin : 0) + safeNetPnl;
-      if (Number.isFinite(newBalance)) paper.setWalletBalance(userId, mode, "USDT", newBalance, accountType);
+      // BUGFIX: was an unlocked read-modify-write racing against any other
+      // concurrent wallet mutation for this key (a manual leverage change,
+      // another partial/full exit), and the write itself was missing its
+      // `await` (fire-and-forget on an async call).
+      await paper.withWalletLock(userId, mode, accountType, async () => {
+        const wallet = paper.getWallet(userId, mode, accountType);
+        const usdt = wallet.get("USDT") ?? 0;
+        const partialMargin = (closeQty * pos.entryPrice) / (pos.leverage || 1);
+        const newBalance = usdt + (Number.isFinite(partialMargin) ? partialMargin : 0) + safeNetPnl;
+        if (Number.isFinite(newBalance)) await paper.setWalletBalance(userId, mode, "USDT", newBalance, accountType);
+      });
     }
     return;
   }
@@ -1536,6 +1665,38 @@ async function handleExit(
 
   paper.removePosition(userId, symbol, mode, accountType);
   console.log(`[PAPER_POSITION_CLOSED] symbol=${symbol} side=${pos.side} qty=${closeQty} exitPrice=${safeExitPrice} netPnl=${totalNetPnl.toFixed(4)} reason=${reason}`);
+
+  // 🛡️ Feed the realized outcome back into AdaptiveBayesianGate's empirical
+  // calibration. Without this, AdaptiveBayesianGate.recordOutcome() was
+  // never called anywhere in the codebase — calibrationRecords stayed
+  // permanently empty regardless of how many trades ever closed, so the
+  // gate could never leave its strict ANALYTICAL_PRIOR_FALLBACK thresholds
+  // (0.78-0.95) for the empirical, regime-specific win rate it's designed
+  // to converge on. A class named "Adaptive" that structurally can never
+  // adapt — this is the actual reason real trade history never loosened
+  // how selective new entries are.
+  const entryDecisionPath = (existingTrade?.meta as any)?.aqea?.decisionPath;
+  if (entryDecisionPath?.regime) {
+    AdaptiveBayesianGate.recordOutcome({
+      regime: entryDecisionPath.regime,
+      realizedOutcome: totalNetPnl > 0 ? "WIN" : "LOSS",
+      priorOdds: Number.isFinite(entryDecisionPath.bayesianPriorOdds) ? entryDecisionPath.bayesianPriorOdds : 0.5,
+      posteriorProbability: Number.isFinite(entryDecisionPath.bayesianPosterior) ? entryDecisionPath.bayesianPosterior : 0.5,
+      timestamp: Date.now(),
+    });
+  }
+
+  // Feed the realized outcome into the calibrated Bayesian win-probability
+  // model so its empirical likelihood ratios, prior, and calibration layer
+  // learn from actual closed trades.
+  const bayesEvidence = (existingTrade?.meta as any)?.aqea?.bayesEvidence;
+  if (bayesEvidence) {
+    try {
+      await BayesianProbabilityEngine.recordOutcome(bayesEvidence, totalNetPnl > 0 ? "WIN" : "LOSS");
+    } catch (bayesErr) {
+      console.warn(`[auto] Failed to record Bayesian outcome for ${symbol}:`, bayesErr);
+    }
+  }
 
   // 🛡️ Resolve outcome in ForwardTelemetryStore if decisionId exists
   const decId = (pos.meta as any)?.decisionId || (existingTrade?.meta as any)?.decisionId || (existingTrade?.meta as any)?.aqea?.decisionPath?.decisionId;

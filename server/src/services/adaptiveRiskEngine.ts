@@ -108,13 +108,20 @@ export class AdaptiveRiskEngine {
     sizeScale *= weatherRisk.sizeMultiplier;
     const finalLeverage = Math.min(3, Math.max(1, Math.round(10 * weatherRisk.leverageMultiplier)));
 
+    // 🛡️ A zero sizeScale is a HARD BLOCK — quality REJECT, portfolio heat > 40,
+    // or a weather crisis (sizeMultiplier 0). The old `Math.max(10, …)` floor
+    // silently re-opened those blocked trades at a $10 notional. Only floor
+    // genuinely-nonzero sizes; a hard-blocked (0 or negative) size stays 0.
+    const rawSize = (baseParams.balance ?? 1000) * 0.01 * sizeScale;
+    const positionSize = rawSize <= 0 ? 0 : Math.max(10, rawSize);
+
     return {
       sl,
       tp1,
       tp2,
       tp3,
       runner: true,
-      positionSize: Math.max(10, (baseParams.balance ?? 1000) * 0.01 * sizeScale),
+      positionSize,
       leverage: finalLeverage,
       reason: isDynamic
         ? `Adaptive SL at ${slMultiplier}x ATR (Min: ${slThresholdPct}%, R:R≥${settings?.riskConfig?.minRiskReward ?? 1.0}). Regime: ${regime.regime}. Quality: ${quality.score}. Weather Adj: ${weatherRisk.sizeMultiplier.toFixed(2)}x`

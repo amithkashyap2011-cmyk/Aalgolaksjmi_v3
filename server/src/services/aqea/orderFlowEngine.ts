@@ -13,7 +13,8 @@ export interface OrderFlowResult {
   pressure: "BUY" | "SELL" | "NEUTRAL";
   confidence: number;
   diagnostics: {
-    cvd: number;
+    cvd: number;            // raw cumulative session delta (unbounded, per-symbol scale)
+    cvdNormalized: number;  // ∈ [-1, 1] — net/gross flow persistence ratio, scale-free
     delta: number;
     oiExpansion: number;
     fundingRate: number;
@@ -37,6 +38,10 @@ export class OrderFlowEngine {
   
   // Persistent metrics for CVD tracking
   private static cvdMap = new Map<string, number>();
+  // EMAs of net and gross per-snapshot delta, per symbol, used to derive a bounded
+  // scale-free CVD persistence ratio (see cvdNormalized below).
+  private static cvdNetEmaMap = new Map<string, number>();
+  private static cvdAbsEmaMap = new Map<string, number>();
   private static lastOiMap = new Map<string, number>();
   private static cache = new Map<string, { result: OrderFlowResult; timestamp: number }>();
 
@@ -78,6 +83,22 @@ export class OrderFlowEngine {
       const prevCvd = this.cvdMap.get(symbol) || 0;
       const currentCvd = prevCvd + delta;
       this.cvdMap.set(symbol, currentCvd);
+
+      // Normalized CVD persistence ratio ∈ [-1, 1]: EMA(net delta) / EMA(|delta|),
+      // i.e. sustained directional flow ÷ gross flow. Unlike `currentCvd` (an
+      // unbounded cumulative sum whose magnitude depends on session length and the
+      // symbol's absolute volume — so a fixed threshold on it is meaningless), this
+      // is bounded and per-symbol scale-free: sustained one-sided pressure → ±1,
+      // choppy two-way flow → ~0. This is the value fed to the quant OrderFlow
+      // expert's threshold; see QuantStrategyRegistry.evaluateOrderFlow.
+      const CVD_EMA_ALPHA = 0.2; // ~5-snapshot memory
+      const prevNetEma = this.cvdNetEmaMap.get(symbol) ?? 0;
+      const prevAbsEma = this.cvdAbsEmaMap.get(symbol) ?? 0;
+      const netEma = CVD_EMA_ALPHA * delta + (1 - CVD_EMA_ALPHA) * prevNetEma;
+      const absEma = CVD_EMA_ALPHA * Math.abs(delta) + (1 - CVD_EMA_ALPHA) * prevAbsEma;
+      this.cvdNetEmaMap.set(symbol, netEma);
+      this.cvdAbsEmaMap.set(symbol, absEma);
+      const cvdNormalized = absEma > 0 ? Math.max(-1, Math.min(1, netEma / absEma)) : 0;
 
       // 3. Open Interest Expansion/Contraction
       const prevOi = this.lastOiMap.get(symbol) || oiData.openInterest;
@@ -122,6 +143,7 @@ export class OrderFlowEngine {
         confidence: Math.min(100, Math.abs(bookImbalance * 100) + 30),
         diagnostics: {
           cvd: currentCvd,
+          cvdNormalized: Number(cvdNormalized.toFixed(4)),
           delta,
           oiExpansion,
           fundingRate: fundingData.fundingRate,
@@ -148,7 +170,7 @@ export class OrderFlowEngine {
         pressure: "NEUTRAL",
         confidence: 0,
         diagnostics: { 
-          cvd: 0, delta: 0, oiExpansion: 0, fundingRate: 0, liqLongs: 0, liqShorts: 0, liquidationScore: 0, bookImbalance: 0,
+          cvd: 0, cvdNormalized: 0, delta: 0, oiExpansion: 0, fundingRate: 0, liqLongs: 0, liqShorts: 0, liquidationScore: 0, bookImbalance: 0,
           votingBreakdown: { liquidationImpact: 0, oiExpansionImpact: 0 }
         }
       };

@@ -148,3 +148,37 @@ export const INDIAN_SYMBOLS: Record<string, IndianSymbolConfig> = {
 
 export const SUPPORTED_INDIAN_SYMBOLS = Object.keys(INDIAN_SYMBOLS);
 
+/**
+ * Canonical list of Indian paper-account types. Single source of truth — this
+ * literal was copy-pasted across ~10 query sites and had already drifted (the
+ * 15:15 square-off scope omitted INDIAN_FNO, so F&O positions carried
+ * overnight). Import this everywhere instead of re-listing the array.
+ */
+export const INDIAN_ACCOUNT_TYPES = [
+  "INDIAN_NSE",
+  "INDIAN_BSE",
+  "INDIAN_NIFTY50",
+  "INDIAN_FNO",
+] as const;
+
+/** Open (not-yet-terminal) Indian trade statuses used by position queries. */
+export const OPEN_INDIAN_TRADE_STATUSES = [
+  "OPEN",
+  "TARGET_TRIGGERED",
+  "STOP_TRIGGERED",
+  "EXIT_PENDING",
+  "EXIT_PARTIALLY_FILLED",
+] as const;
+
+export function isSupportedIndianSymbol(symbol: string): boolean {
+  if (!symbol) return false;
+  const clean = symbol.toUpperCase().trim();
+  return (
+    clean in INDIAN_SYMBOLS ||
+    clean === "NIFTY" ||
+    clean.startsWith("NIFTY") ||
+    clean.startsWith("BANKNIFTY") ||
+    clean.startsWith("FINNIFTY") ||
+    clean.startsWith("SENSEX")
+  );
+}

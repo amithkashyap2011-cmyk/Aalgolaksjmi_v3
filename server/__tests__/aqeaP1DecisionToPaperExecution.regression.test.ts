@@ -16,9 +16,9 @@ import * as paper from "../src/services/paperState.js";
 import { evaluateLongEntry, evaluateShortEntry } from "../src/services/autoTradeEngine.decisionLogic.js";
 
 describe("AQEA 2026-27 P1 Forensic Regression: Decision-to-Paper-Execution Pipeline", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     ForwardTelemetryStore.resetStore();
-    paper.clearAllMemory().catch(() => {});
+    await paper.clearAllMemory();
   });
 
   // TC-01: Valid LONG reaches execution evaluation

@@ -95,7 +95,7 @@ describe("AQEA Overnight P0 Forensic Runtime Fix Suite", () => {
   });
 
   describe("2. RiskEngine & Paper Zero-Balance Decoupling", () => {
-    it("allows PAPER mode trade evaluation when wallet balance is $0.00 using virtual baseline", async () => {
+    it("strictly rejects PAPER mode trade evaluation when wallet balance is $0.00 without phantom baseline", async () => {
       const userId = "507f1f77bcf86cd799439011";
       // Ensure wallet balance is 0
       const wallet = paper.getWallet(userId, "PAPER", "FUTURES");
@@ -115,9 +115,9 @@ describe("AQEA Overnight P0 Forensic Runtime Fix Suite", () => {
       };
 
       const result = await RiskEngine.validateTrade(ctx);
-      expect(result.allowed).toBe(true);
-      expect(result.positionSize).toBeGreaterThan(0);
-      expect(result.reason).toContain("Risk Approved");
+      expect(result.allowed).toBe(false);
+      expect(result.positionSize).toBe(0);
+      expect(result.reason).toContain("BALANCE_ZERO");
     });
 
     it("strictly rejects LIVE mode trade when wallet balance is $0.00 with BALANCE_ZERO", async () => {

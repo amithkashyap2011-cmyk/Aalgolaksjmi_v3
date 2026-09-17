@@ -6,6 +6,82 @@
  */
 
 import { ModelHealth } from "../../models/ModelHealth.js";
+import { AI_ENDPOINTS, buildEndpointUrl } from "../../config/aiEndpointRegistry.js";
+
+/* ════════════════════════════════════════════════════════
+ *  Live quant-engine model-health gate
+ *
+ *  The Python quant engine reports, per model, whether its backing
+ *  checkpoint is real+loaded ("HEALTHY"), a stub/degraded checkpoint
+ *  ("DEGRADED") or missing ("NOT_LOADED"). The ensemble uses this to
+ *  decide which models are allowed to vote — a DEGRADED/stub/missing
+ *  model gets weight 0 instead of silently contributing a JS heuristic
+ *  wearing that model's name.
+ * ════════════════════════════════════════════════════════ */
+
+export type QuantModelStatus = "HEALTHY" | "DEGRADED" | "NOT_LOADED";
+export type QuantModelKey = "cnn" | "lstm" | "ppo" | "transformer" | "mamba";
+export type QuantModelHealthMap = Partial<Record<QuantModelKey, QuantModelStatus>>;
+
+const QUANT_MODEL_KEYS: QuantModelKey[] = ["cnn", "lstm", "ppo", "transformer", "mamba"];
+const HEALTH_CACHE_TTL_MS = 30_000;
+
+let healthCache: { map: QuantModelHealthMap | null; expiresAt: number } = { map: null, expiresAt: 0 };
+
+/**
+ * Fetch (and cache ~30s) the quant-engine /health/models status map.
+ * Returns `null` when the health endpoint cannot be reached — callers must
+ * treat a null map as "unknown" and fail safe (allow real trained models,
+ * still refuse KNOWN-stub models), never as "everything degraded".
+ */
+export async function getQuantModelHealth(force = false): Promise<QuantModelHealthMap | null> {
+  const now = Date.now();
+  if (!force && healthCache.expiresAt > now) return healthCache.map;
+
+  // In unit tests there is no live quant engine; report "unknown" so callers
+  // fall back deterministically rather than hanging on a network call.
+  if (process.env.NODE_ENV === "test") {
+    healthCache = { map: null, expiresAt: now + HEALTH_CACHE_TTL_MS };
+    return null;
+  }
+
+  try {
+    const url = await buildEndpointUrl(AI_ENDPOINTS.MODEL_HEALTH);
+    const res = await fetch(url, { signal: AbortSignal.timeout(800) });
+    if (!res.ok) {
+      healthCache = { map: null, expiresAt: now + HEALTH_CACHE_TTL_MS };
+      return null;
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    const map: QuantModelHealthMap = {};
+    for (const key of QUANT_MODEL_KEYS) {
+      const v = data[key];
+      if (v === "HEALTHY" || v === "DEGRADED" || v === "NOT_LOADED") map[key] = v;
+    }
+    healthCache = { map, expiresAt: now + HEALTH_CACHE_TTL_MS };
+    return map;
+  } catch {
+    healthCache = { map: null, expiresAt: now + HEALTH_CACHE_TTL_MS };
+    return null;
+  }
+}
+
+/** Models whose checkpoints are known (per prior forensic audits) to be
+ *  0-byte/stub → never allowed to vote even when the health probe fails. */
+export const KNOWN_STUB_QUANT_KEYS: ReadonlySet<QuantModelKey> = new Set<QuantModelKey>(["transformer", "mamba"]);
+
+/**
+ * Decide whether a quant-engine-backed model may cast a real vote.
+ *  - health map available  → only "HEALTHY" votes; DEGRADED/NOT_LOADED = no.
+ *  - health map null (probe failed) → fail safe: real trained models may
+ *    vote, but KNOWN-stub models stay gated to 0.
+ */
+export function quantModelMayVote(key: QuantModelKey, healthMap: QuantModelHealthMap | null): boolean {
+  if (healthMap && typeof healthMap[key] === "string") {
+    return healthMap[key] === "HEALTHY";
+  }
+  return !KNOWN_STUB_QUANT_KEYS.has(key);
+}
 
 export interface RawModelPerformance {
   winRatePct: number;

@@ -669,6 +669,7 @@ export class AqeaP21ProfitabilityOptimizationEngine {
   }
 
   private static emitTelemetry(r: P21EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P21_TRADE_QUALITY_TRACE] ` + JSON.stringify({
       phase: "P21", mode: "SHADOW", symbol: r.symbol,
       model: r.tradeQualitySpecialist.modelName,

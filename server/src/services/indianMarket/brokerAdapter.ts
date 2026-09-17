@@ -78,7 +78,7 @@ export class PaperExecutionAdapter implements BrokerAdapter {
 
   public async getFunds(userId: string): Promise<BrokerFundsResponse> {
     const wallet = paper.getWallet(userId, "PAPER", "INDIAN_NSE" as any);
-    const availableCash = wallet.get("INR") ?? 500000;
+    const availableCash = wallet.get("INR") ?? 0;
     return {
       availableCash,
       collateralMargin: 0,
@@ -162,12 +162,13 @@ export class LiveBrokerExecutionAdapter implements BrokerAdapter {
   public readonly name = "LIVE_INDIAN_BROKER_ADAPTER";
 
   public async getFunds(userId: string): Promise<BrokerFundsResponse> {
-    // In live mode, queries authenticated broker API
+    const wallet = paper.getWallet(userId, "LIVE", "INDIAN_NSE" as any);
+    const availableCash = wallet.get("INR") ?? 0;
     return {
-      availableCash: 500000,
-      collateralMargin: 100000,
+      availableCash,
+      collateralMargin: 0,
       marginUsed: 0,
-      totalEquity: 600000,
+      totalEquity: availableCash,
     };
   }
 

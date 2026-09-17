@@ -10,9 +10,11 @@
  */
 
 import mongoose from "mongoose";
+import { safeCreateAlert } from "./alertService.js";
 import { INDIAN_SYMBOLS, SUPPORTED_INDIAN_SYMBOLS } from "../config/indianSymbols.js";
 import { IndianMarketService } from "./indianMarketService.js";
 import { Trade } from "../models/Trade.js";
+import { TradingKillSwitch } from "./indianMarket/security/tradingKillSwitch.js";
 import { IndianTradeGroup } from "../models/IndianTradeGroup.js";
 import { IndianRiskSettings } from "../models/IndianRiskSettings.js";
 import * as paper from "./paperState.js";
@@ -25,10 +27,15 @@ import { ExpiryResolver } from "./indianMarket/expiryResolver.js";
 import { PaperExecutionAdapter, LiveBrokerExecutionAdapter, BrokerAdapter } from "./indianMarket/brokerAdapter.js";
 import { IndianAuditLogger } from "./indianMarket/auditLogger.js";
 import { StructuredTrade, UnderlyingSymbol } from "./indianMarket/strategyTypes.js";
+import { PortfolioIntelligenceEngine } from "./agentic/portfolio/PortfolioIntelligenceEngine.js";
 
 // Pricing and valuation re-exports
 export { MOCK_LIVE_INDIAN_TIKERS, resolveLivePriceForIndianTrade } from "./indianMarket/indianPricing.js";
-import { MOCK_LIVE_INDIAN_TIKERS } from "./indianMarket/indianPricing.js";
+import { MOCK_LIVE_INDIAN_TIKERS, resolveLivePriceForIndianTrade } from "./indianMarket/indianPricing.js";
+
+import { AutoPilotStateMachine } from "./indianMarket/autoPilotStateMachine.js";
+export { AutoPilotStateMachine };
+import { MarketIsolationGuard } from "./market/MarketIsolationGuard.js";
 
 export interface AICandidate {
   symbol: string;
@@ -45,7 +52,7 @@ export interface AICandidate {
 }
 
 export class IndianMarketAutoTrader {
-  private static isAutoTradingEnabled = false;
+  private static isAutoTradingEnabled = true;
   private static daemonTimer: NodeJS.Timeout | null = null;
   private static lastScanTime: string | null = null;
   private static lastAutoTrade: any = null;
@@ -58,47 +65,67 @@ export class IndianMarketAutoTrader {
     minConviction: number = 70
   ): Promise<AICandidate | null> {
     const candidates: AICandidate[] = [];
+    const eligibleSymbols = SUPPORTED_INDIAN_SYMBOLS.filter(
+      (symbol) => MarketIsolationGuard.resolveDomainFromSymbol(symbol) === "INDIA" && INDIAN_SYMBOLS[symbol]
+    );
 
-    for (const symbol of SUPPORTED_INDIAN_SYMBOLS) {
-      const config = INDIAN_SYMBOLS[symbol];
-      if (!config) continue;
+    // Bounded parallel evaluation, mirroring autoTradeEngine.ts's
+    // MAX_CONCURRENT_SYMBOLS pattern for crypto — these were previously
+    // evaluated one at a time in a for-loop, serializing N round trips to
+    // the quant/strategy engine. Unbounded Promise.all is deliberately
+    // avoided here: an earlier incident this session showed that fanning
+    // every symbol out at once overwhelms the shared quant-engine thread
+    // pool, so evaluation stays chunked instead.
+    const MAX_CONCURRENT_INDIAN_SYMBOLS = 4;
+    for (let i = 0; i < eligibleSymbols.length; i += MAX_CONCURRENT_INDIAN_SYMBOLS) {
+      const chunk = eligibleSymbols.slice(i, i + MAX_CONCURRENT_INDIAN_SYMBOLS);
+      const results = await Promise.allSettled(
+        chunk.map(async (symbol) => {
+          const config = INDIAN_SYMBOLS[symbol];
+          const ticker = MOCK_LIVE_INDIAN_TIKERS[symbol] || {
+            ltp: 1000, open: 990, high: 1010, low: 985, volume: 500000, rsi14: 55, adx14: 25
+          };
 
-      const ticker = MOCK_LIVE_INDIAN_TIKERS[symbol] || {
-        ltp: 1000, open: 990, high: 1010, low: 985, volume: 500000, rsi14: 55, adx14: 25
-      };
-
-      try {
-        const evalResult = await IndianMarketService.evaluateIndianSymbol(symbol, userId, {
-          ltp: ticker.ltp,
-          open: ticker.open,
-          high: ticker.high,
-          low: ticker.low,
-          close: ticker.ltp,
-          volume: ticker.volume,
-          rsi14: ticker.rsi14,
-          adx14: ticker.adx14,
-        });
-
-        const signal = evalResult.decision.decision;
-        const confidence = evalResult.decision.confidence;
-
-        if ((signal === "LONG" || signal === "SHORT") && confidence >= minConviction) {
-          candidates.push({
-            symbol,
-            name: config.name,
-            exchange: config.exchange,
-            category: config.category,
-            price: ticker.ltp,
-            aiSignal: signal,
-            aiConfidence: confidence,
-            strategy: evalResult.decision.strategy,
-            regime: evalResult.decision.regime,
-            reasons: evalResult.decision.reasons || [],
-            lotSize: config.lotSize || 1,
+          const evalResult = await IndianMarketService.evaluateIndianSymbol(symbol, userId, {
+            ltp: ticker.ltp,
+            open: ticker.open,
+            high: ticker.high,
+            low: ticker.low,
+            close: ticker.ltp,
+            volume: ticker.volume,
+            rsi14: ticker.rsi14,
+            adx14: ticker.adx14,
           });
+
+          const signal = evalResult.decision.decision;
+          const confidence = evalResult.decision.confidence;
+
+          if ((signal === "LONG" || signal === "SHORT") && confidence >= minConviction) {
+            return {
+              symbol,
+              name: config.name,
+              exchange: config.exchange,
+              category: config.category,
+              price: ticker.ltp,
+              aiSignal: signal,
+              aiConfidence: confidence,
+              strategy: evalResult.decision.strategy,
+              regime: evalResult.decision.regime,
+              reasons: evalResult.decision.reasons || [],
+              lotSize: config.lotSize || 1,
+            } as AICandidate;
+          }
+          return null;
+        })
+      );
+
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (result.status === "fulfilled" && result.value) {
+          candidates.push(result.value);
+        } else if (result.status === "rejected") {
+          console.warn(`[INDIAN_AUTO_TRADER] Evaluation failed for ${chunk[j]}: ${result.reason?.message || result.reason}`);
         }
-      } catch (err: any) {
-        console.warn(`[INDIAN_AUTO_TRADER] Evaluation failed for ${symbol}: ${err.message}`);
       }
     }
 
@@ -116,6 +143,14 @@ export class IndianMarketAutoTrader {
     productType: "MIS" | "CNC" = "MIS",
     overrideSymbol?: string
   ): Promise<any> {
+    // Was checked in the manual /execute route but not here — meaning an
+    // emergency kill switch stopped a human clicking "buy" but not this
+    // same function running unattended every 60s for every user with
+    // autoTrade enabled, which is the higher-volume, more autonomous path.
+    if (!TradingKillSwitch.isTradingAllowed()) {
+      throw new Error("KILL_SWITCH_ACTIVE: Trading execution is halted by emergency kill switch.");
+    }
+
     const targetSymbol = overrideSymbol || (await this.findBestAICandidate(userId, 55))?.symbol || "NIFTY50";
     const normUnderlying = InstrumentMaster.normalizeUnderlying(targetSymbol);
     const ticker = MOCK_LIVE_INDIAN_TIKERS[targetSymbol] || {
@@ -138,8 +173,36 @@ export class IndianMarketAutoTrader {
       timestamp: new Date(),
     };
 
+    // 0. Sync the authoritative capital ledger from real data BEFORE any capital
+    // read. AuthoritativeCapitalManager is a global ledger that nothing in the
+    // live request path used to seed — it booted at netEquity=0 and stayed
+    // there forever, so every sizing check below saw zero capital regardless
+    // of the user's actual paper balance and rejected every trade with "0
+    // lots". PortfolioIntelligenceEngine.syncAndGetCapital() aggregates real
+    // wallet cash + open-position margin/P&L across all Indian account types,
+    // resets PortfolioDrawdownEngine's peak-equity baseline alongside it, AND
+    // does both under PortfolioIntelligenceEngine's own lock — a raw
+    // unlocked syncFromAuthoritativeLedger() call here could interleave with
+    // another user's concurrent evaluation (or a dashboard snapshot poll) and
+    // read back a mix of both users' capital state.
+    const currentCapital = await PortfolioIntelligenceEngine.syncAndGetCapital(userId, mode);
+
+    const accType = (normUnderlying === "SENSEX" || normUnderlying === "BSE")
+      ? "INDIAN_BSE"
+      : (normUnderlying === "NIFTY" || normUnderlying === "BANKNIFTY" || normUnderlying === "FINNIFTY")
+        ? "INDIAN_NIFTY50"
+        : "INDIAN_NSE";
+
+    // walletAccType tracks whichever account type `wallet` actually ends up
+    // pointing at — the debit below must persist against this (not the
+    // original `accType`) or the in-memory debit and the persisted/DB debit
+    // land on two different wallets, and the later Trade record must also
+    // use this or the close/square-off credit-back targets a wallet that
+    // was never actually debited.
+    let { wallet, accountType: walletAccType, availableMargin } = paper.getIndianWalletWithFallback(userId, mode, accType);
+
     // 1. Evaluate & construct best trade through Strategy Engine
-    const tradeBundle = StrategyEngine.evaluateAndConstructBestTrade(context, 500000, 1.0);
+    const tradeBundle = StrategyEngine.evaluateAndConstructBestTrade(context, currentCapital, 1.0);
     if (!tradeBundle) {
       throw new Error("NO_QUALIFIED_STRATEGY_SIGNAL: No strategy satisfied entry criteria.");
     }
@@ -148,32 +211,41 @@ export class IndianMarketAutoTrader {
     trade.mode = mode;
 
     // 2. Pre-Trade Risk Validation Gatekeeper
-    if (mode === "PAPER") {
-      await paper.ensurePaperWalletFunded(userId, mode, "INDIAN_NSE", 500000);
-      await paper.ensurePaperWalletFunded(userId, mode, "INDIAN_NIFTY50", 500000);
-      await paper.ensurePaperWalletFunded(userId, mode, "INDIAN_FNO", 500000);
-    }
-    const accType = (normUnderlying === "SENSEX" || normUnderlying === "BSE")
-      ? "INDIAN_BSE"
-      : (normUnderlying === "NIFTY" || normUnderlying === "BANKNIFTY" || normUnderlying === "FINNIFTY")
-      ? "INDIAN_NIFTY50"
-      : "INDIAN_NSE";
 
-    let wallet = paper.getWallet(userId, mode, accType as any);
-    let availableMargin = wallet.get("INR") || 0;
-    if (availableMargin <= 0) {
-      const fallbackWallet = paper.getWallet(userId, mode, "INDIAN_NSE" as any);
-      if ((fallbackWallet.get("INR") || 0) > 0) {
-        wallet = fallbackWallet;
-        availableMargin = wallet.get("INR") || 0;
-      }
-    }
-    if (availableMargin <= 0 && mode === "PAPER") {
-      availableMargin = 500000;
-      wallet.set("INR", availableMargin);
+    // 2a. Pre-Trade Portfolio Intelligence Check
+    const portfolioCheck = await PortfolioIntelligenceEngine.evaluateTradeProposal(
+      {
+        strategyId: trade.strategy,
+        strategyName: trade.strategy,
+        symbol: trade.underlying,
+        underlying: normUnderlying,
+        side: trade.position === "LONG" ? "BUY" : "SELL",
+        assetClass: isIndex ? (trade.instrument === "CE" || trade.instrument === "PE" ? "OPTIONS" : "FUTURES") : "EQUITY",
+        instrumentType: trade.instrument as any,
+        quantity: trade.quantity,
+        entryPrice: trade.entryPrice,
+        stopLossPrice: trade.stopLoss,
+        marginRequired: IndianRiskManager.computeRequiredMargin(trade),
+      },
+      {
+        strategyId: trade.strategy,
+        symbol: trade.underlying,
+        underlying: normUnderlying,
+        entryPrice: trade.entryPrice,
+        stopLossPrice: trade.stopLoss,
+        lotSize: trade.quantity,
+        model: "FIXED_RISK",
+      },
+      undefined,
+      { userId, mode }
+    );
+
+    if (!portfolioCheck.approved) {
+      throw new Error(`PORTFOLIO_INTELLIGENCE_REJECTED: ${portfolioCheck.rejectionReason}`);
     }
 
-    const riskCheck = await IndianRiskManager.validateTrade(trade, 500000, availableMargin, userId, true);
+    // 2b. Pre-Trade Risk Manager Check
+    const riskCheck = await IndianRiskManager.validateTrade(trade, currentCapital, availableMargin, userId, true);
 
     if (!riskCheck.approved) {
       throw new Error(`RISK_GATEKEEPER_REJECTED: ${riskCheck.rejectionReason}`);
@@ -205,12 +277,27 @@ export class IndianMarketAutoTrader {
       leg.brokerOrderId = orderRes.orderId;
     }
 
-    // Debit margin from wallet
-    const requiredMargin = trade.risk.riskAmount > 0 ? trade.risk.riskAmount : trade.entryPrice * trade.quantity;
-    const remainingMargin = Math.max(0, availableMargin - requiredMargin);
-    wallet.set("INR", remainingMargin);
+    // Debit margin from wallet.
+    // BUGFIX: `availableMargin` was captured well before this point (before
+    // StrategyEngine construction, evaluateTradeProposal, IndianRiskManager
+    // validation, and per-leg broker order placement — all awaited in
+    // between), so computing the debit from it directly raced any other
+    // concurrent debit/credit to the same wallet key: two trades could both
+    // read the same starting balance and the second write would clobber the
+    // first, a real double-spend. Re-reading the balance and writing it
+    // atomically under withWalletLock (the same primitive
+    // debitWalletAndCreateTrade/creditWalletAndCloseTrade already use for
+    // this exact hazard on the crypto side) closes that window.
+    const requiredMargin = IndianRiskManager.computeRequiredMargin(trade);
     if (mode === "PAPER") {
-      await paper.setWalletBalance(userId, mode, "INR", remainingMargin, accType);
+      await paper.withWalletLock(userId, mode, walletAccType, async () => {
+        const freshWallet = paper.getWallet(userId, mode, walletAccType as any);
+        const freshRemaining = Math.max(0, (freshWallet.get("INR") || 0) - requiredMargin);
+        freshWallet.set("INR", freshRemaining);
+        await paper.setWalletBalance(userId, mode, "INR", freshRemaining, walletAccType as any);
+      });
+    } else {
+      wallet.set("INR", Math.max(0, availableMargin - requiredMargin));
     }
 
     const objId = mongoose.Types.ObjectId.isValid(userId)
@@ -269,10 +356,14 @@ export class IndianMarketAutoTrader {
         leverage: 1,
         status: "OPEN",
         mode,
-        accountType: "INDIAN_FNO",
+        accountType: walletAccType,
         strategy: trade.strategy,
         pnl: 0,
         openedAt: new Date(),
+        // Persist the exact margin debited at open so the exit releases the
+        // SAME amount (proportional to fill) instead of full notional — the
+        // asymmetry here was minting INR on every close.
+        meta: { marginDebitedINR: requiredMargin },
         autoCloseStatus: "ARMED",
         entrySource: "AI_ENSEMBLE_DERIVATIVES_ENGINE",
         decisionPath: ["AI_ENSEMBLE_PIPELINE", trade.strategy, regimeAnalysis.regime],
@@ -288,6 +379,16 @@ export class IndianMarketAutoTrader {
         finalScore: trade.tradeScore,
         aiConfidence: trade.tradeScore,
         legs: trade.legs,
+      });
+
+      const alertSymbol = isMultiLeg ? `${trade.underlying}_${trade.strategy}` : trade.legs[0]?.tradingSymbol || targetSymbol;
+      const alertSide = trade.legs[0]?.action || "BUY";
+      await safeCreateAlert({
+        userId,
+        severity: "GREEN",
+        symbol: alertSymbol,
+        title: "ORDER SUCCESS",
+        message: `AI auto-trader placed ${alertSide} order for ${alertSymbol} — Score=${trade.tradeScore}%, Entry=₹${trade.entryPrice}`,
       });
     }
 
@@ -315,96 +416,29 @@ export class IndianMarketAutoTrader {
   }
 
   /**
-   * Monitor loop for trailing SL, Take Profit, and Signal Reversal Auto-Selloffs
+   * Monitor loop for trailing SL, Take Profit, and Signal Reversal Auto-Selloffs.
+   * Scans every open Indian trade globally, so it is called once per daemon
+   * tick rather than per user.
    */
-  public static async monitorAndAutoSelloff(userId: string = "guest-user"): Promise<number> {
+  public static async monitorAndAutoSelloff(): Promise<number> {
     if (mongoose.connection.readyState !== 1) return 0;
 
     let closedCount = 0;
     const openTrades = await Trade.find({
-      status: "OPEN",
+      status: { $in: ["OPEN", "TARGET_TRIGGERED", "STOP_TRIGGERED", "EXIT_PENDING", "EXIT_PARTIALLY_FILLED"] },
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
     });
 
     for (const trade of openTrades) {
-      const normUnderlying = trade.underlying || (trade.symbol.includes("BANK") ? "BANKNIFTY" : "NIFTY");
-      const isOption = trade.instrumentType === "CE" || trade.instrumentType === "PE" || (trade.legs && trade.legs.length > 0 && ((trade.legs[0] as any).instrumentType === "CE" || trade.legs[0].instrument === "CE" || (trade.legs[0] as any).instrumentType === "PE" || trade.legs[0].instrument === "PE"));
+      const currentPrice = resolveLivePriceForIndianTrade(trade);
+      const tick = {
+        symbol: trade.symbol,
+        ltp: currentPrice,
+        timestamp: Date.now(),
+      };
 
-      let currentPrice = trade.entryPrice;
-      if (isOption) {
-        const spotPrice = MOCK_LIVE_INDIAN_TIKERS[normUnderlying]?.ltp || (normUnderlying === "BANKNIFTY" ? 52140.50 : 24530.20);
-        const chain = OptionChainService.generateOptionChain(normUnderlying as any, spotPrice);
-        const leg = trade.legs?.[0];
-        if (leg && leg.strike) {
-          const matched = chain.strikes.find((s) => s.strike === leg.strike);
-          if (matched) {
-            const legInst = (leg as any).instrumentType || leg.instrument;
-            currentPrice = legInst === "CE" ? matched.call?.ltp : matched.put?.ltp;
-          }
-        }
-        if (!currentPrice || currentPrice <= 0) {
-          currentPrice = trade.entryPrice;
-        }
-      } else {
-        const liveTicker = MOCK_LIVE_INDIAN_TIKERS[trade.symbol] || MOCK_LIVE_INDIAN_TIKERS[normUnderlying] || { ltp: trade.entryPrice };
-        currentPrice = liveTicker.ltp;
-      }
-
-      const isLong = trade.side === "BUY";
-      let triggerReason: string | null = null;
-
-      // 1. Check Stop-Loss
-      if (trade.sl) {
-        if (isLong && currentPrice <= trade.sl) {
-          triggerReason = `STOP_LOSS_TRIGGERED (LTP ₹${currentPrice.toFixed(2)} <= SL ₹${trade.sl.toFixed(2)})`;
-        } else if (!isLong && currentPrice >= trade.sl) {
-          triggerReason = `STOP_LOSS_TRIGGERED (LTP ₹${currentPrice.toFixed(2)} >= SL ₹${trade.sl.toFixed(2)})`;
-        }
-      }
-
-      // 2. Check Take-Profit
-      if (!triggerReason && trade.tp) {
-        if (isLong && currentPrice >= trade.tp) {
-          triggerReason = `TAKE_PROFIT_TRIGGERED (LTP ₹${currentPrice.toFixed(2)} >= TP ₹${trade.tp.toFixed(2)})`;
-        } else if (!isLong && currentPrice <= trade.tp) {
-          triggerReason = `TAKE_PROFIT_TRIGGERED (LTP ₹${currentPrice.toFixed(2)} <= TP ₹${trade.tp.toFixed(2)})`;
-        }
-      }
-
-      // Execute Square-Off if triggered
-      if (triggerReason) {
-        const priceDiff = isLong ? currentPrice - trade.entryPrice : trade.entryPrice - currentPrice;
-        const realizedPnl = priceDiff * trade.quantity;
-
-        trade.status = "CLOSED";
-        trade.exitPrice = currentPrice;
-        trade.pnl = realizedPnl;
-        trade.netPnl = realizedPnl;
-        trade.closedAt = new Date();
-        trade.exitReason = triggerReason;
-        await trade.save();
-
-        const accType = trade.accountType || "INDIAN_NSE";
-        const tradeUserId = trade.userId ? trade.userId.toString() : userId;
-        const wallet = paper.getWallet(tradeUserId, trade.mode as any, accType as any);
-        const currentBal = wallet.get("INR") || 0;
-        const marginReturned = Math.max(0, (trade.entryPrice * trade.quantity) + realizedPnl);
-        const newBal = currentBal + marginReturned;
-        wallet.set("INR", newBal);
-        if (trade.mode === "PAPER") {
-          await paper.setWalletBalance(tradeUserId, trade.mode, "INR", newBal, accType);
-        }
-
-        await IndianRiskManager.recordTradeOutcome(tradeUserId, realizedPnl, realizedPnl);
-
-        IndianAuditLogger.log({
-          eventType: "POSITION_CLOSED",
-          underlying: trade.underlying || trade.symbol,
-          strategy: trade.strategy || "INDIAN_DERIVATIVES",
-          details: { tradeId: trade._id.toString(), exitPrice: currentPrice, pnl: realizedPnl },
-          reason: triggerReason,
-        });
-
+      const result = await AutoPilotStateMachine.processTick(trade, tick);
+      if (result.triggered && (result.newState === "CLOSED" || result.newState === "EXIT_PARTIALLY_FILLED")) {
         closedCount++;
       }
     }
@@ -414,6 +448,7 @@ export class IndianMarketAutoTrader {
 
   public static setAutoTradingEnabled(enabled: boolean): boolean {
     this.isAutoTradingEnabled = enabled;
+    AutoPilotStateMachine.setMode(enabled ? "AUTO" : "PAUSED");
     if (enabled) {
       this.startDaemon();
     } else {
@@ -444,19 +479,25 @@ export class IndianMarketAutoTrader {
             for (const s of allSettings) {
               if (s.userId) targetUsers.add(s.userId);
             }
-            const appUsers = await mongoose.connection.db?.collection("users").find().toArray() || [];
+            // Project only _id — this runs every 10s and previously pulled every
+            // field of every user document just to collect ids.
+            const appUsers = await mongoose.connection.db?.collection("users").find({}, { projection: { _id: 1 } }).toArray() || [];
             for (const u of appUsers) {
               targetUsers.add(u._id.toString());
             }
-          } catch {}
+          } catch { }
         }
 
         const session = IndianMarketService.getMarketSession();
 
+        // Trailing-SL / TP / reversal monitoring scans ALL open Indian trades
+        // globally, so it only needs to run once per tick — not once per user
+        // (that repeated the same full-collection scan and processTick sweep
+        // for every user in the table every 10s).
+        await this.monitorAndAutoSelloff();
+
         for (const uid of targetUsers) {
           try {
-            await this.monitorAndAutoSelloff(uid);
-
             if (!session.isOpen && process.env.NODE_ENV !== "test") {
               continue;
             }

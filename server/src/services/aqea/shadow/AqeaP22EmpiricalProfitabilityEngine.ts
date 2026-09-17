@@ -731,6 +731,7 @@ export class AqeaP22EmpiricalProfitabilityEngine {
   }
 
   private static emitTelemetry(r: P22EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P22_TRADE_QUALITY_TRACE] ` + JSON.stringify({
       phase: "P22", mode: "SHADOW", symbol: r.symbol,
       model: r.tradeQualityV2.modelName,

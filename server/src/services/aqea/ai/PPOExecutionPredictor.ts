@@ -38,6 +38,8 @@ export class PPOExecutionPredictor extends BasePredictor {
     }
   }
 
+  private static ppoCache = new Map<string, { expiresAt: number; result: any }>();
+
 protected async runInference(features: FeatureVector): Promise<{ direction: AIDirection, confidence: number, probability: number, meta?: any }> {
   const startTime = Date.now();
   console.log(`[PPO_V1] ENTER runInference() symbol=${features.symbol}`);
@@ -45,6 +47,12 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
   if (!AQEA_CONFIG.AI_ENABLED) {
      console.log(`[PPO_V1] EXIT runInference() - AI_DISABLED`);
      return { direction: "HOLD", confidence: 0, probability: 0.5 };
+  }
+
+  const cacheKey = `${features.symbol}:${features.market?.close || 0}`;
+  const cached = PPOExecutionPredictor.ppoCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt && process.env.NODE_ENV !== "test") {
+    return cached.result;
   }
 
   try {
@@ -58,7 +66,7 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
       // symbol lets the quant engine's replay buffer join this state with
       // the realized next-bar return when training PPO on real states.
       body: JSON.stringify({ state_vector: stateVector, symbol: features.symbol }),
-      signal: AbortSignal.timeout(1000)
+      signal: AbortSignal.timeout(4000)
     });
 
     if (!res.ok) {
@@ -95,7 +103,7 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
     const latency = Date.now() - startTime;
     console.log(`[PPO_V1] EXIT runInference() - latency=${latency}ms direction=${direction}`);
 
-    return {
+    const result = {
       direction,
       confidence: data.confidence,
       probability: 0.5,
@@ -105,6 +113,11 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
         latencyMs: latency
       }
     };
+
+    if (PPOExecutionPredictor.ppoCache.size > 200) PPOExecutionPredictor.ppoCache.clear();
+    PPOExecutionPredictor.ppoCache.set(cacheKey, { expiresAt: Date.now() + 30_000, result });
+
+    return result;
 
     } catch (err) {
       // 🧠 PPO RL Volatility & VWAP Execution Probability Fallback

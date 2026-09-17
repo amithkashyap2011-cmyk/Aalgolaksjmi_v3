@@ -20,7 +20,7 @@ describe("AQEA 2026-27 P3 Model Availability & Signal Eligibility Regression Sui
     timestamp: Date.now(),
     ohlcv: { open: 100, high: 105, low: 99, close: 104, volume: 1500, vwap: 102 },
     orderBook: { bidVol: 1000, askVol: 800, imbalance: 0.25, spread: 2 },
-    cvd: { cvdScore: 0.6, delta: 200, buyerRatio: 0.58 },
+    cvd: { cvdScore: 0.6, cvdNormalized: 0.6, delta: 200, buyerRatio: 0.58 },
     fundingRate: { rate: 0.0001, annualizedRate: 0.1095, bias: "NEUTRAL" },
     openInterest: { oi: 50000, oiExpansion: 0.05, trend: "EXPANDING" },
     volatility: { realizedVol: 0.02, parkinsonVol: 0.018, ratio: 1.1 },

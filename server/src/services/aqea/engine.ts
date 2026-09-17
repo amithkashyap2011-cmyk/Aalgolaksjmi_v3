@@ -61,6 +61,11 @@ export interface DecisionPath {
   overrideApplied: boolean;
   overrideReason: string | null;
   finalDecision: "LONG" | "SHORT" | "HOLD";
+  /** Snapshot of the Bayesian gate's read on THIS decision — persisted so
+   *  the trade's eventual WIN/LOSS outcome can be fed back into
+   *  AdaptiveBayesianGate's empirical calibration once it closes. */
+  bayesianPriorOdds?: number;
+  bayesianPosterior?: number;
 }
 
 export interface AQEADecision {
@@ -144,6 +149,10 @@ export class AQEAEngine {
     reasons.push(regime.state);
 
     // 2. Core Signals (Multi-TF + Regime Score)
+    // Order Flow (step 3 below) doesn't depend on multiTf/coreScore or vice
+    // versa — kick it off now so its latency overlaps the coreScore work
+    // instead of being paid for serially after this await.
+    const ofPromise = OrderFlowEngine.analyze(symbol);
     const multiTf = await MultiTimeframeEngine.calculateAlignment(symbol);
     reasons.push(`MULTITF_${multiTf.direction}`);
     
@@ -164,7 +173,7 @@ export class AQEAEngine {
     if (!Number.isFinite(coreScore)) coreScore = 50;
 
     // 3. Order Flow Integration (Phase 2B Controlled Voting)
-    const ofResult = await OrderFlowEngine.analyze(symbol);
+    const ofResult = await ofPromise;
     
     // 3b. Smart Money Integration (Phase 3C Shadow/Voting)
     // DEFECT #1 FIX: Pass actual bars from context
@@ -199,9 +208,27 @@ export class AQEAEngine {
          AQEAEngine.validateFeatureVector(fv);
 
           // 🛡️ Phase 2: Establish Single Voting Authority (run once, derive authorized)
+          //
+          // BUGFIX: `p.predictor` carries the full versioned model name (e.g.
+          // "CNN_1D_V1", "TRANSFORMER_MICRO_V1"), never the bare PredictorType
+          // code ("CNN", "TRANSFORMER") that VotingRegistry.getAuthorizedVoters()
+          // returns. An exact Set.has() check against that list therefore never
+          // matched anything, so authorizedPredictions was permanently empty —
+          // every tick reported authorizedCount=0/modelsOffline=true regardless
+          // of real model health, forcing TA-fallback and starving the Bayesian
+          // gate downstream of genuine model confidence. getGovernance() below
+          // already does the correct prefix match for this exact reason; reuse
+          // it here instead of a second, broken matching strategy.
           aiPredictions = await PredictorRegistry.getAllPredictions(fv);
-          const authorizedTypes = new Set(VotingRegistry.getAuthorizedVoters());
-          authorizedPredictions = aiPredictions.filter(p => authorizedTypes.has(p.predictor as any)).map(p => {
+          authorizedPredictions = aiPredictions.filter(p => VotingRegistry.getGovernance(p.predictor as any).role === PredictorRole.AUTHORIZED).map(p => {
+            // assertGovernance() below checks p.role directly (defense-in-depth,
+            // independent of how this array was filtered) — it was never
+            // reachable with a real prediction before this bugfix, since the
+            // old broken filter left authorizedPredictions permanently empty.
+            // Now that predictions actually flow through, p.role must be set
+            // to match the AUTHORIZED role this filter just confirmed, or the
+            // assertion (correctly) rejects it as ungoverned.
+            (p as any).role = PredictorRole.AUTHORIZED;
             (p as any).usedForConsensus = true;
             return p;
           });
@@ -333,7 +360,17 @@ export class AQEAEngine {
       currentPrice: context.currentPrice,
       indicators: ind,
       bars: context.bars || [],
-      marketData: context.marketData
+      marketData: context.marketData,
+      // Thread the real order-flow diagnostics computed above (ofResult, from the
+      // same decide() cycle — no extra Binance call) into the feature pipeline.
+      // Without this the live caller passes no order book and no ind.cvd, so
+      // imbalance and cvdScore would default to 0 every cycle (dead OrderFlow
+      // expert + Gayatri long bias + stuck tensorVector[11]).
+      orderFlow: {
+        bookImbalance: ofResult.diagnostics.bookImbalance,
+        cvdNormalized: ofResult.diagnostics.cvdNormalized,
+        delta: ofResult.diagnostics.delta
+      }
     });
 
     const lakshmiResult = await LakshmiMasterRouter.route(
@@ -759,8 +796,18 @@ export class AQEAEngine {
       // Fallback/Reinforce with technical thresholds if still HOLD
       const buyThreshold   = userSettings?.autoTradeThreshold   ?? 65;
       const shortThreshold = userSettings?.shortScoreThreshold   ?? 35;
+      // 🛡️ Negative-EV block: the Lakshmi-router branch above already refuses
+      // a directional call when the ensemble fusion EV gate has explicitly
+      // failed (evPassesGate === false). The technical/score fallback must obey
+      // the SAME gate — otherwise a negative-expectancy setup that the router
+      // rejected still opens a trade purely on finalScore crossing a threshold.
+      // Only an EXPLICIT false blocks; undefined (no fusion data) must not, so
+      // legitimate technical fallbacks are preserved when there is no EV signal.
+      const evGateBlocksFallback = lakshmiResult?.ensembleFusion?.evPassesGate === false;
       if (signalDecision === "HOLD") {
-        if (finalScore > buyThreshold) {
+        if (evGateBlocksFallback && (finalScore > buyThreshold || finalScore < shortThreshold)) {
+           reasons.push(`EV_GATE: BLOCKED_NEGATIVE_EV_FALLBACK (score ${Math.round(finalScore)})`);
+        } else if (finalScore > buyThreshold) {
            signalDecision = applyAiConsensusGate ? "HOLD" : "LONG";
            if (applyAiConsensusGate) reasons.push("AI_HARD_GATE: BLOCKED_LONG");
         } else if (finalScore < shortThreshold) {
@@ -808,7 +855,13 @@ export class AQEAEngine {
 
     // Phase 4: Safety Circuit Breaker (Autonomous check)
     const circuitBreakerTripped = await this.checkOverrideCircuitBreaker(userId);
-    const effectiveOverride = transitionOverrideActive && !circuitBreakerTripped && !aiConsensusHold;
+    // 🛡️ A transition trigger must NEVER re-open an entry that a safety halt
+    // has blocked. `entriesHalted` is set by critical model drift and, in LIVE,
+    // by the Conformal Uncertainty and Bayesian Conviction gates — all of which
+    // leave signalDecision === "HOLD". Without `!entriesHalted` the override
+    // block below would flip that HOLD to LONG/SHORT and execute a trade the
+    // safety layer explicitly refused.
+    const effectiveOverride = transitionOverrideActive && !circuitBreakerTripped && !aiConsensusHold && !entriesHalted;
 
     let overrideApplied = false;
     let overrideReason = null;
@@ -924,6 +977,8 @@ export class AQEAEngine {
         regime.state,
         activeDecision
       );
+      decisionPath.bayesianPriorOdds = bayesianEvaluation.priorOdds;
+      decisionPath.bayesianPosterior = bayesianEvaluation.posteriorProbability;
 
       console.log(`[P6_BAYES_TRACE] ` + JSON.stringify({
         decisionId,

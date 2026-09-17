@@ -4,6 +4,7 @@ import numpy as np
 import logging
 import os
 import asyncio
+import anyio.to_thread
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -22,13 +23,14 @@ from regimeForecaster import regime_forecaster
 from executionSimulator import execution_simulator
 from runtime.registry_client import registry_client
 from models.model_validator import ModelValidator
+import sys
 import validation_state
 from training_scheduler import run_training_loop, get_last_cycle_result
 
 app = FastAPI(title="AALGOLAKSHMI_V2 - Quant Fusion Engine")
 
-# Setup Logging
-logging.basicConfig(level=logging.INFO)
+# Setup Logging: Explicitly send INFO logs to stdout so stderr only captures real fatal errors
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("AALGO-QUANT")
 
 PROJECT_ROOT_VAL = Path(__file__).resolve().parent.parent
@@ -62,7 +64,25 @@ def try_register():
         return
 
     def get_health():
-        return model_health()
+        # Called by registry_client for the initial registration AND on EVERY
+        # heartbeat (~10s). Previously this returned model_health() verbatim; the
+        # heartbeat kept the engine registered and implicitly "alive/healthy"
+        # even after CNN/PPO flipped to DEGRADED post-registration. Report the
+        # CURRENT health honestly: recompute model_health() each call (already
+        # live) and add an explicit overall `status` that flips to DEGRADED the
+        # moment a REQUIRED model is no longer HEALTHY, so a degraded-but-alive
+        # engine is never advertised as healthy just because heartbeats arrive.
+        models = model_health()
+        required = ["cnn", "ppo"]
+        degraded_required = [m for m in required if models.get(m) != "HEALTHY"]
+        # Spread the existing per-model keys so Node consumers that read
+        # health.cnn / health.ppo keep working; `status`/`degraded_required`
+        # are additive.
+        return {
+            **models,
+            "status": "DEGRADED" if degraded_required else "Online",
+            "degraded_required": degraded_required,
+        }
 
     asyncio.create_task(registry_client.register(int(port), health_callback=get_health))
     _registered = True
@@ -71,6 +91,19 @@ def try_register():
 
 @app.on_event("startup")
 async def startup_event():
+    # The predict/* routes below are sync `def` handlers, so Starlette offloads
+    # each call to its default thread pool (anyio's global limiter, 40 tokens).
+    # Each call also pins torch to 2 OMP/MKL threads (see run.py), so 40
+    # concurrent calls means up to 80 competing OS threads on this 8-core box.
+    # Under real tick load (~5 model endpoints x ~20 symbols fired every 60s)
+    # that oversubscription was enough to pin all cores and starve the process
+    # from answering even /health, which cascaded into every symbol timing out
+    # node-side and the backlog compounding tick over tick. Capping this to 8
+    # (= physical core count, 16 OS threads at 2 each) keeps oversubscription
+    # mild instead of catastrophic while still letting ~100 requests/tick
+    # drain fast enough to clear the 35s per-symbol / 55s per-tick budgets.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 8
+
     # validation_state is the single shared source of truth for model health —
     # the training scheduler refreshes it after every hot-reload, so
     # /health/models reflects a freshly-trained checkpoint without a restart.

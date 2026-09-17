@@ -3,6 +3,14 @@
  *
  * Central barrel export for all named strategies.
  *
+ * ⚠️  SCOPE: these implementations run ONLY in the backtester
+ * (routes/backtest.ts) and the manual quantum recommendation endpoint —
+ * they are NOT the live auto-trade path. The live bot decides through
+ * AQEAEngine.decide → LakshmiMasterRouter → aqea/quant/QuantStrategyRegistry,
+ * which is a SEPARATE reimplementation of Aaryan/Aayush/Gayatri/Ohmkara/Lakshmi
+ * on a 15-feature tensor with different logic, thresholds, and outputs. A
+ * backtest here does NOT validate the live behaviour of the same-named strategy.
+ *
  *  AARYAN   — "The Disciplined Warrior" (momentum + breakout)
  *  AAYUSH   — "The Patient Accumulator" (mean-reversion)
  *  GAYATRI  — "24-Signal Mantra Frequency" (harmonic composite)

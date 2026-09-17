@@ -4,6 +4,18 @@ import react from '@vitejs/plugin-react';
 
 const backendTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:9991';
 
+const apiProxy = {
+  target: backendTarget,
+  changeOrigin: true,
+  bypass: (req: any) => {
+    const accept = req.headers?.accept || '';
+    const dest = req.headers?.['sec-fetch-dest'] || '';
+    if (accept.includes('text/html') || dest === 'document') {
+      return '/index.html';
+    }
+  },
+};
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -15,23 +27,22 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 9996,
+    port: 9994,
     proxy: {
-      '/auth':          { target: backendTarget, changeOrigin: true },
-      '/settings':      { target: backendTarget, changeOrigin: true },
-      '/apikeys':       { target: backendTarget, changeOrigin: true },
-      '/trading':       { target: backendTarget, changeOrigin: true },
-      '/backtest':      { target: backendTarget, changeOrigin: true },
-      '/agent':         { target: backendTarget, changeOrigin: true },
-      '/wallet':        { target: backendTarget, changeOrigin: true },
-      '/models':        { target: backendTarget, changeOrigin: true },
-      '/platform':      { target: backendTarget, changeOrigin: true },
-      '/ai-timeline':   { target: backendTarget, changeOrigin: true },
-      '/system':        { target: backendTarget, changeOrigin: true },
-      '/health':        { target: backendTarget, changeOrigin: true },
-      '/indian-market': { target: backendTarget, changeOrigin: true },
-      '/api':           { target: backendTarget, changeOrigin: true },
-      '/aqea-ui':       { target: backendTarget, changeOrigin: true },
+      '/auth':          apiProxy,
+      '/settings/':     apiProxy,
+      '/apikeys':       apiProxy,
+      '/trading':       apiProxy,
+      '/backtest/':     apiProxy,
+      '/agent':         apiProxy,
+      '/wallet/':       apiProxy,
+      '/models':        apiProxy,
+      '/platform':      apiProxy,
+      '/ai-timeline':   apiProxy,
+      '/system':        apiProxy,
+      '/health':        apiProxy,
+      '/api':           apiProxy,
+      '/aqea-ui':       apiProxy,
       '/socket.io':     { target: backendTarget, changeOrigin: true, ws: true },
     },
   },

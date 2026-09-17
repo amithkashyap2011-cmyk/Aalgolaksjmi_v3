@@ -1,21 +1,15 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
-import Highcharts from "highcharts";
 import App from "./App";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "bootstrap/dist/js/bootstrap.bundle.min.js";
 import "./styles/index.css";
 import "./styles/modern.css";
 import "./styles/ui-modern-patch.css";
-import "./styles/design-tokens.css"; // canonical tokens + hardening
-import "./styles/responsive.css";    // responsive hardening — must load last
+import "./styles/design-tokens.css";
+import "./styles/responsive.css";
 import { registerSW } from "./lib/registerSW";
-
-// Suppress Highcharts accessibility module warnings globally across all charts
-Highcharts.setOptions({
-  accessibility: { enabled: false }
-});
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

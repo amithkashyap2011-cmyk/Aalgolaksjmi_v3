@@ -168,7 +168,7 @@ export class AgentKernel {
     const accountType = (context.accountType || (decision.marketDomain === "INDIAN" ? "INDIAN_NSE" : "FUTURES")) as any;
 
     const wallet = paper.getWallet(userId, mode, accountType);
-    const balance = wallet.get("USDT") || wallet.get("INR") || 500000;
+    const balance = wallet.get("USDT") || wallet.get("INR") || 0;
 
     const executionPlan: ITradeExecutionPlan = {
       executionId: `EXEC_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,

@@ -251,6 +251,7 @@ export class AqeaP24SoakMonitoringEngine {
   }
 
   private static emitTelemetry(r: P24EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P24_SOAK_MONITOR_TRACE] ` + JSON.stringify({
       phase: "P24", mode: "SHADOW", symbol: r.symbol,
       policyHash: r.policyHash.substring(0, 12),

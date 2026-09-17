@@ -1,6 +1,14 @@
 /*
  * ─── Behaviour Model (Animals / Birds) ─────────────────
  *
+ * ⚠️  STATUS: OFF THE LIVE PATH (superseded by AQEA).
+ * The live engine decides via AQEAEngine.decide(); agentService.buildContext()
+ * hardcodes `animalBlend = { score: 0, contributions: {} }` (see
+ * agentService.ts "Animal behaviour model REMOVED"), and blendAnimalScores() is
+ * referenced only from tests. This module is retained as scored, unit-tested
+ * reference logic — treat every scorer's doc/comment as describing what the
+ * code actually does, so it can be re-enabled without an inversion surprise.
+ *
  * Each animal represents a trading personality archetype.
  * Weights are stored in Settings (0–100 from UI, normalized to 0–1 here).
  *
@@ -85,11 +93,22 @@ function eagleScore(ctx: AnimalContext): number {
   return ctx.htfTrendBullish ? 0.8 : -0.6;
 }
 
-/** Tiger – conviction; high RSI alignment ⇒ confidence. */
+/**
+ * Tiger – conviction via RSI mean-reversion.
+ *
+ * NOTE: despite the "conviction / scales with confidence" archetype in the
+ * header table, the implementation is MEAN-REVERTING, not momentum-following:
+ * it favours LONG when RSI is oversold and cautions when overbought. The doc
+ * and the thresholds below are kept in sync with the code deliberately — a
+ * previous docstring claimed "high RSI ⇒ confidence" (momentum), which is the
+ * opposite of what the code does and an inversion trap for any future
+ * re-enablement on the live path (see file header).
+ */
 function tigerScore(ctx: AnimalContext): number {
   const rsi = ctx.ind.rsi14;
   if (rsi === null) return 0;
-  // RSI 40‑60 = neutral; <30 = strong long; >70 = overbought caution
+  // Mean-reversion: RSI < 35 (oversold) ⇒ strong long; RSI > 70 (overbought)
+  // ⇒ caution/exit; the 35‑70 band is treated as neutral.
   if (rsi < 35) return 0.7;
   if (rsi > 70) return -0.5;
   return 0;

@@ -6,7 +6,15 @@
  * GET  /auth/me       – whoami (requires token)
  */
 import { Router } from "express";
-import bcrypt from "bcryptjs";
+// Native bcrypt (libuv threadpool), not bcryptjs (pure JS, cooperatively
+// yields on the main event loop) — under this server's background AQEA
+// computation load, bcryptjs's chunked hashing was getting starved badly
+// enough that /auth/login took 20+ seconds (vs ~900ms in isolation),
+// blowing past the client's demo-auth bootstrap timeout and leaving users
+// unauthenticated, which then blocked order placement. Hash format is
+// identical between the two libraries, so this doesn't invalidate any
+// existing password hashes.
+import bcrypt from "bcrypt";
 import { z } from "zod";
 import { User } from "../models/User.js";
 import { Settings } from "../models/Settings.js";
@@ -71,7 +79,8 @@ router.post("/login", async (req, res) => {
 
     // Live DB Auth
     let user = await User.findOne({ email });
-    if (!user && email === "demo@aalgo.internal" && password === "123456") {
+    const isProduction = process.env.NODE_ENV === "production";
+    if (!user && !isProduction && email === "demo@aalgo.internal" && password === "123456") {
       await ensureDefaultDemoUser();
       user = await User.findOne({ email });
     }
@@ -89,6 +98,9 @@ router.post("/login", async (req, res) => {
 export async function ensureDefaultDemoUser(): Promise<void> {
   try {
     if (mongoose.connection.readyState !== 1) return;
+    if (process.env.NODE_ENV === "production") {
+      return; // 🛡️ Hardcoded demo account seed strictly disallowed in production
+    }
     const demoEmail = "demo@aalgo.internal";
     const existing = await User.findOne({ email: demoEmail });
     if (!existing) {

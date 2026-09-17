@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import Highcharts from "highcharts/highstock";
 import HighchartsReact from "highcharts-react-official";
+import { ensureHighchartsConfigured } from "../../lib/chartSetup";
 import * as api from "../../lib/api";
 import { RefreshCw } from "lucide-react";
+
+ensureHighchartsConfigured();
 
 const TF_OPTIONS = [
   { key: "1",   label: "1m" },

@@ -26,6 +26,7 @@ import { LiveExecutionBarrier } from "./aqea/governance/LiveExecutionBarrier.js"
 
 const AUTO_FIX_LOG = "/Users/amithks/aalgolakshmi_v3/server/auto_trade.log";
 const STATIC_BASELINE_USDT = 0; // Reset balance to safe $20K if corrupted
+const lastWsReconnectPerSymbol = new Map<string, number>();
 
 function logAutoFix(msg: string) {
   const timestamp = new Date().toISOString();
@@ -324,15 +325,21 @@ export async function runSentinelAudit(userId: string, mode: "PAPER" | "LIVE", a
     }
 
     // ── 3. WEBSOCKET HEALTH GUARD ──
-    // Audit active ticker streams to ensure price cache is ticking
+    // Audit active ticker streams to ensure price cache is ticking (with 25s startup grace period)
     const activeSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "SHIBUSDT"];
     const ioInstance = getIO();
     
-    if (ioInstance) {
+    if (ioInstance && process.uptime() >= 25) {
       const isFutures = accountType === "FUTURES";
+      const now = Date.now();
       for (const symbol of activeSymbols) {
+        const reconKey = `${symbol}:${isFutures}`;
+        const lastRecon = lastWsReconnectPerSymbol.get(reconKey) || 0;
+        if (now - lastRecon < 60_000) continue; // Debounce: max 1 reconnect per minute per symbol
+
         const lastPrice = binance.getTickerPriceSync(symbol, isFutures);
         if (!lastPrice || lastPrice <= 0) {
+          lastWsReconnectPerSymbol.set(reconKey, now);
           logAutoFix(`Frozen price ticker detected for ${symbol} (Futures: ${isFutures}). Dynamically triggering background WebSocket reconnect.`);
           binance.unsubscribeTicker(symbol, isFutures);
           binance.subscribeTicker(symbol, ioInstance, isFutures);

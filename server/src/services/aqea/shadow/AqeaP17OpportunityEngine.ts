@@ -706,6 +706,7 @@ export class AqeaP17OpportunityEngine {
   }
 
   private static emitTelemetry(r: P17EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P17_CNN_INFERENCE_TRACE] ` + JSON.stringify({
       phase: "P17", mode: "SHADOW", decisionId: r.decisionId, symbol: r.symbol,
       timestamp: r.timestamp,

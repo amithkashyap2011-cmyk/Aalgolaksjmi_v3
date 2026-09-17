@@ -30,6 +30,17 @@ export class IndianRiskManager {
   private static consecutiveLosses = new Map<string, number>();
 
   /**
+   * Required margin for a trade: its own computed risk amount when set,
+   * otherwise notional value (entry price × quantity). This was
+   * independently duplicated at four call sites (indianMarketAutoTrader.ts
+   * x2, routes/indianMarket.ts, and inline just below in validateTrade) —
+   * IndianRiskManager is the natural single source of truth for it.
+   */
+  public static computeRequiredMargin(trade: StructuredTrade): number {
+    return trade.risk.riskAmount > 0 ? trade.risk.riskAmount : trade.entryPrice * trade.quantity;
+  }
+
+  /**
    * Loads risk settings from MongoDB or returns default
    */
   public static async getSettings(userId = "guest-user"): Promise<IIndianRiskSettings> {
@@ -39,7 +50,7 @@ export class IndianRiskManager {
         if (!doc) {
           doc = await IndianRiskSettings.create({
             userId,
-            autoTrade: false,
+            autoTrade: true,
             niftyAutoTrade: true,
             bankNiftyAutoTrade: true,
             optionsAutoTrade: true,
@@ -58,6 +69,29 @@ export class IndianRiskManager {
             dailyRiskLock: false,
           });
         }
+
+        // BUGFIX: lastDailyResetDate was schema-defined but never read anywhere
+        // in the codebase — nothing ever rolled dailyRiskLock over to a new
+        // trading day. Once tripped (max daily loss or consecutive-loss
+        // streak — see recordTradeOutcome below), it stayed locked forever,
+        // silently blocking every future trade regardless of how much time
+        // had passed. A DAILY lock needs an actual daily rollover: reset it
+        // (and the consecutive-loss counter) the first time settings are
+        // loaded on a new calendar day.
+        const today = new Date().toISOString().slice(0, 10);
+        if (doc.lastDailyResetDate !== today) {
+          const previousResetDate = doc.lastDailyResetDate;
+          doc.lastDailyResetDate = today;
+          doc.dailyRiskLock = false;
+          this.consecutiveLosses.set(userId, 0);
+          await doc.save();
+          IndianAuditLogger.log({
+            eventType: "RISK_APPROVED",
+            details: { userId, previousResetDate },
+            reason: "Daily rollover: Daily Risk Lock and consecutive-loss counter reset for new trading day",
+          });
+        }
+
         return doc;
       }
     } catch {}
@@ -65,7 +99,7 @@ export class IndianRiskManager {
     // Fallback mock doc in testing environments
     return {
       userId,
-      autoTrade: false,
+      autoTrade: true,
       niftyAutoTrade: true,
       bankNiftyAutoTrade: true,
       optionsAutoTrade: true,
@@ -210,7 +244,7 @@ export class IndianRiskManager {
     checks["AUTO_TRADE_TOGGLES"] = { passed: true, message: "All sub-toggles permitted." };
 
     // 5. MARGIN & FUNDS CHECK
-    const requiredMargin = trade.risk.riskAmount > 0 ? trade.risk.riskAmount : trade.entryPrice * trade.quantity;
+    const requiredMargin = this.computeRequiredMargin(trade);
     if (availableMargin < requiredMargin) {
       checks["MARGIN_CHECK"] = {
         passed: false,
@@ -274,13 +308,30 @@ export class IndianRiskManager {
   /**
    * Tracks closed trade outcomes and updates consecutive losses & daily risk locks
    */
+  // Accumulated realized PnL per user for the current IST trading day. The
+  // daily-loss lock must fire on the SUM of the day's losses, not a single
+  // trade — the caller previously passed one trade's PnL as the "daily" total,
+  // so a day bled by many sub-threshold losses never tripped the lock.
+  private static dailyRealizedPnl = new Map<string, { istDay: string; pnl: number }>();
+
+  /** Current calendar day in IST (UTC+5:30), used to bucket/reset daily PnL. */
+  private static istDayKey(): string {
+    return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+
   public static async recordTradeOutcome(
     userId: string,
     realizedPnl: number,
-    dailyPnL: number
+    _dailyPnL?: number
   ): Promise<void> {
     const settings = await this.getSettings(userId);
     const currentConsecutive = this.consecutiveLosses.get(userId) || 0;
+
+    // Accumulate the day's realized PnL (auto-resets at IST midnight).
+    const istDay = this.istDayKey();
+    const prior = this.dailyRealizedPnl.get(userId);
+    const dailyPnL = (prior && prior.istDay === istDay ? prior.pnl : 0) + realizedPnl;
+    this.dailyRealizedPnl.set(userId, { istDay, pnl: dailyPnL });
 
     if (realizedPnl < 0) {
       const updatedConsecutive = currentConsecutive + 1;

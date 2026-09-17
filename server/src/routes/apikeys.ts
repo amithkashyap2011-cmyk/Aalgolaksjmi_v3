@@ -16,11 +16,13 @@ router.get("/", authGuard, async (req: AuthRequest, res) => {
   try {
     const doc = await ApiKeys.findOne({ userId: req.userId });
     if (!doc) {
-      res.json({ saved: false });
+      res.json({ saved: false, connected: false });
       return;
     }
     res.json({
       saved: true,
+      connected: !!doc.lastTestedAt,
+      lastTestedAt: doc.lastTestedAt,
       apiKey: "••••••••••••••••••••",
       apiSecret: "••••••••••••••••••••",
     });

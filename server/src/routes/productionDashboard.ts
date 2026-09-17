@@ -42,15 +42,25 @@ router.get("/performance", authGuard, adminGuard, async (req: AuthRequest, res) 
     const wallet = paper.getWallet(userId, "LIVE", "FUTURES");
     const equity = wallet.get("USDT") ?? 0;
     
-    // 2. Win Rate & PF (Mocked for Ph 6A template)
+    // 2. Real metrics from live trades
+    const closedLiveTrades = await Trade.find({ userId, mode: "LIVE", status: "CLOSED" }).lean();
+    const wins = closedLiveTrades.filter(t => (t.pnl || 0) > 0).length;
+    const winRate = closedLiveTrades.length > 0 ? +((wins / closedLiveTrades.length) * 100).toFixed(1) : 0;
+    let grossProfit = 0, grossLoss = 0;
+    closedLiveTrades.forEach(t => {
+      const pnl = t.pnl || 0;
+      if (pnl > 0) grossProfit += pnl; else grossLoss += Math.abs(pnl);
+    });
+    const profitFactor = grossLoss > 0 ? +(grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? 99.9 : 0);
+
     const stats = {
        equity,
        activePositions: positions.length,
-       totalTrades: 5142,
-       winRate: 64.8,
-       profitFactor: 2.32,
-       sharpe: 2.24,
-       maxDrawdown: 3.4
+       totalTrades: closedLiveTrades.length,
+       winRate,
+       profitFactor,
+       sharpe: 0,
+       maxDrawdown: 0
     };
 
     // 3. Layer Contributions

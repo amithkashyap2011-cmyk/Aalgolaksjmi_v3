@@ -21,12 +21,34 @@ export interface InferenceCallParams {
 }
 
 export class ModelInferenceBridge {
-  private static DEFAULT_TIMEOUT_MS = 1500;
+  private static DEFAULT_TIMEOUT_MS = 4000;
+  private static CACHE_TTL_MS = 30_000; // 30s cache for identical inferences across multi-user execution
+  private static inferenceCache = new Map<string, { expiresAt: number; prediction: ModelExpertPrediction }>();
+
+  private static getCacheKey(params: InferenceCallParams): string {
+    try {
+      const payloadStr = typeof params.payload === "string" ? params.payload : JSON.stringify(params.payload);
+      return `${params.endpoint}:${params.modelName}:${payloadStr}`;
+    } catch {
+      return `${params.endpoint}:${params.modelName}:${Date.now()}`;
+    }
+  }
 
   /**
    * Executes remote HTTP inference against the Python PyTorch quant engine.
    */
   public static async executeRemoteInference(params: InferenceCallParams): Promise<ModelExpertPrediction> {
+    const cacheKey = this.getCacheKey(params);
+    const cached = this.inferenceCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now < cached.expiresAt && process.env.NODE_ENV !== "test") {
+      return {
+        ...cached.prediction,
+        latencyMs: 0,
+        timestamp: now
+      };
+    }
+
     const start = Date.now();
     const timeout = params.timeoutMs || this.DEFAULT_TIMEOUT_MS;
     const controller = new AbortController();
@@ -202,7 +224,7 @@ export class ModelInferenceBridge {
         }));
       }
 
-      return {
+      const result: ModelExpertPrediction = {
         modelName: params.modelName,
         modelVersion: params.modelVersion,
         architecture: params.architecture,
@@ -221,6 +243,16 @@ export class ModelInferenceBridge {
         isTrained: true,
         timestamp: Date.now()
       };
+
+      if (ModelInferenceBridge.inferenceCache.size > 200) {
+        ModelInferenceBridge.inferenceCache.clear();
+      }
+      ModelInferenceBridge.inferenceCache.set(cacheKey, {
+        expiresAt: Date.now() + ModelInferenceBridge.CACHE_TTL_MS,
+        prediction: result
+      });
+
+      return result;
     } catch (err: any) {
       clearTimeout(timeoutId);
       const latencyMs = Math.max(1, Date.now() - start);

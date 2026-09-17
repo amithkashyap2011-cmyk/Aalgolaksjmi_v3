@@ -5,25 +5,9 @@
  */
 
 import { ExpirySelectionType } from "./types.js";
+import { ExchangeCalendar } from "../indianMarket/exchangeCalendar.js";
 
 export class ExpiryResolver {
-  // Official NSE Trading Holidays (Format: YYYY-MM-DD)
-  private static HOLIDAYS = new Set([
-    "2026-01-26", // Republic Day
-    "2026-03-03", // Mahashivratri
-    "2026-03-20", // Holi
-    "2026-04-03", // Good Friday
-    "2026-04-14", // Dr. Ambedkar Jayanti
-    "2026-05-01", // Maharashtra Day
-    "2026-08-15", // Independence Day
-    "2026-09-04", // Janmashtami
-    "2026-10-02", // Mahatma Gandhi Jayanti
-    "2026-10-20", // Dussehra
-    "2026-11-09", // Diwali Laxmi Pujan
-    "2026-11-10", // Diwali Balipratipada
-    "2026-11-24", // Gurunanak Jayanti
-    "2026-12-25", // Christmas
-  ]);
 
   /**
    * Resolves valid expiry date string based on underlying and selection rule
@@ -117,9 +101,6 @@ export class ExpiryResolver {
   }
 
   public static isHoliday(date: Date): boolean {
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    return this.HOLIDAYS.has(`${yyyy}-${mm}-${dd}`);
+    return ExchangeCalendar.isHoliday(date);
   }
 }

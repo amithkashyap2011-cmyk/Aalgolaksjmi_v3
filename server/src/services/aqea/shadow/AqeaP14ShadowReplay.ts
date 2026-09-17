@@ -311,6 +311,7 @@ export class AqeaP14ShadowReplay {
   }
 
   private static emitTelemetry(r: ShadowReplayResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     // 1. [P14_CROSS_MODEL_TRACE]
     console.log(`[P14_CROSS_MODEL_TRACE] ` + JSON.stringify({
       phase: "P14",

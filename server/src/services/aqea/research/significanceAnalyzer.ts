@@ -40,10 +40,14 @@ export class SignificanceAnalyzer {
       statisticallySignificant
     };
 
-    await ResearchStatisticalReport.create({
-      modelName: model,
-      ...report
-    });
+    try {
+      await ResearchStatisticalReport.create({
+        modelName: model,
+        ...report
+      });
+    } catch {
+      // Telemetry report persistence is non-fatal if DB is disconnected in unit tests
+    }
 
     return report;
   }

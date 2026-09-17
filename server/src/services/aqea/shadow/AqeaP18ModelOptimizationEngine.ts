@@ -599,6 +599,7 @@ export class AqeaP18ModelOptimizationEngine {
   }
 
   private static emitTelemetry(r: P18EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P18_MODEL_OPTIMIZATION_TRACE] ` + JSON.stringify({
       phase: "P18", mode: "SHADOW", decisionId: r.decisionId, symbol: r.symbol,
       champion: { model: r.championModel.modelName, dir: r.cnnChampionInference.direction, probs: r.cnnChampionInference.probabilities },

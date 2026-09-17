@@ -44,6 +44,21 @@ router.get("/status", (req, res) => {
 });
 
 /**
+ * @route GET /system/auto-trader-active
+ * @desc Whether the 60s crypto auto-trade scheduler currently has any
+ *       enabled users — i.e. whether it's actively calling the quant
+ *       engine for predictions on a tick cadence. The quant engine's
+ *       continuous-learning loop polls this before starting a training
+ *       cycle so a CPU-heavy retrain never competes with live inference
+ *       for the same cores.
+ */
+router.get("/auto-trader-active", async (req, res) => {
+  const { getScannerCount } = await import("../services/autoTradeEngine.js");
+  const scannerCount = getScannerCount();
+  res.json({ active: scannerCount > 0, scannerCount });
+});
+
+/**
  * @route GET /system/diagnostics
  * @desc Detailed system diagnostics for the registry.
  */

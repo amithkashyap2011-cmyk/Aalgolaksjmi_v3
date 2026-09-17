@@ -1,29 +1,40 @@
 import { computeUnrealisedPnl } from "../src/services/pnlService.js";
 
 describe("Position PnL, ROE and Leverage Mathematics Data-Flow Validation", () => {
+  // SPOT now applies the same entry+exit taker fee as FUTURES (see
+  // pnlService.spotFeeConsistency.regression.test.ts) — it used to fall
+  // through to bare gross PnL, which these four tests' own titles used to
+  // document as intended ("No fee"). That was the bug: unrealised PnL
+  // omitted fees while a SPOT position was open, then dropped by the fee
+  // amount the moment it closed and handleExit() booked the real,
+  // fee-inclusive number.
   describe("1. Deterministic PnL Formulas", () => {
-    test("LONG Profit: Entry=100, Mark=110, Qty=10, AccountType=SPOT (No fee)", () => {
+    test("LONG Profit: Entry=100, Mark=110, Qty=10, AccountType=SPOT (net of entry+exit fee)", () => {
       const trade = { side: "LONG", entryPrice: 100, quantity: 10, accountType: "SPOT" };
       const pnl = computeUnrealisedPnl(trade, 110);
-      expect(pnl).toBeCloseTo(100, 4);
+      // Gross = (110-100)*10 = 100; fees = 100*10*0.0004 + 110*10*0.0004 = 0.84
+      expect(pnl).toBeCloseTo(99.16, 4);
     });
 
-    test("LONG Loss: Entry=100, Mark=90, Qty=10, AccountType=SPOT (No fee)", () => {
+    test("LONG Loss: Entry=100, Mark=90, Qty=10, AccountType=SPOT (net of entry+exit fee)", () => {
       const trade = { side: "LONG", entryPrice: 100, quantity: 10, accountType: "SPOT" };
       const pnl = computeUnrealisedPnl(trade, 90);
-      expect(pnl).toBeCloseTo(-100, 4);
+      // Gross = (90-100)*10 = -100; fees = 100*10*0.0004 + 90*10*0.0004 = 0.76
+      expect(pnl).toBeCloseTo(-100.76, 4);
     });
 
-    test("SHORT Profit: Entry=100, Mark=90, Qty=10, AccountType=SPOT (No fee)", () => {
+    test("SHORT Profit: Entry=100, Mark=90, Qty=10, AccountType=SPOT (net of entry+exit fee)", () => {
       const trade = { side: "SHORT", entryPrice: 100, quantity: 10, accountType: "SPOT" };
       const pnl = computeUnrealisedPnl(trade, 90);
-      expect(pnl).toBeCloseTo(100, 4);
+      // Gross = (100-90)*10 = 100; fees = 100*10*0.0004 + 90*10*0.0004 = 0.76
+      expect(pnl).toBeCloseTo(99.24, 4);
     });
 
-    test("SHORT Loss: Entry=100, Mark=110, Qty=10, AccountType=SPOT (No fee)", () => {
+    test("SHORT Loss: Entry=100, Mark=110, Qty=10, AccountType=SPOT (net of entry+exit fee)", () => {
       const trade = { side: "SHORT", entryPrice: 100, quantity: 10, accountType: "SPOT" };
       const pnl = computeUnrealisedPnl(trade, 110);
-      expect(pnl).toBeCloseTo(-100, 4);
+      // Gross = (100-110)*10 = -100; fees = 100*10*0.0004 + 110*10*0.0004 = 0.84
+      expect(pnl).toBeCloseTo(-100.84, 4);
     });
   });
 

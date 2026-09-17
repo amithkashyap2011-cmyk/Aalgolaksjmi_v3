@@ -1,6 +1,16 @@
 /*
  * ─── Pre‑Trade Checklist — "24 Spokes" ─────────────────
  *
+ * ⚠️  STATUS: NOT ON THE LIVE PATH (superseded by AQEA).
+ * buildChecklist() is referenced only from tests; the live engine gates trades
+ * through AQEAEngine.decide() (risk/EV/circuit-breaker gates), and the legacy
+ * rule-based recommend() that consumed this checklist was retired (see
+ * routes/agent.ts). Do NOT wire this in as a second blocking gate without a
+ * deliberate design pass: several spokes (R2 daily-loss, R1 position size,
+ * T7 noise gate) duplicate gates AQEA already enforces, so re-enabling it as
+ * a hard gate would double-gate and could silently halt live trading.
+ * Retained as scored, unit-tested reference logic / advisory telemetry.
+ *
  * Inspired by the 24 spokes of the Gayatri / golden wheel.
  * Grouped into 3 categories × 8 checks = 24 items.
  *

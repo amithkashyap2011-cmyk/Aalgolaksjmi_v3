@@ -676,7 +676,8 @@ export class ForwardTelemetryStore {
     const realizedCost = record.outcome.realizedCost || 0;
     record.executionError = realizedCost - predictedCost;
 
-    console.log(`[P10_OUTCOME_TRACE] ${JSON.stringify({
+    if (process.env.DEBUG_TRACES === "true" || process.env.NODE_ENV === "test") {
+      console.log(`[P10_OUTCOME_TRACE] ${JSON.stringify({
       decisionId,
       symbol: record.symbol,
       direction: record.direction,
@@ -692,6 +693,7 @@ export class ForwardTelemetryStore {
       holdingDuration: outcome.holdingDurationMs || Math.max(0, outcome.resolvedTimestamp - record.timestamp),
       outcomeTimestamp: outcome.resolvedTimestamp
     })}`);
+    }
 
     // Update regime × model stats
     for (const [mName, mSnap] of Object.entries(record.modelBreakdowns)) {

@@ -27,6 +27,10 @@ dns.setDefaultResultOrder("ipv4first");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, "..", ".env") });
 
+import { SecurityConfigValidator } from "./services/indianMarket/security/securityConfigValidator.js";
+// 🛡️ Fail-closed production security configuration validation (Requirements 3, 43, 44)
+SecurityConfigValidator.validate();
+
 import { authGuard } from "./middleware/auth.js";
 import authRouter, { ensureDefaultDemoUser } from "./routes/auth.js";
 import settingsRouter from "./routes/settings.js";
@@ -56,9 +60,14 @@ import evidenceRouter from "./routes/evidenceRoutes.js";
 import { CurrencyService } from "./services/currencyService.js";
 import phase27ApiRouter from "./routes/phase27Api.js";
 import kernelRouter from "./routes/kernel.js";
+import agentControlRouter from "./routes/agentControl.js";
+import strategyLifecycleRouter from "./routes/strategyLifecycle.js";
+import portfolioIntelligenceRouter from "./routes/portfolioIntelligence.js";
 import { AgentKernel } from "./kernel/AgentKernel.js";
+import { AgentKernel as IndianAgentKernel } from "./services/agentic/AgentKernel.js";
 import systemRouter from "./routes/system.js";
 import externalSyncRouter from "./routes/externalSync.js";
+import healthRouter from "./routes/health.js";
 import { systemManager, SystemState } from "./services/systemManager.js";
 import { recoveryManager } from "./services/recoveryManager.js";
 import * as binanceService from "./services/binanceService.js";
@@ -97,8 +106,23 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error(msg);
 });
 
+import { validateTransportSecurityOnStartup, transportSecurityMiddleware } from "./middleware/transportSecurity.js";
+import {
+  authRateLimiter,
+  orderPlacementLimiter,
+  orderCancellationLimiter,
+  administrativeMutationLimiter,
+  generalApiLimiter,
+  brokerAndInternalEventGuard,
+} from "./middleware/rateLimiter.js";
+
+// 🛡️ Fail-closed production transport security validation (Warning #3 Elimination)
+validateTransportSecurityOnStartup();
+
 const app = express();
 
+app.use(transportSecurityMiddleware);
+app.use(brokerAndInternalEventGuard);
 app.use(helmet({ contentSecurityPolicy: false }));
 
 // Silence Chrome DevTools auto-probe 404 & CSP warnings
@@ -136,21 +160,15 @@ app.use(cors({
   },
 }));
 
-// Was no rate limiting anywhere — /auth/login had no brute-force
-// throttling at all (noted in an earlier security audit this session).
-// Generous general limit (this API is polled every 5-15s by the dashboard
-// across several endpoints) plus a much stricter one on auth specifically,
-// which is the highest-value place for it on a bearer-token API.
-// Overridable only for isolated load testing (an isolated instance
-// measuring raw throughput needs a higher ceiling than the real
-// production limit) — defaults to 600 in every normal deployment, so this
-// never weakens the real rate limit.
-const generalLimiterMax = Number(process.env.RATE_LIMIT_MAX_OVERRIDE) || 600;
-const generalLimiter = rateLimit({ windowMs: 60_000, limit: generalLimiterMax, standardHeaders: true, legacyHeaders: false });
-const authLimiter = rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: "Too many auth attempts, try again shortly." } });
-app.use(generalLimiter);
-app.use("/auth/login", authLimiter);
-app.use("/auth/register", authLimiter);
+// 🛡️ Authoritative Tiered Rate Limiting (Warning #2 Elimination)
+app.use(generalApiLimiter);
+app.use(["/auth/login", "/api/auth/login"], authRateLimiter);
+app.use(["/auth/register", "/api/auth/register"], authRateLimiter);
+app.use(["/indian-market/execute", "/api/indian-market/execute"], orderPlacementLimiter);
+app.use(["/trading/order", "/api/trading/order"], orderPlacementLimiter);
+app.use(["/indian-market/close-position", "/api/indian-market/close-position"], orderCancellationLimiter);
+app.use(["/trading/cancel", "/api/trading/cancel"], orderCancellationLimiter);
+app.use(["/agent-control", "/api/agent-control", "/agent", "/api/agent"], administrativeMutationLimiter);
 
 app.use(express.json());
 
@@ -320,32 +338,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/health", (_req, res) => {
-  try {
-    let scannerCount = 0;
-    try {
-      scannerCount = autoTradeEngine.getScannerCount();
-    } catch {
-      scannerCount = -1;
-    }
-    
-    res.json({
-      status: mongoose.connection.readyState === 1 ? "ok" : "degraded",
-      server: true,
-      mongodb: mongoose.connection.readyState === 1,
-      binance: true, // Basic reachability checked on boot
-      uptime: Math.floor((Date.now() - serverStartTime) / 1000),
-      activeUsers: scannerCount,
-      protocol: "V11.5_RELIABILITY_MISSION",
-      state: systemManager.getState()
-    });
-  } catch (err: any) {
-    res.json({
-      status: "degraded",
-      error: err.message
-    });
-  }
-});
+app.use("/health", healthRouter);
+app.use("/api/health", healthRouter);
 
 app.get("/health/full", async (_req, res) => {
   try {
@@ -427,6 +421,10 @@ app.use("/ai-timeline", aiTimelineRouter);
 app.use("/api/ai-timeline", aiTimelineRouter);
 app.use("/indian-market", indianMarketRouter);
 app.use("/api/indian-market", indianMarketRouter);
+app.get(["/account/reconciliation", "/api/account/reconciliation"], (req, res) => {
+  const queryStr = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+  res.redirect(307, `/api/indian-market/account/reconciliation${queryStr}`);
+});
 app.use("/analytics", analyticsRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/execution", executionRouter);
@@ -471,6 +469,12 @@ app.use("/api/weaknesses", phase27ApiRouter);
 app.use("/api/hypotheses", phase27ApiRouter);
 app.use("/kernel", kernelRouter);
 app.use("/api/kernel", kernelRouter);
+app.use("/api/agent-control", agentControlRouter);
+app.use("/agent-control", agentControlRouter);
+app.use("/api/strategy-lifecycle", strategyLifecycleRouter);
+app.use("/strategy-lifecycle", strategyLifecycleRouter);
+app.use("/api/portfolio-intelligence", portfolioIntelligenceRouter);
+app.use("/portfolio-intelligence", portfolioIntelligenceRouter);
 app.use("/api/experiments", phase27ApiRouter);
 app.use("/api/promotions", phase27ApiRouter);
 
@@ -569,6 +573,11 @@ async function boot() {
   try {
     await connectMongoWithRetry(bootLog);
 
+    // 🛡️ Initialize Persistent Authoritative Emergency Kill Switch (Requirement 14)
+    const { TradingKillSwitch } = await import("./services/indianMarket/security/tradingKillSwitch.js");
+    await TradingKillSwitch.initialize();
+    bootLog(`Trading Kill Switch initialized: ${TradingKillSwitch.getStatus().state}`);
+
     // ─── Migrations & Hydration ──────────────────────────
     const db = mongoose.connection.db;
     if (db) {
@@ -643,12 +652,13 @@ async function boot() {
       bootLog(`Metrics refresh skipped: ${err.message}`);
     }
 
-    // Boot AQEA Agent Kernel (Central Autonomous Orchestrator)
+    // Boot AQEA Agent Kernel & Indian Market Agentic Operations Layer
     try {
       await AgentKernel.getInstance().initialize();
-      bootLog("AQEA Agent Kernel initialized (Central Autonomous Orchestrator active).");
+      await IndianAgentKernel.getInstance().initialize();
+      bootLog("Agent Kernel & Autonomous Control Plane initialized (8 specialist agents active).");
     } catch (err: any) {
-      bootLog(`AQEA Agent Kernel init warning: ${err.message}`);
+      bootLog(`Agent Kernel init warning: ${err.message}`);
     }
 
     // Start AutoTradeEngine immediately after memory is ready.
@@ -659,11 +669,11 @@ async function boot() {
     try {
       const { IntradaySquareOffService } = await import("./services/intradaySquareOff.js");
       const { IndianReconciliationService } = await import("./services/indianMarket/reconciliationService.js");
+      const { IndianMarketAutoTrader } = await import("./services/indianMarketAutoTrader.js");
       IntradaySquareOffService.startDaemon();
       IndianReconciliationService.startDaemon();
-      bootLog("Indian Market Daemons started (3:15 PM IST Auto Square-off & Reconciliation active).");
-      // Note: IndianMarketAutoTrader daemon is kept dormant by default on boot
-      // and can be toggled ON on demand by the user from the Indian Market Command Center.
+      IndianMarketAutoTrader.startDaemon();
+      bootLog("Indian Market Daemons started (Auto-Trader, 3:15 PM Auto Square-off & Reconciliation active).");
     } catch (err: any) {
       bootLog(`Indian Market Daemons init notice: ${err.message}`);
     }
@@ -700,9 +710,9 @@ async function boot() {
         setInterval(async () => {
           const { AITelemetryService } = await import("./services/aqea/aiTelemetryService.js");
           const { OutcomeAttributionService } = await import("./services/aqea/outcomeAttribution.js");
-          await AITelemetryService.resolvePendingOutcomes().catch(() => {});
-          await OutcomeAttributionService.resolvePendingOutcomes().catch(() => {});
-          await AITelemetryService.updateRollingAccuracies().catch(() => {});
+          await AITelemetryService.resolvePendingOutcomes().catch((e) => console.error("[TELEMETRY] resolvePendingOutcomes cycle failed:", e));
+          await OutcomeAttributionService.resolvePendingOutcomes().catch((e) => console.error("[OUTCOME_ATTRIBUTION] resolvePendingOutcomes cycle failed:", e));
+          await AITelemetryService.updateRollingAccuracies().catch((e) => console.error("[TELEMETRY] updateRollingAccuracies cycle failed:", e));
         }, 300000);
       } catch (e: any) {
         bootLog(`Binance init warning: ${e.message}`);

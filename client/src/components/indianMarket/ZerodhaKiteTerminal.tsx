@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import {
   Search, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   Wallet, Layers, ShieldCheck, CheckCircle2, AlertCircle, RefreshCw,
   Plus, X, ChevronRight, HelpCircle, Activity, Briefcase, FileText,
   DollarSign, SlidersHorizontal, BarChart2, PieChart, Sparkles,
   Zap, Target, ShieldAlert, Check, Calendar, Download, Filter,
-  ArrowRight, Award, Clock
+  ArrowRight, Award, Clock, ArrowLeft
 } from "lucide-react";
 
 interface StockItem {
@@ -28,10 +29,16 @@ interface PositionItem {
   underlying: string;
   side: "BUY" | "SELL";
   quantity: number;
+  remainingQty?: number;
   entryPrice: number;
   currentPrice: number;
   sl?: number;
   tp?: number;
+  targetStatus?: "PENDING" | "HIT";
+  stopStatus?: "PENDING" | "HIT";
+  autoPilotStatus?: string;
+  exitOrderStatus?: string;
+  positionStatus?: string;
   unrealizedPnl: number;
   unrealizedPnlPct: number;
   accountType: string;
@@ -97,9 +104,41 @@ function formatINR(val: number): string {
   }).format(val || 0);
 }
 
-export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQuant?: () => void }) {
+export default function ZerodhaKiteTerminal({
+  onSwitchToQuant,
+  onBack,
+}: {
+  onSwitchToQuant?: () => void;
+  onBack?: () => void;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const handleBack = () => {
+    if (onBack) {
+      onBack();
+    } else {
+      navigate(-1);
+    }
+  };
+
   // Navigation Tabs: Watchlist, Orders, Holdings, Positions, PNL_HISTORY, Funds
   const [activeTab, setActiveTab] = useState<"WATCHLIST" | "ORDERS" | "HOLDINGS" | "POSITIONS" | "PNL_HISTORY" | "FUNDS">("WATCHLIST");
+
+  // 🛡️ 2026-09-16: the sidebar's "Portfolio" link (/india#portfolio) sets
+  // IndianMarketPage's own activeTab to POSITIONS, but that parent state
+  // never reaches this component — IndianMarketPage returns THIS terminal
+  // directly (terminalMode === "KITE_SIMPLE" early-return, before its own
+  // tab system ever renders) with no prop carrying the hash through. This
+  // component has its own separate, unrelated activeTab, so #portfolio
+  // silently landed on WATCHLIST (this terminal's default) with no visible
+  // difference from Dashboard. HOLDINGS is the closest match to "portfolio"
+  // here (actual owned assets, vs POSITIONS' open intraday trades).
+  useEffect(() => {
+    if (location.hash === "#portfolio" || location.hash === "#positions") {
+      setActiveTab("HOLDINGS");
+    }
+  }, [location.hash]);
   const [marketwatchIndex, setMarketwatchIndex] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<"ALL" | "INDICES" | "OPTIONS" | "EQUITY">("ALL");
@@ -128,17 +167,72 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
   const [toastMsg, setToastMsg] = useState<{ text: string; type: "success" | "error" | "info" } | null>(null);
 
   // Runtime Data State
-  const [funds, setFunds] = useState({ availableCashINR: 500000, usedMarginINR: 0, totalCollateralINR: 500000 });
+  const [funds, setFunds] = useState({ availableCashINR: 0, usedMarginINR: 0, totalCollateralINR: 0 });
   const [positions, setPositions] = useState<PositionItem[]>([]);
-  const [orders, setOrders] = useState<OrderItem[]>([]);
   const [tradeHistory, setTradeHistory] = useState<HistoricalTradeItem[]>([]);
   const [analytics, setAnalytics] = useState<any | null>(null);
 
-  const [holdings, setHoldings] = useState<any[]>([
-    { symbol: "RELIANCE", name: "Reliance Industries", quantity: 25, avgPrice: 2850.00, currentPrice: 2985.40, invested: 71250, currentVal: 74635, pnl: 3385, pnlPct: 4.75 },
-    { symbol: "HDFCBANK", name: "HDFC Bank Ltd", quantity: 50, avgPrice: 1580.00, currentPrice: 1642.10, invested: 79000, currentVal: 82105, pnl: 3105, pnlPct: 3.93 },
-    { symbol: "TATAMOTORS", name: "Tata Motors Ltd", quantity: 40, avgPrice: 990.00, currentPrice: 1084.20, invested: 39600, currentVal: 43368, pnl: 3768, pnlPct: 9.51 },
-  ]);
+  // Real CNC (delivery) positions fetched from the actual paper account —
+  // this used to be seeded with three hardcoded fake positions (RELIANCE/
+  // HDFCBANK/TATAMOTORS, summing to exactly the ₹1,89,850 "Total
+  // Investment" a user reported seeing) that never got replaced with real
+  // data, so the page permanently showed a fabricated portfolio with no
+  // indication it wasn't real.
+  const [holdings, setHoldings] = useState<any[]>([]);
+
+  // Order Book — derived from real, persisted data (positions + trade
+  // history, both already polled from the server) instead of a plain
+  // useState that only ever grew from local setOrders() calls made inside
+  // handlePlaceOrder(). That state started empty on every mount/reload, so
+  // any order placed in an earlier session — including ones that had
+  // already closed profitably — permanently vanished from this tab the
+  // moment the page refreshed, even though the P&L above it (sourced from
+  // the same backend data) kept showing the real, settled result. A closed
+  // trade is shown as its two constituent fills (entry + exit); an open
+  // position as its single still-live entry fill.
+  const orders: OrderItem[] = useMemo(() => {
+    const fromPositions: OrderItem[] = positions.map((p) => ({
+      id: `${p.tradeId}-entry`,
+      symbol: p.symbol,
+      side: p.side,
+      quantity: p.quantity,
+      price: p.entryPrice,
+      slPrice: p.sl,
+      tpPrice: p.tp,
+      productType: (p.productType as OrderItem["productType"]) || "MIS",
+      orderType: "MARKET",
+      status: "OPEN",
+      timestamp: "",
+    }));
+    const fromHistory: OrderItem[] = tradeHistory.flatMap((t) => [
+      {
+        id: `${t.tradeId}-entry`,
+        symbol: t.symbol,
+        side: t.side,
+        quantity: t.quantity,
+        price: t.entryPrice,
+        productType: t.productType,
+        orderType: "MARKET" as const,
+        status: "COMPLETE" as const,
+        timestamp: t.openedAt ? new Date(t.openedAt).toLocaleTimeString("en-IN") : "",
+      },
+      {
+        id: `${t.tradeId}-exit`,
+        symbol: t.symbol,
+        side: t.side === "BUY" ? "SELL" : "BUY",
+        quantity: t.quantity,
+        price: t.exitPrice,
+        productType: t.productType,
+        orderType: "MARKET" as const,
+        status: "COMPLETE" as const,
+        timestamp: t.closedAt ? new Date(t.closedAt).toLocaleTimeString("en-IN") : "",
+      },
+    ]);
+    // Newest first — exits/opens (which carry a real closedAt/are live now)
+    // read most naturally above their own entry fill, and history above
+    // older history.
+    return [...fromPositions, ...fromHistory.reverse()];
+  }, [positions, tradeHistory]);
 
   const showToast = (text: string, type: "success" | "error" | "info" = "info") => {
     setToastMsg({ text, type });
@@ -193,44 +287,77 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
     };
   };
 
-  // Fetch Live Positions, Funds, History & Analytics
-  const fetchLiveData = async () => {
+  // Fetch Live Positions, Funds, History & Analytics with concurrent calls and tiered refresh
+  const fetchLiveData = async (isFullRefresh = false) => {
     try {
-      // 1. Positions
-      const posRes = await fetch("/api/indian-market/positions");
-      const posData = await posRes.json();
-      if (posData.success) {
-        setPositions(posData.positions || []);
+      const activeCalls: Promise<any>[] = [
+        // 1. Positions (high frequency) — also feeds Holdings below: CNC
+        // (delivery) trades from this same authoritative endpoint are the
+        // real "Long-Term Equity Holdings", as opposed to the fabricated
+        // seed data this table used to show.
+        fetch("/api/indian-market/positions")
+          .then((res) => res.json())
+          .then((data) => {
+            if (!data?.success) return;
+            const allPositions = data.positions || [];
+            setPositions(allPositions);
+            const cncHoldings = allPositions
+              .filter((p: any) => p.productType === "CNC")
+              .map((p: any) => {
+                const quantity = p.quantity ?? p.remainingQty ?? 0;
+                const avgPrice = p.entryPrice ?? p.average_entry_price ?? 0;
+                const currentPrice = p.currentPrice ?? p.current_ltp ?? avgPrice;
+                const invested = p.investedValue ?? (avgPrice * quantity);
+                const currentVal = currentPrice * quantity;
+                const pnl = p.unrealizedPnl ?? (currentVal - invested);
+                const pnlPct = invested > 0 ? (pnl / invested) * 100 : 0;
+                return {
+                  symbol: p.symbol || p.instrument,
+                  name: DEFAULT_INDIAN_WATCHLIST.find((s) => s.symbol === (p.symbol || p.instrument))?.name || (p.symbol || p.instrument),
+                  quantity, avgPrice, currentPrice, invested, currentVal, pnl, pnlPct,
+                  todayPnl: p.todayNetPnl ?? p.todayUnrealizedPnl ?? 0,
+                };
+              });
+            setHoldings(cncHoldings);
+          }),
+        // 2. Funds (high frequency)
+        fetch("/api/indian-market/funds?userId=guest-user")
+          .then((res) => res.json())
+          .then((data) => {
+            if (data?.success) setFunds(data);
+          }),
+      ];
+
+      // Lower frequency endpoints: history and analytics only on full refresh (every 15s or on action)
+      if (isFullRefresh) {
+        activeCalls.push(
+          fetch(`/api/indian-market/history?timeframe=${historyTimeframe}`)
+            .then((res) => res.json())
+            .then((data) => {
+              if (data?.success) setTradeHistory(data.history || []);
+            }),
+          fetch("/api/indian-market/analytics")
+            .then((res) => res.json())
+            .then((data) => {
+              if (data?.success) setAnalytics(data.analytics);
+            })
+        );
       }
 
-      // 2. Funds
-      const fundsRes = await fetch("/api/indian-market/funds?userId=guest-user");
-      const fundsData = await fundsRes.json();
-      if (fundsData.success) {
-        setFunds(fundsData);
-      }
-
-      // 3. Trade History
-      const histRes = await fetch(`/api/indian-market/history?timeframe=${historyTimeframe}`);
-      const histData = await histRes.json();
-      if (histData.success) {
-        setTradeHistory(histData.history || []);
-      }
-
-      // 4. Analytics
-      const analRes = await fetch("/api/indian-market/analytics");
-      const analData = await analRes.json();
-      if (analData.success) {
-        setAnalytics(analData.analytics);
-      }
+      await Promise.allSettled(activeCalls);
     } catch {
       // Fail-soft fallback
     }
   };
 
   useEffect(() => {
-    fetchLiveData();
-    const timer = setInterval(fetchLiveData, 3000);
+    let count = 0;
+    fetchLiveData(true);
+    const timer = setInterval(() => {
+      count++;
+      const isFull = count % 5 === 0; // Full refresh every 15s (5 * 3s)
+      fetchLiveData(isFull);
+    }, 3000);
     return () => clearInterval(timer);
   }, [historyTimeframe]);
 
@@ -275,9 +402,17 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
       const isMIS = productType === "MIS";
       const leverage = isMIS ? 5 : 1;
 
+      // No hardcoded userId here — that used to send every real order to a
+      // disconnected "guest-user" account regardless of who was actually
+      // logged in (silently, with no error). The server resolves the real
+      // user from this Authorization header instead.
+      const authToken = localStorage.getItem("aalgo_jwt");
       const res = await fetch("/api/indian-market/execute", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify({
           symbol: selectedStock.symbol.split(" ")[0], // root symbol for backend
           side: orderSide,
@@ -287,7 +422,6 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
           sl: enableSL ? stopLossPrice : undefined,
           tp: enableTarget ? targetPrice : undefined,
           mode: "PAPER",
-          userId: "guest-user",
           aiConfidence: selectedStock.aiConfidence || 90,
         }),
       });
@@ -299,23 +433,11 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
           "success"
         );
 
-        // Add to local orders book
-        setOrders((prev) => [
-          {
-            id: `ORD-${Date.now().toString().slice(-6)}`,
-            symbol: selectedStock.symbol,
-            side: orderSide,
-            quantity,
-            price: selectedStock.price,
-            slPrice: enableSL ? stopLossPrice : undefined,
-            tpPrice: enableTarget ? targetPrice : undefined,
-            productType,
-            orderType,
-            status: "COMPLETE",
-            timestamp: new Date().toLocaleTimeString("en-IN"),
-          },
-          ...prev,
-        ]);
+        // Order Book updates itself from the fetchLiveData() call below —
+        // it's derived from positions/tradeHistory (see the `orders`
+        // useMemo above), and that call refreshes positions unconditionally,
+        // so the new order appears as an OPEN fill immediately without
+        // needing its own local append here.
 
         // If CNC, add to holdings
         if (productType === "CNC" && orderSide === "BUY") {
@@ -451,19 +573,22 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
   const totalCurrentVal = holdings.reduce((sum, h) => sum + h.currentVal, 0);
   const totalHoldingsPnl = totalCurrentVal - totalInvested;
   const totalHoldingsPnlPct = totalInvested > 0 ? (totalHoldingsPnl / totalInvested) * 100 : 0;
+  const totalHoldingsDayPnl = holdings.reduce((sum, h) => sum + (h.todayPnl || 0), 0);
+  const totalHoldingsDayPnlPct = totalInvested > 0 ? (totalHoldingsDayPnl / totalInvested) * 100 : 0;
 
   // Positions Summary
   const totalPositionsPnl = positions.reduce((sum, p) => sum + (p.unrealizedPnl || 0), 0);
 
   // Timeframe-specific analytics
+  const emptyMetrics = { netPnL: 0, tradesCount: 0, winRate: 0, grossProfit: 0, grossLoss: 0, charges: 0, totalTrades: 0, profitFactor: 0, maxDrawdown: "0%" };
   const currentMetrics =
     historyTimeframe === "daily"
-      ? analytics?.daily || { netPnL: 3450, tradesCount: 4, winRate: 75.0, grossProfit: 4500, grossLoss: 1050, charges: 180 }
+      ? analytics?.daily || emptyMetrics
       : historyTimeframe === "weekly"
-      ? analytics?.weekly || { netPnL: 18420, tradesCount: 16, winRate: 68.8, grossProfit: 24500, grossLoss: 6080, charges: 720 }
+      ? analytics?.weekly || emptyMetrics
       : historyTimeframe === "monthly"
-      ? analytics?.monthly || { netPnL: 64850, tradesCount: 52, winRate: 71.2, grossProfit: 89000, grossLoss: 24150, charges: 2340 }
-      : analytics || { netPnL: 64850, totalTrades: 52, winRate: 71.2, profitFactor: 2.15, maxDrawdown: "-3.8%" };
+      ? analytics?.monthly || emptyMetrics
+      : analytics || emptyMetrics;
 
   return (
     <div style={{ background: "#0b0f19", minHeight: "100vh", color: "#e2e8f0", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
@@ -499,7 +624,7 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
         style={{
           background: "#131b2e",
           borderBottom: "1px solid #1e293b",
-          padding: "0 20px",
+          padding: "0 16px",
           height: 56,
           display: "flex",
           alignItems: "center",
@@ -507,71 +632,138 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
           position: "sticky",
           top: 0,
           zIndex: 100,
+          gap: 16,
         }}
       >
-        {/* Left: Kite Logo & Live Spot Indices */}
-        <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {/* Left: Navigation, Mode Switcher & Kite Logo */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          {/* Back Button */}
+          <button
+            onClick={handleBack}
+            title="Go back to previous page"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "6px 10px",
+              borderRadius: 6,
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              color: "#e2e8f0",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              transition: "all 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+              e.currentTarget.style.borderColor = "rgba(255,255,255,0.25)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+              e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)";
+            }}
+          >
+            <ArrowLeft size={14} />
+            <span>Back</span>
+          </button>
+
+          {/* Mode Switcher Toggle Pill */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              background: "rgba(15,23,42,0.9)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 8,
+              padding: 2,
+            }}
+          >
+            <button
+              type="button"
+              style={{
+                padding: "4px 9px",
+                borderRadius: 6,
+                border: "none",
+                background: "#ff5722",
+                color: "#fff",
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: "default",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Kite Simple
+            </button>
+            {onSwitchToQuant && (
+              <button
+                type="button"
+                onClick={onSwitchToQuant}
+                title="Switch back to Institutional Quant & AutoPilot terminal"
+                style={{
+                  padding: "4px 9px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: "transparent",
+                  color: "#94a3b8",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  whiteSpace: "nowrap",
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#38bdf8";
+                  e.currentTarget.style.background = "rgba(56,189,248,0.1)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#94a3b8";
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <Activity size={12} />
+                <span>Quant AI</span>
+              </button>
+            )}
+          </div>
+
+          {/* Kite Logo */}
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             <div
               style={{
-                width: 28,
-                height: 28,
-                borderRadius: 6,
+                width: 24,
+                height: 24,
+                borderRadius: 5,
                 background: "#ff5722",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 fontWeight: 900,
                 color: "#fff",
-                fontSize: 15,
-                boxShadow: "0 0 10px rgba(255,87,34,0.4)",
+                fontSize: 13,
+                boxShadow: "0 0 8px rgba(255,87,34,0.4)",
               }}
             >
               K
             </div>
-            <span style={{ fontSize: 16, fontWeight: 800, color: "#fff", letterSpacing: "-0.02em" }}>
-              Kite <span style={{ color: "#38bdf8", fontSize: 11, fontWeight: 700, background: "rgba(56,189,248,0.15)", padding: "2px 6px", borderRadius: 4 }}>AI SMART</span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: "#fff", letterSpacing: "-0.02em" }}>
+              Kite
             </span>
-          </div>
-
-          <div style={{ width: 1, height: 24, background: "#334155" }} />
-
-          {/* Indices Ticker Strip */}
-          <div style={{ display: "flex", alignItems: "center", gap: 18, fontSize: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ color: "#94a3b8", fontWeight: 600 }}>NIFTY 50</span>
-              <span style={{ fontWeight: 700, color: "#fff" }}>{niftySpot.price.toLocaleString("en-IN")}</span>
-              <span style={{ color: niftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 600 }}>
-                {niftySpot.change >= 0 ? "+" : ""}{niftySpot.changePct}%
-              </span>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ color: "#94a3b8", fontWeight: 600 }}>NIFTY BANK</span>
-              <span style={{ fontWeight: 700, color: "#fff" }}>{bankNiftySpot.price.toLocaleString("en-IN")}</span>
-              <span style={{ color: bankNiftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 600 }}>
-                {bankNiftySpot.change >= 0 ? "+" : ""}{bankNiftySpot.changePct}%
-              </span>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ color: "#94a3b8", fontWeight: 600 }}>SENSEX</span>
-              <span style={{ fontWeight: 700, color: "#fff" }}>{sensexSpot.price.toLocaleString("en-IN")}</span>
-              <span style={{ color: sensexSpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 600 }}>
-                {sensexSpot.change >= 0 ? "+" : ""}{sensexSpot.changePct}%
-              </span>
-            </div>
           </div>
         </div>
 
-        {/* Right: Main Navigation Tabs & AI Quant Switch */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {/* Right: Main Navigation Tabs & Account Summary */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           {[
-            { id: "WATCHLIST", label: "Dashboard / Watchlist" },
+            { id: "WATCHLIST", label: "Watchlist" },
             { id: "ORDERS", label: `Orders (${orders.length})` },
             { id: "HOLDINGS", label: `Holdings (${holdings.length})` },
             { id: "POSITIONS", label: `Positions (${positions.length})` },
-            { id: "PNL_HISTORY", label: "📊 P&L / Trade History" },
+            { id: "PNL_HISTORY", label: "P&L History" },
             { id: "FUNDS", label: "Funds" },
           ].map((tab) => (
             <button
@@ -582,40 +774,47 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                 color: activeTab === tab.id ? "#387ed1" : "#94a3b8",
                 border: "none",
                 borderBottom: activeTab === tab.id ? "2px solid #387ed1" : "2px solid transparent",
-                padding: "16px 14px",
-                fontSize: 13,
+                padding: "16px 10px",
+                fontSize: 12,
                 fontWeight: 600,
                 cursor: "pointer",
-                transition: "all 0.2s ease",
+                whiteSpace: "nowrap",
+                transition: "all 0.15s ease",
               }}
             >
               {tab.label}
             </button>
           ))}
 
-          {/* Switch to Advanced Quant Mode */}
-          {onSwitchToQuant && (
-            <button
-              onClick={onSwitchToQuant}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "6px 12px",
-                borderRadius: 6,
-                background: "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)",
-                border: "1px solid #3b82f6",
-                color: "#60a5fa",
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: "pointer",
-                marginLeft: 12,
-              }}
-            >
-              <Activity size={14} />
-              <span>⚡ AI Quant Engine</span>
-            </button>
-          )}
+          {/* Quick Financials Pill */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              padding: "4px 10px",
+              borderRadius: 6,
+              fontSize: 11,
+              whiteSpace: "nowrap",
+              marginLeft: 4,
+            }}
+          >
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ color: "#94a3b8" }}>Cash:</span>
+              <span style={{ color: "#34d399", fontWeight: 700 }}>
+                ₹{((funds as any)?.availableCashINR ?? funds.availableCashINR).toLocaleString("en-IN")}
+              </span>
+            </div>
+            <div style={{ width: 1, height: 10, background: "#334155" }} />
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ color: "#94a3b8" }}>Today:</span>
+              <span style={{ color: ((funds as any)?.todayPnlINR ?? 0) >= 0 ? "#10b981" : "#ef4444", fontWeight: 700 }}>
+                {((funds as any)?.todayPnlINR ?? 0) >= 0 ? "+" : ""}₹{((funds as any)?.todayPnlINR ?? 0).toLocaleString("en-IN")}
+              </span>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -631,6 +830,33 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
             flexDirection: "column",
           }}
         >
+          {/* Live Market Spot Indices Header (NIFTY 50 & BANKNIFTY) */}
+          <div
+            style={{
+              padding: "10px 14px",
+              borderBottom: "1px solid #1e293b",
+              background: "#101726",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ color: "#94a3b8", fontWeight: 700, fontSize: 11, letterSpacing: "0.02em" }}>NIFTY 50</span>
+              <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{niftySpot.price.toLocaleString("en-IN")}</span>
+              <span style={{ color: niftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
+                {niftySpot.change >= 0 ? "+" : ""}{niftySpot.changePct}%
+              </span>
+            </div>
+            <div style={{ width: 1, height: 16, background: "#1e293b" }} />
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ color: "#94a3b8", fontWeight: 700, fontSize: 11, letterSpacing: "0.02em" }}>BANKNIFTY</span>
+              <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{bankNiftySpot.price.toLocaleString("en-IN")}</span>
+              <span style={{ color: bankNiftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
+                {bankNiftySpot.change >= 0 ? "+" : ""}{bankNiftySpot.changePct}%
+              </span>
+            </div>
+          </div>
           {/* Search Bar */}
           <div style={{ padding: "12px 14px", borderBottom: "1px solid #1e293b" }}>
             <div
@@ -697,6 +923,7 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                 <div
                   key={stock.symbol}
                   className="kite-stock-row"
+                  onClick={() => handleOpenOrder(stock, "BUY")}
                   style={{
                     padding: "12px 16px",
                     borderBottom: "1px solid #162035",
@@ -760,7 +987,7 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                   {/* Right: LTP & Change */}
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontWeight: 700, fontSize: 13, color: "#fff" }}>
-                      ₹{stock.price.toLocaleString("en-IN")}
+                      ₹{stock.price.toLocaleString("en-IN")} <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>(${((stock.price / 85.0)).toFixed(2)})</span>
                     </div>
                     <div style={{ fontSize: 11, fontWeight: 600, color: isUp ? "#10b981" : "#ef4444", marginTop: 2 }}>
                       {isUp ? "+" : ""}{stock.change.toFixed(2)} ({isUp ? "+" : ""}{stock.changePct}%)
@@ -1038,10 +1265,13 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                         <th style={{ padding: "8px 0" }}>Instrument</th>
                         <th>Side</th>
                         <th>Qty</th>
-                        <th>Avg Price</th>
+                        <th>Avg Entry</th>
                         <th>LTP</th>
-                        <th>SL Level</th>
-                        <th>Target Level</th>
+                        <th>SL</th>
+                        <th>Target</th>
+                        <th>Target Status</th>
+                        <th>Stop Status</th>
+                        <th>Auto-Pilot</th>
                         <th>Unrealized P&L</th>
                         <th style={{ textAlign: "right" }}>Action</th>
                       </tr>
@@ -1049,6 +1279,9 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                     <tbody>
                       {positions.map((pos) => {
                         const isProfit = pos.unrealizedPnl >= 0;
+                        const isExitPending = pos.autoPilotStatus === "EXIT_PENDING" || pos.exitOrderStatus === "SUBMITTED";
+                        const isClosed = pos.positionStatus === "CLOSED";
+
                         return (
                           <tr key={pos.tradeId} style={{ borderBottom: "1px solid #162035" }}>
                             <td style={{ padding: "10px 0", fontWeight: 700, color: "#38bdf8" }}>{pos.symbol}</td>
@@ -1057,30 +1290,94 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                                 {pos.side}
                               </span>
                             </td>
-                            <td>{pos.quantity}</td>
+                            <td>{pos.remainingQty ?? pos.quantity}</td>
                             <td>₹{pos.entryPrice.toFixed(2)}</td>
                             <td>₹{pos.currentPrice.toFixed(2)}</td>
                             <td style={{ color: "#f87171", fontWeight: 600 }}>{pos.sl ? `₹${pos.sl.toFixed(2)}` : "—"}</td>
                             <td style={{ color: "#34d399", fontWeight: 600 }}>{pos.tp ? `₹${pos.tp.toFixed(2)}` : "—"}</td>
+                            <td>
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 800,
+                                  padding: "2px 5px",
+                                  borderRadius: 4,
+                                  background: pos.targetStatus === "HIT" ? "rgba(16,185,129,0.2)" : "rgba(148,163,184,0.1)",
+                                  color: pos.targetStatus === "HIT" ? "#34d399" : "#94a3b8",
+                                }}
+                              >
+                                {pos.targetStatus === "HIT" ? "HIT" : "PENDING"}
+                              </span>
+                            </td>
+                            <td>
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 800,
+                                  padding: "2px 5px",
+                                  borderRadius: 4,
+                                  background: pos.stopStatus === "HIT" ? "rgba(239,68,68,0.2)" : "rgba(148,163,184,0.1)",
+                                  color: pos.stopStatus === "HIT" ? "#f87171" : "#94a3b8",
+                                }}
+                              >
+                                {pos.stopStatus === "HIT" ? "HIT" : "PENDING"}
+                              </span>
+                            </td>
+                            <td>
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 800,
+                                  padding: "2px 5px",
+                                  borderRadius: 4,
+                                  background: isExitPending
+                                    ? "rgba(245,158,11,0.2)"
+                                    : pos.autoPilotStatus === "ACTIVE"
+                                    ? "rgba(56,189,248,0.2)"
+                                    : "rgba(16,185,129,0.2)",
+                                  color: isExitPending ? "#fbbf24" : pos.autoPilotStatus === "ACTIVE" ? "#38bdf8" : "#34d399",
+                                }}
+                              >
+                                {isExitPending ? "EXIT PENDING" : pos.autoPilotStatus || "ARMED"}
+                              </span>
+                            </td>
                             <td style={{ fontWeight: 700, color: isProfit ? "#10b981" : "#ef4444" }}>
                               {isProfit ? "+" : ""}{formatINR(pos.unrealizedPnl)}
                             </td>
                             <td style={{ textAlign: "right" }}>
-                              <button
-                                onClick={() => handleSquareOff(pos.tradeId, pos.symbol)}
-                                style={{
-                                  background: "rgba(239,68,68,0.15)",
-                                  border: "1px solid #ef4444",
-                                  color: "#f87171",
-                                  padding: "4px 10px",
-                                  borderRadius: 4,
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                Exit
-                              </button>
+                              {isClosed ? (
+                                <span style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8" }}>EXIT FILLED</span>
+                              ) : isExitPending ? (
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    fontWeight: 800,
+                                    color: "#fbbf24",
+                                    background: "rgba(245,158,11,0.15)",
+                                    padding: "3px 7px",
+                                    borderRadius: 4,
+                                  }}
+                                >
+                                  EXIT PENDING
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => handleSquareOff(pos.tradeId, pos.symbol)}
+                                  style={{
+                                    background: "rgba(239,68,68,0.15)",
+                                    border: "1px solid #ef4444",
+                                    color: "#f87171",
+                                    padding: "4px 8px",
+                                    borderRadius: 4,
+                                    fontSize: 10,
+                                    fontWeight: 800,
+                                    cursor: "pointer",
+                                  }}
+                                  title="Square off position immediately"
+                                >
+                                  EXIT AVAILABLE
+                                </button>
+                              )}
                             </td>
                           </tr>
                         );
@@ -1134,8 +1431,15 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
 
                 <div style={{ background: "#131b2e", border: "1px solid #1e293b", borderRadius: 10, padding: 16 }}>
                   <div style={{ fontSize: 12, color: "#64748b" }}>Day's P&L</div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: "#10b981", marginTop: 4 }}>
-                    +₹1,420.50 (+0.71%)
+                  <div
+                    style={{
+                      fontSize: 20,
+                      fontWeight: 800,
+                      color: totalHoldingsDayPnl >= 0 ? "#10b981" : "#ef4444",
+                      marginTop: 4,
+                    }}
+                  >
+                    {totalHoldingsDayPnl >= 0 ? "+" : ""}{formatINR(totalHoldingsDayPnl)} ({totalHoldingsDayPnlPct.toFixed(2)}%)
                   </div>
                 </div>
               </div>
@@ -1229,10 +1533,13 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                       <th>Instrument</th>
                       <th>Side</th>
                       <th>Qty</th>
-                      <th>Avg Price</th>
+                      <th>Avg Entry</th>
                       <th>LTP</th>
-                      <th>SL Price</th>
-                      <th>Target Price</th>
+                      <th>SL</th>
+                      <th>Target</th>
+                      <th>Target Status</th>
+                      <th>Stop Status</th>
+                      <th>Auto-Pilot</th>
                       <th>P&L</th>
                       <th style={{ textAlign: "right" }}>Action</th>
                     </tr>
@@ -1240,6 +1547,9 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                   <tbody>
                     {positions.map((pos) => {
                       const isProfit = pos.unrealizedPnl >= 0;
+                      const isExitPending = pos.autoPilotStatus === "EXIT_PENDING" || pos.exitOrderStatus === "SUBMITTED";
+                      const isClosed = pos.positionStatus === "CLOSED";
+
                       return (
                         <tr key={pos.tradeId} style={{ borderBottom: "1px solid #162035" }}>
                           <td style={{ padding: "12px 0" }}>
@@ -1253,7 +1563,7 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                                 borderRadius: 4,
                               }}
                             >
-                              MIS
+                              {pos.productType || "MIS"}
                             </span>
                           </td>
                           <td style={{ fontWeight: 700, color: "#fff" }}>{pos.symbol}</td>
@@ -1262,30 +1572,94 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                               {pos.side}
                             </span>
                           </td>
-                          <td>{pos.quantity}</td>
+                          <td>{pos.remainingQty ?? pos.quantity}</td>
                           <td>₹{pos.entryPrice.toFixed(2)}</td>
                           <td>₹{pos.currentPrice.toFixed(2)}</td>
                           <td style={{ color: "#f87171", fontWeight: 600 }}>{pos.sl ? `₹${pos.sl.toFixed(2)}` : "—"}</td>
                           <td style={{ color: "#34d399", fontWeight: 600 }}>{pos.tp ? `₹${pos.tp.toFixed(2)}` : "—"}</td>
+                          <td>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 800,
+                                padding: "2px 5px",
+                                borderRadius: 4,
+                                background: pos.targetStatus === "HIT" ? "rgba(16,185,129,0.2)" : "rgba(148,163,184,0.1)",
+                                color: pos.targetStatus === "HIT" ? "#34d399" : "#94a3b8",
+                              }}
+                            >
+                              {pos.targetStatus === "HIT" ? "HIT" : "PENDING"}
+                            </span>
+                          </td>
+                          <td>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 800,
+                                padding: "2px 5px",
+                                borderRadius: 4,
+                                background: pos.stopStatus === "HIT" ? "rgba(239,68,68,0.2)" : "rgba(148,163,184,0.1)",
+                                color: pos.stopStatus === "HIT" ? "#f87171" : "#94a3b8",
+                              }}
+                            >
+                              {pos.stopStatus === "HIT" ? "HIT" : "PENDING"}
+                            </span>
+                          </td>
+                          <td>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 800,
+                                padding: "2px 5px",
+                                borderRadius: 4,
+                                background: isExitPending
+                                  ? "rgba(245,158,11,0.2)"
+                                  : pos.autoPilotStatus === "ACTIVE"
+                                  ? "rgba(56,189,248,0.2)"
+                                  : "rgba(16,185,129,0.2)",
+                                color: isExitPending ? "#fbbf24" : pos.autoPilotStatus === "ACTIVE" ? "#38bdf8" : "#34d399",
+                              }}
+                            >
+                              {isExitPending ? "EXIT PENDING" : pos.autoPilotStatus || "ARMED"}
+                            </span>
+                          </td>
                           <td style={{ fontWeight: 700, color: isProfit ? "#10b981" : "#ef4444" }}>
                             {isProfit ? "+" : ""}{formatINR(pos.unrealizedPnl)}
                           </td>
                           <td style={{ textAlign: "right" }}>
-                            <button
-                              onClick={() => handleSquareOff(pos.tradeId, pos.symbol)}
-                              style={{
-                                background: "#dc2626",
-                                color: "#fff",
-                                border: "none",
-                                padding: "5px 12px",
-                                borderRadius: 4,
-                                fontSize: 11,
-                                fontWeight: 700,
-                                cursor: "pointer",
-                              }}
-                            >
-                              Square Off
-                            </button>
+                            {isClosed ? (
+                              <span style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8" }}>EXIT FILLED</span>
+                            ) : isExitPending ? (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 800,
+                                  color: "#fbbf24",
+                                  background: "rgba(245,158,11,0.15)",
+                                  padding: "3px 7px",
+                                  borderRadius: 4,
+                                }}
+                              >
+                                EXIT PENDING
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleSquareOff(pos.tradeId, pos.symbol)}
+                                style={{
+                                  background: "#dc2626",
+                                  color: "#fff",
+                                  border: "none",
+                                  padding: "5px 12px",
+                                  borderRadius: 4,
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  cursor: "pointer",
+                                }}
+                                title="Square off position immediately"
+                              >
+                                EXIT AVAILABLE
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1481,7 +1855,7 @@ export default function ZerodhaKiteTerminal({ onSwitchToQuant }: { onSwitchToQua
                     Win Rate / Accuracy
                   </div>
                   <div style={{ fontSize: 24, fontWeight: 900, color: "#38bdf8", marginTop: 6 }}>
-                    {currentMetrics.winRate || 70.0}%
+                    {currentMetrics.winRate || 0}%
                   </div>
                   <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
                     {currentMetrics.winsCount || currentMetrics.wins || 0} Wins • {currentMetrics.lossesCount || currentMetrics.losses || 0} Losses

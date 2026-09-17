@@ -673,6 +673,7 @@ export class AqeaP23ForwardOOSLedgerEngine {
   }
 
   private static emitTelemetry(r: P23EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P23_FORWARD_LEDGER_TRACE] ` + JSON.stringify({
       phase: "P23", mode: "SHADOW", symbol: r.symbol,
       policy: "P23_POLICY_V1",

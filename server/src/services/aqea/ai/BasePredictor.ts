@@ -69,6 +69,14 @@ export abstract class BasePredictor implements IAIPredictor {
       const entryPrice = features.market?.close || 0;
       // 🛡️ Telemetry logging — non-blocking, fail-safe, and active only in production/development with active MongoDB
       if (process.env.NODE_ENV !== "test" && result.direction && result.confidence > 0 && entryPrice > 0 && mongoose.connection.readyState === 1) {
+        // Every predictor's own internal fallback (its runInference() catch
+        // block, distinct from this class's outer one below) marks its
+        // result with meta.model ending in "_LOCAL" — e.g. TransformerPredictor
+        // returning its hardcoded MACD/RSI/ADX heuristic when the Python
+        // endpoint errors. That marker was previously dropped before reaching
+        // telemetry, making a fallback vote indistinguishable in the DB from
+        // a genuine model inference — this is what it fixes.
+        const sourceModel: string | undefined = result.meta?.model;
         AIPredictionTelemetry.create({
           prediction_id,
           model_name: this.modelName,
@@ -76,7 +84,9 @@ export abstract class BasePredictor implements IAIPredictor {
           direction: result.direction,
           confidence: result.confidence,
           timestamp: new Date(),
-          priceAtPrediction: entryPrice
+          priceAtPrediction: entryPrice,
+          isFallback: Boolean(sourceModel?.endsWith("_LOCAL")),
+          sourceModel
         }).catch((err: any) => {
           BasePredictor.logTelemetryError(err);
         });

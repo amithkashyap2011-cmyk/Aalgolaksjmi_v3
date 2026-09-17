@@ -11,19 +11,21 @@
  */
 import { io, type Socket } from "socket.io-client";
 
-// Connect via the page origin so Vite proxy can forward /socket.io transparently.
-// In production, this will use the app's own host and port.
-const SOCKET_URL = typeof window !== 'undefined'
-  ? (import.meta.env.VITE_SOCKET_URL || `${window.location.protocol}//${window.location.host}`)
-  : "http://GATEWAY_REQUIRED";
+function getSocketUrl(): string {
+  if (typeof window === "undefined") return "http://GATEWAY_REQUIRED";
+  if (import.meta.env.VITE_SOCKET_URL) return import.meta.env.VITE_SOCKET_URL;
+  // Always use same-origin relative path so Vite proxy handles /socket.io cleanly
+  // avoiding macOS IPv6 localhost ::1 connection refusals and CORS restrictions
+  return "";
+}
 
-export const socket: Socket = io(SOCKET_URL, {
+export const socket: Socket = io(getSocketUrl(), {
   path: "/socket.io",
-  transports: ["websocket", "polling"],
+  transports: ["polling", "websocket"],
   autoConnect: true,
   reconnection: true,
   reconnectionAttempts: Infinity,
-  reconnectionDelay: 2000,
+  reconnectionDelay: 1000,
   reconnectionDelayMax: 5000,
   timeout: 20000,
 });

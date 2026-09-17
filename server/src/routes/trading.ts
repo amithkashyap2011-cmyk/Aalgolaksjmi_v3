@@ -25,6 +25,7 @@ import * as paper from "../services/paperState.js";
 import { enrichOpenTrades, TAKER_FEE } from "../services/pnlService.js";
 import { toValidObjectId } from "../utils/mongoUtils.js";
 import * as autoTradeEngine from "../services/autoTradeEngine.js";
+import { getTradingControlStatus, setTradingControlStatus } from "../services/tradingControlStatus.js";
 import * as ensemble from "../services/ensembleService.js";
 import { computeSnapshot, StreamingVWAP, computeSupertrend, type OHLCVol } from "../services/indicatorService.js";
 import mongoose from "mongoose";
@@ -350,14 +351,11 @@ router.get("/ensemble-report", optionalAuth, async (req: AuthRequest, res) => {
   }
 });
 
-/* ── In-Memory Trading Status Cache ── */
-let currentTradingStatus = "RUNNING"; // RUNNING, PAUSED, KILLED
-
 router.post("/control/pause", authGuard, adminGuard, async (req, res) => {
   try {
     console.log("[control] pause route triggered");
-    currentTradingStatus = "PAUSED";
-    res.json({ success: true, status: currentTradingStatus });
+    setTradingControlStatus("PAUSED");
+    res.json({ success: true, status: getTradingControlStatus() });
   } catch (err: any) {
     console.error("[control] pause error:", err.message);
     res.status(500).json({ error: err.message });
@@ -367,8 +365,8 @@ router.post("/control/pause", authGuard, adminGuard, async (req, res) => {
 router.post("/control/resume", authGuard, adminGuard, async (req, res) => {
   try {
     console.log("[control] resume route triggered");
-    currentTradingStatus = "RUNNING";
-    res.json({ success: true, status: currentTradingStatus });
+    setTradingControlStatus("RUNNING");
+    res.json({ success: true, status: getTradingControlStatus() });
   } catch (err: any) {
     console.error("[control] resume error:", err.message);
     res.status(500).json({ error: err.message });
@@ -378,8 +376,8 @@ router.post("/control/resume", authGuard, adminGuard, async (req, res) => {
 router.post("/control/kill", authGuard, adminGuard, async (req, res) => {
   try {
     console.log("[control] kill route triggered");
-    currentTradingStatus = "KILLED";
-    res.json({ success: true, status: currentTradingStatus });
+    setTradingControlStatus("KILLED");
+    res.json({ success: true, status: getTradingControlStatus() });
   } catch (err: any) {
     console.error("[control] kill error:", err.message);
     res.status(500).json({ error: err.message });
@@ -387,7 +385,7 @@ router.post("/control/kill", authGuard, adminGuard, async (req, res) => {
 });
 
 router.get("/control/status", async (req, res) => {
-  res.json({ status: currentTradingStatus });
+  res.json({ status: getTradingControlStatus() });
 });
 
 /* ── get alerts ───────────────────────────────────────── */
@@ -422,6 +420,16 @@ router.get("/alerts", optionalAuth, async (req: AuthRequest, res) => {
 
 router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
   try {
+    // Emergency-stop check — must be the very first thing checked, before
+    // any other validation, so a killed/paused system can't be talked into
+    // placing an order via some other code path. Existing positions can
+    // still be closed via /close-position regardless of this status.
+    const tradingStatus = getTradingControlStatus();
+    if (tradingStatus !== "RUNNING") {
+      res.status(423).json({ error: `Trading is ${tradingStatus} — new orders are blocked. Close /control/resume to re-enable.` });
+      return;
+    }
+
     const { symbol, side, quantity, mode, strategy, sl, tp, leverage, accountType } = req.body as {
       symbol: string;
       side: "BUY" | "SELL";
@@ -1051,13 +1059,25 @@ router.post("/update-sl-tp", authGuard, async (req: AuthRequest, res) => {
         const accountType = trade.accountType || "FUTURES";
 
         if (mode === "PAPER") {
-          const w = paper.getWallet(req.userId!, mode, accountType);
-          const currentBal = w.get("USDT") ?? 0;
-          if (marginDelta < 0 && currentBal < Math.abs(marginDelta)) {
+          // BUGFIX: was a raw read-modify-write racing against every other
+          // wallet mutator for this key (debitWalletAndCreateTrade, the
+          // auto-trade engine's TP/SL exits, etc.), which use withWalletLock
+          // specifically to serialize concurrent access — an unlocked write
+          // here could read a stale balance and clobber a concurrent locked
+          // debit/credit for the same wallet.
+          const insufficientBalance = await paper.withWalletLock(req.userId!, mode, accountType, async () => {
+            const w = paper.getWallet(req.userId!, mode, accountType);
+            const currentBal = w.get("USDT") ?? 0;
+            if (marginDelta < 0 && currentBal < Math.abs(marginDelta)) {
+              return true;
+            }
+            await paper.setWalletBalance(req.userId!, mode, "USDT", currentBal + marginDelta, accountType);
+            return false;
+          });
+          if (insufficientBalance) {
             res.status(400).json({ error: "Insufficient wallet balance to lower leverage" });
             return;
           }
-          await paper.setWalletBalance(req.userId!, mode, "USDT", currentBal + marginDelta, accountType);
 
           const memPos = paper.getPosition(req.userId!, trade.symbol, mode, accountType);
           if (memPos) {

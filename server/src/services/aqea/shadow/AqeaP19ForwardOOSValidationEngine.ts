@@ -420,6 +420,7 @@ export class AqeaP19ForwardOOSValidationEngine {
   }
 
   private static emitTelemetry(r: P19EvaluationResult): void {
+    if (process.env.DEBUG_TRACES !== "true" && process.env.NODE_ENV !== "test") return;
     console.log(`[P19_FORWARD_OOS_TRACE] ` + JSON.stringify({
       phase: "P19", mode: "SHADOW", decisionId: r.decisionId, symbol: r.symbol,
       direction: r.shadowRecord.candleDirection,

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
@@ -109,20 +109,30 @@ export default function ForecastCenter() {
   const [error, setError]       = useState<string | null>(null);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
 
+  const hasDataRef = useRef(false);
+
   const fetch_ = useCallback(async (silent = false) => {
-    if (!silent && !data) setLoading(true);
+    if (!silent && !hasDataRef.current) setLoading(true);
     setError(null);
     try {
       const url = userId
         ? `/trading/ensemble-report?symbol=${symbol}&interval=${interval}&limit=200&userId=${userId}`
         : `/trading/ensemble-report?symbol=${symbol}&interval=${interval}&limit=200`;
       const res = await fetch(url);
-      if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `Server error ${res.status}`); }
-      setData(await res.json());
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error || `Server error ${res.status}`);
+      }
+      const json = await res.json();
+      hasDataRef.current = true;
+      setData(json);
       setLastFetch(new Date());
-    } catch (e: any) { setError(e.message); }
-    finally { setLoading(false); }
-  }, [symbol, interval, userId, data]);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [symbol, interval, userId]);
 
   useEffect(() => { 
     fetch_();
@@ -354,11 +364,34 @@ export default function ForecastCenter() {
 
           {/* Market Pulse Detail */}
           <Card style={sl ? {} : { gridColumn: "1 / -1" }}>
-            <Label>Market Pulse Detail</Label>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+              <Label>Market Pulse Detail</Label>
+              <span style={{ fontSize: 10, color: S.muted, fontFamily: "monospace", background: "rgba(255,255,255,0.04)", padding: "2px 8px", borderRadius: 4 }}>
+                Benchmark: 1 USD ≈ ₹85.00 INR
+              </span>
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: twoCol, gap: "10px", marginTop: "8px" }}>
               {[
-                { label: "VWAP", value: `$${(pulse.vwap ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}`, color: S.text },
-                { label: "Open Interest", value: pulse.openInterest ? `$${(pulse.openInterest / 1e6).toFixed(0)}M` : "—", color: S.cyan },
+                {
+                  label: "VWAP",
+                  value: (() => {
+                    const raw = pulse.vwap ?? 0;
+                    if (!raw) return "—";
+                    const isIndian = !symbol.endsWith("USDT") && !symbol.endsWith("BTC");
+                    if (isIndian) {
+                      return `₹${raw.toLocaleString("en-IN", { maximumFractionDigits: 2 })} ($${(raw / 85.0).toFixed(2)})`;
+                    }
+                    return `$${raw.toLocaleString("en-US", { maximumFractionDigits: 2 })} (₹${Math.round(raw * 85.0).toLocaleString("en-IN")})`;
+                  })(),
+                  color: S.text,
+                },
+                {
+                  label: "Open Interest",
+                  value: pulse.openInterest
+                    ? `$${(pulse.openInterest / 1e6).toFixed(1)}M (₹${((pulse.openInterest * 85.0) / 1e7).toFixed(1)}Cr)`
+                    : "—",
+                  color: S.cyan,
+                },
                 { label: "Funding Rate", value: formatNum(pulse.fundingRate, 5), color: (pulse.fundingRate ?? 0) > 0 ? S.green : S.red },
                 { label: "OB Imbalance", value: formatNum(pulse.orderBookImbalance, 3), color: (pulse.orderBookImbalance ?? 0) > 0 ? S.green : S.red },
                 { label: "Volatility Score", value: formatPct(pulse.volatilityScore ?? 0, 2), color: (pulse.volatilityScore ?? 0) > 0.05 ? S.red : S.green },
@@ -366,7 +399,7 @@ export default function ForecastCenter() {
               ].map(({ label, value, color }) => (
                 <div key={label} style={{ padding: "8px 10px", borderRadius: "6px", background: "rgba(255,255,255,0.02)", border: `1px solid ${S.border}` }}>
                   <div style={{ fontSize: "9px", color: S.muted, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "4px" }}>{label}</div>
-                  <div style={{ fontSize: "15px", fontWeight: 800, color, fontFamily: "monospace" }}>{value}</div>
+                  <div style={{ fontSize: "14px", fontWeight: 800, color, fontFamily: "monospace", wordBreak: "break-word" }}>{value}</div>
                 </div>
               ))}
             </div>

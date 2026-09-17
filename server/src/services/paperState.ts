@@ -23,9 +23,9 @@ export interface PaperWalletStats {
 export function getWalletStats(userId: string, mode: string, accountType: string = "FUTURES"): PaperWalletStats {
   const wallet = getWallet(userId, mode, accountType);
   const liquidUSDT = wallet.get("USDT") ?? 0;
-  
+
   const openPositions = getOpenPositions(userId, mode).filter(p => p.accountType === accountType);
-  
+
   let marginUsed = 0;
   openPositions.forEach(pos => {
     const leverage = pos.leverage || 1;
@@ -88,14 +88,16 @@ export async function clearUserMemory(userId: string): Promise<void> {
     if (k.startsWith(prefix)) wallets.delete(k);
   }
   log(`☢️ USER MEMORY WIPE: Positions and wallets for ${userId} erased.`);
-  
-  try {
-    const query = { userId: toValidObjectId(userId) };
-    await Trade.deleteMany(query);
-    await WalletSnapshot.deleteMany(query);
-    log(`☢️ DATABASE PURGE: User ${userId} trades and snapshots deleted.`);
-  } catch (err: any) {
-    log(`ERROR during database purge for ${userId}: ${err.message}`);
+
+  if (mongoose.connection?.readyState === 1) {
+    try {
+      const query = { userId: toValidObjectId(userId) };
+      await Trade.deleteMany(query);
+      await WalletSnapshot.deleteMany(query);
+      log(`☢️ DATABASE PURGE: User ${userId} trades and snapshots deleted.`);
+    } catch (err: any) {
+      log(`ERROR during database purge for ${userId}: ${err.message}`);
+    }
   }
 }
 
@@ -103,13 +105,15 @@ export async function clearAllMemory(): Promise<void> {
   positions.clear();
   wallets.clear();
   log("☢️ NUCLEAR SYSTEM WIPE: All positions and wallets for ALL USERS erased.");
-  
-  try {
-    await Trade.deleteMany({});
-    await WalletSnapshot.deleteMany({});
-    log("☢️ DATABASE PURGE: Global trades and snapshots deleted.");
-  } catch (err: any) {
-    log(`ERROR during global database purge: ${err.message}`);
+
+  if (mongoose.connection?.readyState === 1) {
+    try {
+      await Trade.deleteMany({});
+      await WalletSnapshot.deleteMany({});
+      log("☢️ DATABASE PURGE: Global trades and snapshots deleted.");
+    } catch (err: any) {
+      log(`ERROR during global database purge: ${err.message}`);
+    }
   }
 }
 
@@ -117,7 +121,7 @@ export function getOpenPositions(userId: string, mode: string): PaperPosition[] 
   const prefix = `${userId}:`;
   const modeAndAccountSuffix = `:${mode}:`;
   const result: PaperPosition[] = [];
-  
+
   for (const [k, v] of positions) {
     // Key format: userId:symbol:mode:accountType
     if (k.startsWith(prefix) && k.includes(modeAndAccountSuffix)) {
@@ -128,14 +132,34 @@ export function getOpenPositions(userId: string, mode: string): PaperPosition[] 
         positions.delete(k);
         continue;
       }
-      
+
       const notional = v.quantity * v.entryPrice;
       if (notional > 100000) {
         console.warn(`[paperState] High notional position detected: ${k} Notional: ${notional.toFixed(2)}`);
       }
-      
+
       result.push(v);
     }
+  }
+  return result;
+}
+
+/**
+ * Returns every open position for a given mode, across ALL users — for
+ * daemons that must act on the whole book (e.g. the mandatory 3:15 PM IST
+ * intraday square-off) rather than one specific user's positions.
+ * `accountTypes`, when given, restricts to positions whose accountType is
+ * in that list.
+ */
+export function getAllOpenPositions(mode: string, accountTypes?: string[]): PaperPosition[] {
+  const modeAndAccountSuffix = `:${mode}:`;
+  const result: PaperPosition[] = [];
+
+  for (const [k, v] of positions) {
+    if (!k.includes(modeAndAccountSuffix)) continue;
+    if (accountTypes && !accountTypes.includes(v.accountType)) continue;
+    if (!v.quantity || isNaN(v.quantity) || v.quantity <= 0) continue;
+    result.push(v);
   }
   return result;
 }
@@ -181,6 +205,32 @@ export function getWallet(userId: string, mode: string, accountType: string = "F
     wallets.set(k, w);
   }
   return w;
+}
+
+/**
+ * Indian-market wallet lookup with an INDIAN_NSE fallback when the requested
+ * account type's INR balance is empty — extracted from two independent
+ * copy-pasted implementations (indianMarketAutoTrader.ts and
+ * routes/indianMarket.ts) that had drifted to use slightly different
+ * (`<= 0` vs `=== 0`) empty-balance checks.
+ */
+export function getIndianWalletWithFallback(
+  userId: string,
+  mode: string,
+  accountType: string
+): { wallet: Map<string, number>; accountType: string; availableMargin: number } {
+  let wallet = getWallet(userId, mode, accountType);
+  let availableMargin = wallet.get("INR") || 0;
+  let resolvedAccountType = accountType;
+  if (availableMargin <= 0) {
+    const fallbackWallet = getWallet(userId, mode, "INDIAN_NSE");
+    if ((fallbackWallet.get("INR") || 0) > 0) {
+      wallet = fallbackWallet;
+      resolvedAccountType = "INDIAN_NSE";
+      availableMargin = wallet.get("INR") || 0;
+    }
+  }
+  return { wallet, accountType: resolvedAccountType, availableMargin };
 }
 
 /**
@@ -245,7 +295,7 @@ export async function debitWalletAndCreateTrade<T>(
         { upsert: true },
       );
     } finally {
-      if (session) await session.endSession().catch(() => {});
+      if (session) await session.endSession().catch(() => { });
     }
 
     // Only reached if the transaction committed or fallback completed successfully.
@@ -311,7 +361,7 @@ export async function creditWalletAndCloseTrade(
         );
       }
     } finally {
-      if (session) await session.endSession().catch(() => {});
+      if (session) await session.endSession().catch(() => { });
     }
 
     if (claimed) {
@@ -322,23 +372,36 @@ export async function creditWalletAndCloseTrade(
   });
 }
 
-export async function setWalletBalance(userId: string, mode: string, asset: string, amount: number, accountType: string = "FUTURES"): Promise<void> {
+export async function setWalletBalance(
+  userId: string,
+  mode: string,
+  asset: string,
+  amount: number,
+  accountType: string = "FUTURES",
+  capitalSource?: "LIVE_BROKER" | "PAPER_INITIALIZATION" | "DEPOSIT" | "TRANSFER" | "REALIZED_PNL" | "FUNDING" | "OTHER"
+): Promise<void> {
   const w = getWallet(userId.toString(), mode, accountType);
   w.set(asset, amount);
   log(`Wallet ${userId.toString()}:${mode} set ${asset}=${amount}`);
 
   // Persist to MongoDB
-  try {
-    if (mongoose.connection.readyState === 1) {
-      const balances = Object.fromEntries(w);
+  if (mongoose.connection.readyState === 1) {
+    const balances = Object.fromEntries(w);
+    const updateDoc: any = { balances, updatedAt: new Date() };
+    if (capitalSource) {
+      updateDoc.capitalSource = capitalSource;
+    } else if (mode === "LIVE") {
+      updateDoc.capitalSource = "LIVE_BROKER";
+    }
+    try {
       await WalletSnapshot.findOneAndUpdate(
         { userId: toValidObjectId(userId), mode, accountType },
-        { balances, updatedAt: new Date() },
+        updateDoc,
         { upsert: true }
       );
+    } catch (err: any) {
+      log(`ERROR persisting wallet snapshot: ${err.message}`);
     }
-  } catch (err: any) {
-    log(`ERROR persisting wallet: ${err.message}`);
   }
 }
 
@@ -346,6 +409,7 @@ export async function setWalletBalance(userId: string, mode: string, asset: stri
  * Ensures a PAPER wallet has genuine simulated initial capital for paper execution.
  * LIVE mode wallets are strictly untouched (returns 0).
  * Audits and persists every simulated deposit via WalletTransaction.
+ * If defaultStartingBalance is not provided, defaults to strictly 0 (no phantom capital).
  */
 export async function ensurePaperWalletFunded(
   userId: string,
@@ -356,17 +420,39 @@ export async function ensurePaperWalletFunded(
   if (mode !== "PAPER") return 0; // Strictly PAPER mode only — LIVE capital untouched!
   const isIndian = accountType.startsWith("INDIAN_");
   const currency = isIndian ? "INR" : "USDT";
-  const defaultBalance = defaultStartingBalance ?? (isIndian ? 500000 : 10000);
+  const defaultBalance = defaultStartingBalance ?? 0;
   const wallet = getWallet(userId.toString(), mode, accountType);
   const current = wallet.get(currency) ?? 0;
+
+  // If a snapshot already exists in DB, respect the explicit balance (even if 0)
+  if (mongoose.connection?.readyState === 1) {
+    try {
+      const existing = await WalletSnapshot.findOne({
+        userId: toValidObjectId(userId),
+        mode,
+        accountType
+      }).lean();
+      if (existing) {
+        return current;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (defaultBalance <= 0) {
+    return current;
+  }
+
   if (current <= 0) {
-    await setWalletBalance(userId, mode, currency, defaultBalance, accountType);
+    await setWalletBalance(userId, mode, currency, defaultBalance, accountType, "PAPER_INITIALIZATION");
     if (mongoose.connection.readyState === 1) {
       try {
         await WalletTransaction.create({
           userId: toValidObjectId(userId),
           type: "DEPOSIT",
           method: "SYSTEM",
+          capitalSource: "PAPER_INITIALIZATION",
           amount: defaultBalance,
           currency,
           status: "COMPLETED",
@@ -384,6 +470,107 @@ export async function ensurePaperWalletFunded(
   return current;
 }
 
+export interface PaperInitializationResult {
+  success: boolean;
+  credited: number;
+  balance: number;
+  alreadyInitialized: boolean;
+  txnRef: string;
+  source: string;
+}
+
+/**
+ * Authoritative, strictly idempotent paper account initialization.
+ * Enforces requirement:
+ * First initialization: +amount
+ * Repeated initialization: +0 (idempotent, no duplicate transaction or balance credit).
+ */
+export async function initializePaperAccount(
+  userId: string,
+  accountType: "INDIAN_NSE" | "INDIAN_BSE" | "INDIAN_NIFTY50" | "INDIAN_FNO" | "SPOT" | "FUTURES" = "INDIAN_NSE",
+  amount: number = 20000,
+  currency: string = "INR",
+  txnRef: string = `USER_PAPER_INIT_${amount}_${currency}`
+): Promise<PaperInitializationResult> {
+  const isIndian = accountType.startsWith("INDIAN_");
+  const validCurrency = isIndian ? "INR" : "USDT";
+  const curr = currency || validCurrency;
+  const wallet = getWallet(userId.toString(), "PAPER", accountType);
+  const current = wallet.get(curr) ?? 0;
+
+  if (mongoose.connection?.readyState === 1 && toValidObjectId(userId)) {
+    const userObjId = toValidObjectId(userId);
+    // Check if an initialization with this txnRef or existing paper initialization already exists
+    const existingTx = await WalletTransaction.findOne({
+      userId: userObjId,
+      accountType,
+      $or: [
+        { txnRef },
+        { capitalSource: "PAPER_INITIALIZATION" }
+      ],
+      status: "COMPLETED"
+    }).lean();
+
+    if (existingTx) {
+      log(`[paper-state] initializePaperAccount: ${userId}:${accountType} already initialized with txnRef ${existingTx.txnRef}. Credited +0 (Idempotent).`);
+      return {
+        success: true,
+        credited: 0,
+        balance: current,
+        alreadyInitialized: true,
+        txnRef: existingTx.txnRef || txnRef,
+        source: "PAPER_INITIALIZATION"
+      };
+    }
+
+    // Attempt to insert the single authoritative initialization ledger transaction
+    try {
+      await WalletTransaction.create({
+        userId: userObjId,
+        type: "DEPOSIT",
+        method: "SYSTEM",
+        capitalSource: "PAPER_INITIALIZATION",
+        amount,
+        currency: curr,
+        status: "COMPLETED",
+        txnRef,
+        note: `Authoritative Paper Simulation Starting Capital: +${amount} ${curr}`,
+        accountType,
+      });
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        log(`[paper-state] initializePaperAccount: Duplicate key caught for ${txnRef}. Credited +0.`);
+        return {
+          success: true,
+          credited: 0,
+          balance: current,
+          alreadyInitialized: true,
+          txnRef,
+          source: "PAPER_INITIALIZATION"
+        };
+      }
+      throw err;
+    }
+  }
+
+  // Credit balance exactly once
+  await setWalletBalance(userId, "PAPER", curr, amount, accountType, "PAPER_INITIALIZATION");
+  if (isIndian) {
+    await setWalletBalance(userId, "PAPER", "USDT", 0, accountType, "PAPER_INITIALIZATION");
+  } else {
+    await setWalletBalance(userId, "PAPER", "INR", 0, accountType, "PAPER_INITIALIZATION");
+  }
+
+  return {
+    success: true,
+    credited: amount,
+    balance: amount,
+    alreadyInitialized: false,
+    txnRef,
+    source: "PAPER_INITIALIZATION"
+  };
+}
+
 /* ── Hydration from Database on boot ─────────────────── */
 export async function hydrate(): Promise<void> {
   if (mongoose.connection.readyState !== 1) {
@@ -391,7 +578,7 @@ export async function hydrate(): Promise<void> {
     return;
   }
   log(`hydrating memory positions & wallets from MongoDB...`);
-  
+
   // 1. Restore Wallets
   const snapshots = await WalletSnapshot.find().lean();
   let walletCount = 0;
