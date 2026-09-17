@@ -276,7 +276,11 @@ export class FeaturePipeline {
     const isSqueeze = bBandwidth < 0.025;
 
     // 11. SMC
-    const smcTrend = close > (ind.ema50 || price) ? "BULLISH" : (close < (ind.ema50 || price) ? "BEARISH" : "NEUTRAL");
+    // indicatorService emits ema9/ema21/ema55 — never ema20/ema50 — so the old
+    // `ind.ema50 || price` was ALWAYS `price` (=close) here, pinning smcTrend to
+    // NEUTRAL every cycle. Use the real slow EMA (ema55) as the trend reference.
+    const emaSlow = ind.ema50 ?? ind.ema55 ?? price;
+    const smcTrend = close > emaSlow ? "BULLISH" : (close < emaSlow ? "BEARISH" : "NEUTRAL");
 
     // 12. Liquidity Sweeps
     const sweepBuy = Boolean(high > (ind.recentHigh || high * 1.01) && close < (ind.recentHigh || high));

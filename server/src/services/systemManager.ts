@@ -270,7 +270,22 @@ export class SystemManager extends EventEmitter {
         // per tick, making that stall more likely — 90s tolerates an
         // occasional slow cycle without flapping the registration; it does
         // not fix the underlying stall, just stops it from being fatal.
-        if (diff > 90000) { // 90 seconds timeout
+        //
+        // 2026-09-17: raised 90s -> 300s. A forced continuous-learning cycle
+        // (training_scheduler runs CPU-bound torch in a thread executor; on
+        // this 8-core box it saturates cores and starves the async heartbeat)
+        // was observed stalling heartbeats up to ~124.5s — past the 90s bar —
+        // so EVERY long training cycle evicted quant_engine here. That made
+        // getQuantEngineURL() fall back to the wrong port (9992) and forced a
+        // full 404 -> re-register cycle, during which BasePredictor gated ALL
+        // predictors to confidence 0 (=> crypto decisions all HOLD) for
+        // minutes per cycle. 300s clears the longest observed cycle with
+        // margin. Routing to a genuinely-dead engine is still prevented
+        // independently: isQuantEngineAvailable() live-probes /health (800ms)
+        // whenever the heartbeat is stale, so a real outage still gates
+        // predictors regardless of this longer TTL — this only defers the
+        // RECOVERING/respawn trigger for an engine that is merely busy.
+        if (diff > 300000) { // 5 minute timeout (see note above)
           const logMsg = `[SystemManager] Service ${name} heartbeat timeout! (${diff}ms)\n`;
           console.error(logMsg.trim());
           try {

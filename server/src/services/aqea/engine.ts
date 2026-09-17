@@ -195,7 +195,7 @@ export class AQEAEngine {
              macdSignal: ind.macd?.signal || 0, 
              macdHistogram: ind.macd?.histogram || 0,
              vwap: ind.vwap || context.currentPrice,
-             ema20: ind.ema20 || 0, ema50: ind.ema50 || 0, ema200: ind.sma200 || 0,
+             ema20: ind.ema20 ?? ind.ema21 ?? context.currentPrice, ema50: ind.ema50 ?? ind.ema55 ?? context.currentPrice, ema200: ind.sma200 ?? ind.ema55 ?? ind.ema21 ?? context.currentPrice,
              bars: context.bars || []
            },
            regime: { state: regime.state, score: regime.score },
@@ -270,7 +270,7 @@ export class AQEAEngine {
              macdSignal: ind.macd?.signal || 0, 
              macdHistogram: ind.macd?.histogram || 0,
              vwap: ind.vwap || context.currentPrice,
-             ema20: ind.ema20 || 0, ema50: ind.ema50 || 0, ema200: ind.sma200 ?? ind.ema55 ?? ind.ema21 ?? context.currentPrice,
+             ema20: ind.ema20 ?? ind.ema21 ?? context.currentPrice, ema50: ind.ema50 ?? ind.ema55 ?? context.currentPrice, ema200: ind.sma200 ?? ind.ema55 ?? ind.ema21 ?? context.currentPrice,
              bars: context.bars || []
            },
            regime: { state: regime?.state || "RANGING", score: regimeScore },
@@ -1548,7 +1548,7 @@ export class AQEAEngine {
           low: ind.low || context.currentPrice, close: context.currentPrice, volume: ind.volume || 0,
           atr: ind.atr14 || 0, adx: ind.adx14 || 0, rsi: ind.rsi14 || 50,
           macd: ind.macd?.histogram || 0, macdValue: ind.macd?.macd || 0, macdSignal: ind.macd?.signal || 0, macdHistogram: ind.macd?.histogram || 0,
-          vwap: ind.vwap || context.currentPrice, ema20: ind.ema20 || 0, ema50: ind.ema50 || 0, ema200: ind.sma200 || 0,
+          vwap: ind.vwap || context.currentPrice, ema20: ind.ema20 ?? ind.ema21 ?? context.currentPrice, ema50: ind.ema50 ?? ind.ema55 ?? context.currentPrice, ema200: ind.sma200 ?? ind.ema55 ?? ind.ema21 ?? context.currentPrice,
         },
         regime: { state: regime.state as any, score: regime.score },
         orderFlow: ofResult.diagnostics, smartMoney: smResult.diagnostics,
