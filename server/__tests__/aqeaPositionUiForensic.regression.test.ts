@@ -153,6 +153,10 @@ describe("AQEA Position UI Forensic & Real-Time Telemetry Regression Suite", () 
   });
 
   it("Test J: Emits [POSITION_UI_TRACE] telemetry matching required schema", async () => {
+    // pnlService gates this trace behind DEBUG_TRACES to avoid per-position log
+    // spam in production; enable it so the trace path is exercised here.
+    const prevDebugTraces = process.env.DEBUG_TRACES;
+    process.env.DEBUG_TRACES = "true";
     const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
     const rawTrade: any = {
       _id: "TRADE_BTC_LOG_01", userId, symbol, side: "BUY",
@@ -181,5 +185,7 @@ describe("AQEA Position UI Forensic & Real-Time Telemetry Regression Suite", () 
     expect(traceJson.source).toBe("BACKEND_PNL_SERVICE");
 
     logSpy.mockRestore();
+    if (prevDebugTraces === undefined) delete process.env.DEBUG_TRACES;
+    else process.env.DEBUG_TRACES = prevDebugTraces;
   });
 });
