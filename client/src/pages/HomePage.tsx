@@ -34,7 +34,7 @@ interface HomePageProps {
 export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { userId, selectedSymbol, livePrices, setSymbol, addAlert, accountType } = useAppStore();
+  const { userId, selectedSymbol, livePrices, setSymbol, addAlert, accountType, wallet } = useAppStore();
   const { currencyMode, fetchDashboard } = useDashboardStore();
   const summary = useDashboardStore((s) => s.summary) ?? INITIAL_SUMMARY;
   const domains = useDashboardStore((s) => s.domains);
@@ -255,6 +255,12 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   let terminalOpenPnl  = cryptoD.openPnL;
   let terminalRealized = netPnl.total;
 
+  // Capital Invested = total deposited (money actually put in), not just
+  // locked margin. invested.total is margin-in-open-positions only, which
+  // shows $0 when no trades are open even if the user deposited capital.
+  const depositedCapital = (wallet?.totalDeposited ?? 0);
+  let terminalCapitalDeposited = depositedCapital;
+
   const futPositions = positions.filter(p => (p.accountType ?? "FUTURES") === "FUTURES");
   const spotPositions = positions.filter(p => p.accountType === "SPOT");
 
@@ -294,6 +300,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
 
   if (terminalTab === 'futures') {
     terminalInvested = (invested.futures || 0) || futPositions.reduce((sum, p) => sum + (parseFloat(p.margin) || 0), 0);
+    terminalCapitalDeposited = depositedCapital;
     terminalRealized = netPnl.futures || 0;
     terminalOpenPnl = futOpenPnl;
     terminalEquity = (balances.futures || 0) + terminalInvested + terminalOpenPnl;
@@ -540,11 +547,15 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 </span>
               )}
             </div>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
-              <span>Capital Invested:</span>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}
+              title={`Total capital deposited into this account. Margin currently in open positions: $${terminalInvested.toFixed(2)}`}>
+              <span>Capital Deposited:</span>
               <span style={{ color: "#f8fafc", fontWeight: 700 }}>
-                {showValues ? `$${terminalInvested.toFixed(2)} (₹${(terminalInvested * inrRate).toFixed(0)})` : "••••••••"}
+                {showValues ? `$${terminalCapitalDeposited.toFixed(2)} (₹${(terminalCapitalDeposited * inrRate).toFixed(0)})` : "••••••••"}
               </span>
+              {terminalInvested > 0 && showValues && (
+                <span style={{ color: "#94a3b8", fontSize: 10 }}>· Margin in use: ${terminalInvested.toFixed(2)}</span>
+              )}
             </div>
           </div>
 
