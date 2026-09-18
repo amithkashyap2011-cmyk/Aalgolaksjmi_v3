@@ -54,6 +54,17 @@ function scheduleSentinelAudit(userId: string, mode: "PAPER" | "LIVE", accountTy
 // In-memory cache for DB aggregates (deposits, withdrawals, realized PnL)
 const walletAggregatesCache = new Map<string, { stats: { deposits: number; withdrawals: number; realizedPnL: number }; expiresAt: number }>();
 
+// The aggregates above are cached for 30s. Any route that writes a
+// WalletTransaction (deposit/withdraw/transfer/allocation) must call this so
+// the very next /balance read recomputes the totals instead of serving a
+// stale snapshot — otherwise the "Total Deposited/Withdrawn" figures lag up
+// to 30s behind a deposit the user just made (reported: deposits "not
+// reflecting"). Clearing the whole tiny map is cheaper than key-surgery and
+// it simply repopulates on the next query.
+function invalidateWalletAggregatesCache() {
+  walletAggregatesCache.clear();
+}
+
 async function getCachedWalletAggregates(userId: string, mode: string, accountType: string, rate: number) {
   const key = `${userId}:${mode}:${accountType}`;
   const cached = walletAggregatesCache.get(key);

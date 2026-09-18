@@ -115,9 +115,13 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     try {
       const activeAcct = terminalTab === 'spot' ? "SPOT" : terminalTab === 'futures' ? "FUTURES" : useAppStore.getState().accountType;
       await fetchDashboard(userId, activeAcct);
+      // LIVE/PAPER is owned by the app store. The dashboard store's own `mode`
+      // is never synced to the toggle, so reading it here loaded PAPER positions
+      // even in LIVE — which then fed the header equity with simulated funds.
+      const activeMode = useAppStore.getState().mode || "PAPER";
       const [pos, hist, ens] = await Promise.allSettled([
-        api.getOpenPositions((useDashboardStore.getState() as any).mode || "PAPER", activeAcct === "BOTH" ? "FUTURES" : activeAcct),
-        api.getTradeHistory("PAPER", 12, 0),
+        api.getOpenPositions(activeMode, activeAcct === "BOTH" ? "FUTURES" : activeAcct),
+        api.getTradeHistory(activeMode, 12, 0),
         api.getEnsembleReport(symbol),
       ]);
       if (pos.status === "fulfilled" && Array.isArray(pos.value)) setPositions(pos.value);
