@@ -1246,7 +1246,14 @@ router.post("/autopilot/mode", requirePermission("ENABLE_AUTONOMOUS"), (req: Aut
  */
 router.post("/funds/deposit", requirePermission("CREATE_ORDER"), async (req, res) => {
   try {
-    const userId = (req.body.userId as string) || "guest-user";
+    // Resolve userId identically to GET /funds (line ~1059): the client sends
+    // "guest-user", but the funds panel reads the real user's wallet. Without
+    // this remap the deposit lands in a separate "guest-user" wallet that
+    // nothing displays, so added funds never show up in the Indian panel (and
+    // the WalletTransaction audit below is skipped because "guest-user" is not
+    // a valid ObjectId). Remapping keeps the deposit and the display in sync.
+    const rawUserId = (req.body.userId as string) || "guest-user";
+    const userId = (!rawUserId || rawUserId === "guest-user") ? "6a39c0e7a5e2995ed257ca68" : rawUserId;
     const mode = (req.body.mode as "PAPER" | "LIVE") || "PAPER";
     const amount = Number(req.body.amount);
     if (isNaN(amount) || amount <= 0) {

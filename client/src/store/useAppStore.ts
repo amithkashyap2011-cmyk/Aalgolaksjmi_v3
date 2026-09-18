@@ -232,6 +232,7 @@ interface AppState {
     totalDeposited?: number;
     totalWithdrawn?: number;
     realizedPnL?: number;
+    balanceUnknown?: boolean; // LIVE Binance read failed — show "unavailable", not 0
   };
   positions: Position[];
   behaviorWeights: BehaviorWeights;
@@ -949,6 +950,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               savingsUsdt: sum("savingsUsdt"), isUnactivated: false,
               totalDeposited: sum("totalDeposited"), totalWithdrawn: sum("totalWithdrawn"),
               realizedPnL: sum("realizedPnL"),
+              balanceUnknown: !!(s?.balanceUnknown || f?.balanceUnknown),
             };
           })()
         : await api.getWalletBalance(mode, type) as any;
@@ -968,7 +970,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             isUnactivated: w.isUnactivated ?? false,
             totalDeposited: w.totalDeposited ?? 0,
             totalWithdrawn: w.totalWithdrawn ?? 0,
-            realizedPnL: w.realizedPnL ?? 0
+            realizedPnL: w.realizedPnL ?? 0,
+            balanceUnknown: w.balanceUnknown ?? false
           },
           inrRate: w.inrRate ?? DEFAULT_INR_RATE,
         });

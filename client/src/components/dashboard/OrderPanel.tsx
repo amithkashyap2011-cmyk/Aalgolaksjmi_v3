@@ -13,7 +13,7 @@ import Button from "../../ui/Button";
 import { FIB_SIZES } from "../../mock/data";
 
 export default function OrderPanel() {
-  const { wallet, selectedSymbol, submitOrder, execMode, setExecMode } = useAppStore();
+  const { wallet, selectedSymbol, submitOrder, execMode, setExecMode, mode } = useAppStore();
   const [qty, setQty] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +56,19 @@ export default function OrderPanel() {
       <p className="text-phi-xs text-slate-500 mb-phi-2">
         Symbol: <span className="font-medium text-slate-800">{selectedSymbol}</span>
       </p>
+
+      {/* Available balance for trading. In LIVE this is the real Binance
+          wallet balance; a failed read shows "unavailable" (never a bare 0). */}
+      <div className="flex items-center justify-between mb-phi-3 px-2.5 py-1.5 rounded-phi border border-slate-200 bg-slate-50">
+        <span className={clsx("text-phi-xs font-bold uppercase tracking-wide", mode === "LIVE" ? "text-aalred" : "text-slate-500")}>
+          {mode === "LIVE" ? "● Live balance" : "Paper balance"}
+        </span>
+        <span className={clsx("text-phi-sm font-bold tabular-nums", wallet.balanceUnknown ? "text-aalgold" : "text-slate-800")}>
+          {wallet.balanceUnknown
+            ? "⚠ Unavailable"
+            : `${(wallet.balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`}
+        </span>
+      </div>
 
       {/* Fibonacci quantity pills */}
       <div className="flex flex-wrap gap-1.5 mb-phi-3" role="group" aria-label="Quick quantity buttons" data-testid="fib-sizes">

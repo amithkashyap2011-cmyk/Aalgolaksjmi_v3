@@ -37,6 +37,11 @@ module.exports = {
         // proxy, set NODE_ENV=production and TRUST_PROXY=true together.
         NODE_ENV: 'development',
         PORT: 9991,
+        // Native bcrypt (auth) and outbound Binance DNS lookups all run on the
+        // libuv threadpool. At the default size of 4, stalled Binance DNS/fetch
+        // calls occupy every thread and starve bcrypt.compare, so /auth/login
+        // never resolves and the client renders "Offline". Give them headroom.
+        UV_THREADPOOL_SIZE: '64',
         // The quant engine is managed by PM2 (aqea-quant) below — the server must
         // never spawn its own copy, or duplicate instances pile up.
         DISABLE_QUANT_AUTOSTART: 'true'

@@ -328,7 +328,15 @@ export default function TopBar({ onMenuClick }: Props) {
           return (
             <button
               key={m.value}
-              onClick={() => { setMode(m.value); if (m.value === "BACKTEST") navigate("/backtest"); }}
+              onClick={() => {
+                // Switching INTO live moves real money — make the user confirm.
+                if (m.value === "LIVE" && mode !== "LIVE") {
+                  if (!window.confirm("⚠️ Switch to LIVE trading?\n\nLIVE mode places REAL orders and can move REAL money on your Binance account. Your balances below will show your actual Binance wallet.\n\nContinue?")) return;
+                }
+                setMode(m.value);
+                if (m.value === "LIVE") window.alert("🔴 LIVE mode is ON.\n\nOrders and withdrawals now use your real Binance account. Balances shown are live from Binance.");
+                if (m.value === "BACKTEST") navigate("/backtest");
+              }}
               style={{
                 padding: "3px 8px", borderRadius: 5, border: "none", cursor: "pointer",
                 background: active ? activeBg : "transparent",
