@@ -84,13 +84,27 @@ export class RiskEngine {
     }
 
     // 3. Portfolio Exposure Check
+    // Exposure = committed margin as a fraction of account EQUITY, where
+    // equity = free USDT + margin already locked in open positions.
+    //
+    // BUGFIX(exposure-double-count): opening a position DEBITS its margin from
+    // the USDT wallet (see paperState.debitWalletAndCreateTrade — the entry path
+    // debits `allocUsdt / leverage`), so `balance`/`effectiveBalance` here is
+    // FREE cash, NOT total equity. The old check divided committed margin by
+    // free cash, so the deployed capital was subtracted from the denominator AND
+    // counted in the numerator — a double-count that made the gate 2–5× too
+    // strict. A 1× SPOT account 87% deployed read as ~657% and every further
+    // entry was rejected, while the identical capital on 4× FUTURES (margin =
+    // notional/4) slipped under the cap. Dividing by equity restores the true
+    // "% of account committed" the 60% ceiling is meant to express.
     let totalMargin = 0;
     openTrades.forEach(t => {
        const lev = t.leverage || 1;
        totalMargin += (t.quantity * t.entryPrice) / lev;
     });
-    
-    if (totalMargin / effectiveBalance > AQEA_CONFIG.MAX_PORTFOLIO_EXPOSURE) {
+
+    const equity = effectiveBalance + totalMargin;
+    if (equity > 0 && totalMargin / equity > AQEA_CONFIG.MAX_PORTFOLIO_EXPOSURE) {
        return this.reject("PORTFOLIO_EXPOSURE_LIMIT_REACHED");
     }
 

@@ -255,9 +255,12 @@ describe("AQEA Risk Engine", () => {
     expect(res.reason).toContain("MAX_POSITIONS_BREACH");
   });
 
-  test("Reject if portfolio exposure > 10%", async () => {
-    // Open 1 position with 75% exposure (15000 notional on 20000 balance)
-    mockTradeFind.mockReturnValue({ lean: (jest.fn() as any).mockResolvedValue([{ quantity: 1, entryPrice: 15000, leverage: 1 }]) });
+  test("Reject if portfolio exposure exceeds MAX_PORTFOLIO_EXPOSURE (60%)", async () => {
+    // Exposure = committed margin / equity, where equity = free USDT + committed
+    // margin. beforeEach sets the wallet to 20000 free USDT. One open position of
+    // 40000 margin (qty 1 @ 40000, 1x) → equity 60000, exposure 40000/60000 =
+    // 66.7% > 60%.
+    mockTradeFind.mockReturnValue({ lean: (jest.fn() as any).mockResolvedValue([{ quantity: 1, entryPrice: 40000, leverage: 1 }]) });
 
     const ctx: any = {
       userId, symbol, mode: "PAPER", accountType: "FUTURES",

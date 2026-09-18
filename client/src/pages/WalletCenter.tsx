@@ -57,8 +57,8 @@ type ModalType = "deposit" | "withdraw" | "transfer" | "p2p" | "allocate" | null
 export default function WalletCenter() {
   const [walletDomainTab, setWalletDomainTab] = useState<"ALL" | "CRYPTO" | "INDIAN">("ALL");
   const [balances, setBalances] = useState({
-    spot:    { usdt: 0, locked: 0, total: 0 },
-    futures: { usdt: 0, locked: 0, total: 0 },
+    spot:    { usdt: 0, locked: 0, total: 0, unknown: false },
+    futures: { usdt: 0, locked: 0, total: 0, unknown: false },
     nse:     { inr: 0, locked: 0, total: 0 },
     bse:     { inr: 0, locked: 0, total: 0 },
     nifty50: { inr: 0, locked: 0, total: 0 },
@@ -122,6 +122,7 @@ export default function WalletCenter() {
 
   const refreshWallet = useAppStore((s) => s.refreshWallet);
   const userId = useAppStore((s) => s.userId);
+  const appMode = useAppStore((s) => s.mode);
   const { currencyMode, summary, fetchDashboard } = useDashboardStore();
   const inrRate = summary?.inrRate || 85;
   const netPnl = (summary as any)?.netPnL ?? { total: 0, spot: 0, futures: 0 };
@@ -140,8 +141,8 @@ export default function WalletCenter() {
       ]);
       if (summaryRes) {
         setBalances({
-          spot:    { usdt: summaryRes.spot?.usdt || 0, locked: summaryRes.spot?.lockedMargin || 0, total: summaryRes.spot?.totalBalance || 0 },
-          futures: { usdt: summaryRes.futures?.usdt || 0, locked: summaryRes.futures?.lockedMargin || 0, total: summaryRes.futures?.totalBalance || 0 },
+          spot:    { usdt: summaryRes.spot?.usdt || 0, locked: summaryRes.spot?.lockedMargin || 0, total: summaryRes.spot?.totalBalance || 0, unknown: !!summaryRes.spot?.balanceUnknown },
+          futures: { usdt: summaryRes.futures?.usdt || 0, locked: summaryRes.futures?.lockedMargin || 0, total: summaryRes.futures?.totalBalance || 0, unknown: !!summaryRes.futures?.balanceUnknown },
           nse:     { inr: summaryRes.nse?.inr || summaryRes.nse?.totalBalance || 0, locked: summaryRes.nse?.lockedMargin || 0, total: summaryRes.nse?.totalBalance || 0 },
           bse:     { inr: summaryRes.bse?.inr || summaryRes.bse?.totalBalance || 0, locked: summaryRes.bse?.lockedMargin || 0, total: summaryRes.bse?.totalBalance || 0 },
           nifty50: { inr: summaryRes.nifty50?.inr || summaryRes.nifty50?.totalBalance || 0, locked: summaryRes.nifty50?.lockedMargin || 0, total: summaryRes.nifty50?.totalBalance || 0 },
@@ -173,6 +174,7 @@ export default function WalletCenter() {
     setModal(m);
     setDepMsg(""); setWdMsg(""); setXfMsg(""); setP2pMsg(""); setAllocMsg(""); setConfirmConversion(false);
     if (m === "p2p") loadP2pOffers();
+    if (m === "withdraw") load(true); // pull fresh balances (Binance in LIVE) for the modal
   };
 
   const handleDeposit = async () => {
@@ -189,22 +191,54 @@ export default function WalletCenter() {
 
   const handleWithdraw = async () => {
     if (!wdAmt || isNaN(Number(wdAmt))) return;
+    const amount = parseFloat(wdAmt);
+    // Only "LIVE" moves real money; anything else stays simulated (PAPER).
+    const wMode: "PAPER" | "LIVE" = useAppStore.getState().mode === "LIVE" ? "LIVE" : "PAPER";
+
+    // Validate before the (blocking) confirm so we don't warn about a bad form.
+    if (wdMethod === "UPI" && !wdUpiId.includes("@")) { setWdMsg("Enter a valid UPI ID (e.g. name@upi)"); return; }
+    if (wdMethod === "CRYPTO" && !wdAddress) { setWdMsg("Enter a destination address"); return; }
+
+    // Don't let a LIVE withdrawal fire when we couldn't even read the real
+    // balance — a failed Binance read shows as "unavailable", not 0.
+    if (wMode === "LIVE" && (wdAcc === "SPOT" ? balances.spot.unknown : balances.futures.unknown)) {
+      setWdMsg("Live balance is unavailable — cannot withdraw. Check your Binance API key (Read permission / IP) and retry.");
+      window.alert("❌ Live balance unavailable\n\nCan't confirm your Binance balance, so the withdrawal is blocked. Check the API key's Read permission and IP restrictions, then retry.");
+      return;
+    }
+
+    // Real-money guard: a LIVE withdrawal is irreversible, so make the user
+    // confirm exactly what will happen before we fire it.
+    if (wMode === "LIVE") {
+      const dest = wdMethod === "UPI" ? `UPI ${wdUpiId}` : `${wdNetwork} address ${wdAddress}`;
+      const what = wdMethod === "UPI"
+        ? `₹ payout (≈ ${amount} USDT worth) to ${dest} via RazorpayX`
+        : `${amount} USDT to ${dest} on Binance`;
+      if (!window.confirm(`⚠️ LIVE WITHDRAWAL — REAL MONEY\n\nSend ${what}?\n\nThis cannot be undone.`)) {
+        return;
+      }
+    }
+
     setWdLoading(true);
     setWdMsg("");
     try {
-      const amount = parseFloat(wdAmt);
+      let res: any;
       if (wdMethod === "UPI") {
-        if (!wdUpiId.includes("@")) { setWdMsg("Enter a valid UPI ID (e.g. name@upi)"); return; }
-        const res: any = await withdrawUpi(amount, wdUpiId, wdAcc);
-        setWdMsg(res?.message || "Withdrawal submitted!");
+        res = await withdrawUpi(amount, wdUpiId, wdAcc, wMode);
       } else {
-        if (!wdAddress) { setWdMsg("Enter a destination address"); return; }
-        const res: any = await withdrawCrypto("USDT", amount, wdAddress, wdNetwork, wdAcc);
-        setWdMsg(res?.message || "Withdrawal submitted!");
+        res = await withdrawCrypto("USDT", amount, wdAddress, wdNetwork, wdAcc, wMode);
       }
+      const msg = res?.message || "Withdrawal submitted!";
+      setWdMsg(msg);
+      // Explicit alert so the outcome is impossible to miss (esp. for LIVE).
+      window.alert(`${wMode === "LIVE" ? "✅ LIVE withdrawal" : "Paper withdrawal"} submitted\n\n${msg}`);
       await load(); refreshWallet();
       setTimeout(() => { setModal(null); setWdMsg(""); setWdAmt(""); setWdUpiId(""); setWdAddress(""); }, 1600);
-    } catch (e: any) { setWdMsg(e?.message || "Withdrawal failed"); }
+    } catch (e: any) {
+      const err = e?.message || "Withdrawal failed";
+      setWdMsg(err);
+      window.alert(`❌ Withdrawal failed\n\n${err}`);
+    }
     finally { setWdLoading(false); }
   };
 
@@ -1337,6 +1371,18 @@ export default function WalletCenter() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {/* LIVE/PAPER + available balance banner — makes clear whether real
+                  money moves and shows the balance actually on Binance in LIVE. */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderRadius: 10, background: appMode === "LIVE" ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.05)", border: `1px solid ${appMode === "LIVE" ? R : BORD}` }}>
+                <span style={{ fontSize: 11, fontWeight: 900, color: appMode === "LIVE" ? R : "#94a3b8", textTransform: "uppercase" }}>
+                  {appMode === "LIVE" ? "● LIVE — real money" : "○ Paper (simulated)"}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 800, color: (wdAcc === "SPOT" ? balances.spot.unknown : balances.futures.unknown) ? A : "#ffffff" }}>
+                  {(wdAcc === "SPOT" ? balances.spot.unknown : balances.futures.unknown)
+                    ? "⚠ Balance unavailable"
+                    : `Avail: ${(wdAcc === "SPOT" ? balances.spot.usdt : balances.futures.usdt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`}
+                </span>
+              </div>
               <div>
                 <label style={labelStyle}>Payout Method</label>
                 <div style={{ display: "flex", gap: 8 }}>

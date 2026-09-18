@@ -27,6 +27,7 @@ import { runSentinelAudit } from "../services/sentinelAuditor.js";
 // Settings and autoTradeEngine imports removed — deposits no longer touch auto-trading
 import { clearDashboardCache } from "./aqeaUi.js";
 import { CurrencyService } from "../services/currencyService.js";
+import * as razorpay from "../services/razorpayService.js";
 
 const router = Router();
 
@@ -449,7 +450,7 @@ router.post("/deposit/upi", authGuard, async (req: AuthRequest, res) => {
 
 router.post("/withdraw/upi", authGuard, async (req: AuthRequest, res) => {
   try {
-    const { usdtAmount, upiId, accountType = "FUTURES" } = req.body as { usdtAmount: number; upiId: string; accountType?: string };
+    const { usdtAmount, upiId, accountType = "FUTURES", mode = "PAPER", name } = req.body as { usdtAmount: number; upiId: string; accountType?: string; mode?: "PAPER" | "LIVE"; name?: string };
     if (!usdtAmount || usdtAmount <= 0) {
       res.status(400).json({ error: "Amount must be positive" });
       return;
@@ -459,7 +460,63 @@ router.post("/withdraw/upi", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
-    const mode = "PAPER";
+    /* ── LIVE: real INR payout via RazorpayX ──────────────
+     * Draws from your funded RazorpayX account balance — this is INDEPENDENT
+     * of Binance and does NOT convert or pull any crypto. No paper wallet is
+     * touched. You must have off-ramped crypto → INR into RazorpayX already. */
+    if (mode === "LIVE") {
+      const liveRate = await getUsdtInrRate();
+      const liveInr = +(usdtAmount * liveRate).toFixed(2);
+      const txnRef = `WD${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+      let payout;
+      try {
+        payout = await razorpay.payoutToUpi({
+          upiId,
+          amountInr: liveInr,
+          name: name || "AALGOLAKSHMI Withdrawal",
+          referenceId: txnRef,
+          narration: "AALGO withdrawal",
+        });
+      } catch (payErr: any) {
+        // Payout never left RazorpayX — nothing to reconcile, safe to just fail.
+        res.status(502).json({ error: `RazorpayX payout failed: ${payErr.message}` });
+        return;
+      }
+
+      // The real money has now moved. If the DB record write fails we must
+      // NOT throw it away — there is no refund for a completed payout. Log
+      // loudly and still return the payout id so it can be reconciled.
+      let txn;
+      try {
+        txn = await WalletTransaction.create({
+          userId: req.userId,
+          type: "WITHDRAW",
+          method: "UPI",
+          amount: liveInr,
+          currency: "INR",
+          status: payout.status === "processed" ? "COMPLETED" : "PENDING",
+          upiId,
+          txnRef,
+          note: `LIVE payout ${usdtAmount} USDT → ₹${liveInr} @ ₹${liveRate}/USDT via RazorpayX (${payout.id})`,
+          accountType,
+        });
+      } catch (createErr: any) {
+        log(`[wallet] CRITICAL: RazorpayX payout ${payout.id} (₹${liveInr} → ${upiId}, ref ${txnRef}) SUCCEEDED but the DB record FAILED: ${createErr.message}`);
+      }
+
+      res.json({
+        transaction: txn ?? null,
+        inrAmount: liveInr,
+        rate: liveRate,
+        payoutId: payout.id,
+        status: payout.status,
+        message: `LIVE payout of ₹${liveInr} to ${upiId} submitted (RazorpayX ${payout.id}, status: ${payout.status}).`,
+      });
+      return;
+    }
+
+    // PAPER (simulated) withdrawal — debits the in-memory paper wallet only.
     // Fetch the rate BEFORE reading the balance so there's no `await` gap
     // between the read and the write below — previously `current` was read,
     // then `await getUsdtInrRate()` created a window where a concurrent
@@ -504,7 +561,8 @@ router.post("/withdraw/upi", authGuard, async (req: AuthRequest, res) => {
       throw createErr;
     }
 
-    // In production: integrate with payout API
+    // Simulated settlement (PAPER only). Real INR payouts go through the
+    // mode === "LIVE" RazorpayX branch above.
     setTimeout(async () => {
       try {
         txn.status = "COMPLETED";
@@ -527,12 +585,14 @@ router.post("/withdraw/upi", authGuard, async (req: AuthRequest, res) => {
 
 router.post("/withdraw/crypto", authGuard, async (req: AuthRequest, res) => {
   try {
-    const { symbol, amount, address, network, accountType = "FUTURES" } = req.body as {
+    const { symbol, amount, address, network, addressTag, accountType = "FUTURES", mode = "PAPER" } = req.body as {
       symbol: string;
       amount: number;
       address: string;
       network: string;
+      addressTag?: string;
       accountType?: string;
+      mode?: "PAPER" | "LIVE";
     };
 
     if (!symbol || !amount || amount <= 0 || !address || !network) {
@@ -540,7 +600,68 @@ router.post("/withdraw/crypto", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
-    const mode = "PAPER";
+    /* ── LIVE: real on-chain crypto withdrawal via Binance ──
+     * Sends `amount` of `symbol` to `address` on `network` from your real
+     * Binance balance. Requires the API key to have withdrawal permission
+     * AND the address whitelisted on Binance (Binance rejects otherwise).
+     * No paper wallet is touched. */
+    if (mode === "LIVE") {
+      if (mongoose.connection.readyState !== 1) {
+        res.status(503).json({ error: "Database unavailable — cannot process LIVE withdrawal." });
+        return;
+      }
+      const keys = await ApiKeys.findOne({ userId: req.userId });
+      if (!keys) {
+        res.status(400).json({ error: "API keys required for LIVE withdrawal. Configure them in Settings." });
+        return;
+      }
+      const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
+      const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
+
+      const txnRef = `CRYPTO${Date.now()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+      let result;
+      try {
+        result = await binance.withdrawCrypto(apiKey, apiSecret, {
+          coin: symbol,
+          network,
+          address,
+          amount,
+          addressTag,
+          withdrawOrderId: txnRef,
+        });
+      } catch (wErr: any) {
+        // Nothing left Binance — safe to just report the failure.
+        res.status(502).json({ error: `Binance withdrawal failed: ${wErr.message}` });
+        return;
+      }
+
+      // The withdrawal is now accepted by Binance (settles async on-chain).
+      // If the DB record fails there is nothing to refund — log loudly.
+      let txn;
+      try {
+        txn = await WalletTransaction.create({
+          userId: req.userId,
+          type: "WITHDRAW_CRYPTO",
+          method: "CRYPTO",
+          amount,
+          currency: symbol,
+          status: "PENDING",
+          txnRef,
+          note: `LIVE withdraw ${amount} ${symbol} to ${address} via ${network} (binance ${result.id})`,
+          accountType,
+        });
+      } catch (createErr: any) {
+        log(`[wallet] CRITICAL: Binance withdrawal ${result.id} (${amount} ${symbol} → ${address}, ref ${txnRef}) SUCCEEDED but the DB record FAILED: ${createErr.message}`);
+      }
+
+      res.json({
+        transaction: txn ?? null,
+        withdrawId: result.id,
+        message: `LIVE withdrawal of ${amount} ${symbol} to ${address} on ${network} submitted to Binance (id ${result.id}). It settles on-chain; track status in Binance.`,
+      });
+      return;
+    }
+
     const wallet = paper.getWallet(req.userId!, mode, accountType as any);
     const current = wallet.get("USDT") ?? 0; // fallback to USDT for simulated balancing
 

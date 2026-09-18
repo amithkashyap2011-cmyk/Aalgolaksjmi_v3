@@ -562,7 +562,12 @@ async function processSymbol(
       } else if (isConsensusHold) {
         alertMessage = `Score=${originalScore}% but Blocked: AI Consensus Gate HOLD (Check AI model health)`;
       } else if (!aqeaDecision.riskApproved) {
-        alertMessage = `Score=${originalScore}% but Blocked: Risk parameters rejected trade`;
+        // Surface the SPECIFIC RiskEngine reason (e.g. PORTFOLIO_EXPOSURE_LIMIT_REACHED,
+        // MAX_POSITIONS_BREACH, BALANCE_ZERO) instead of a generic string, so a blocked
+        // leg is diagnosable from the alert/telemetry rather than opaque.
+        const riskReason = (aqeaDecision.reasons || []).find((r: string) => r.startsWith("RISK_REJECTION:"));
+        const detail = riskReason ? riskReason.replace("RISK_REJECTION:", "").trim() : "risk parameters";
+        alertMessage = `Score=${originalScore}% but Blocked: Risk rejected — ${detail}`;
       } else if (isEntriesHalted) {
         alertMessage = `Score=${originalScore}% but Blocked: Capital Drift entries halted`;
       } else {

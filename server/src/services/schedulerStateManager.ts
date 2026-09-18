@@ -88,9 +88,21 @@ export class SchedulerStateManager {
     if (mongoose.connection.readyState !== 1) return;
     try {
       const field = accountType === "SPOT" ? "autoTradeSpot" : "autoTradeFutures";
+      // BUGFIX(leg-independence): only persist THIS leg's flag. The previous
+      // $set also forced `autoTrade: enabled` and `accountType: accountType`,
+      // which broke the independence this method promises:
+      //   • disabling one leg set autoTrade=false, silently halting the OTHER
+      //     leg (the tick gate in _executeProcessUser bails on autoTrade===false),
+      //   • enabling/disabling either leg overwrote the multi-leg `accountType`,
+      //     collapsing a "BOTH" selection onto a single type.
+      // We now ARM the master flag on enable only (never force it false here —
+      // the other leg may still be active; the master is recomputed by the
+      // disable route via isEnabledAny), and never touch `accountType`.
+      const update: Record<string, boolean> = { [field]: enabled };
+      if (enabled) update.autoTrade = true;
       await Settings.updateOne(
         { userId: toValidObjectId(userId) },
-        { $set: { [field]: enabled, autoTrade: enabled, accountType: accountType || "FUTURES" } }
+        { $set: update }
       );
     } catch (err) {
       console.error(`[SchedulerStateManager] Failed to persist status for ${userId}:`, err);

@@ -1059,6 +1059,56 @@ export async function queryOrder(apiKey: string, apiSecret: string, symbol: stri
   });
 }
 
+/* ── Crypto withdrawal (SAPI) ─────────────────────────── */
+
+export interface WithdrawResult {
+  /** Binance's internal withdrawal id — track status via /sapi/v1/capital/withdraw/history */
+  id: string;
+}
+
+export interface WithdrawParams {
+  /** Coin to withdraw, e.g. "USDT", "BTC" */
+  coin: string;
+  /** Withdrawal network, e.g. "TRX", "BSC", "ETH". Must match a network the coin supports. */
+  network: string;
+  /** Destination address. Must be whitelisted on the Binance account for API withdrawals. */
+  address: string;
+  /** Amount to withdraw (in `coin` units). */
+  amount: number;
+  /** Memo/tag for coins that require one (XRP, XLM, EOS, …). */
+  addressTag?: string;
+  /** Client-supplied idempotency id, surfaced back in withdraw history. */
+  withdrawOrderId?: string;
+}
+
+/**
+ * Submit a REAL crypto withdrawal to an external address via
+ * POST /sapi/v1/capital/withdraw/apply.
+ *
+ * Prerequisites on the Binance side (cannot be enforced from here):
+ *   - the API key must have the "Enable Withdrawals" permission, and
+ *   - `address` must be whitelisted (Binance rejects non-whitelisted
+ *     addresses for API withdrawals).
+ *
+ * Returns the withdrawal id on success. The withdrawal itself settles
+ * asynchronously on-chain; poll withdraw history to confirm completion.
+ */
+export async function withdrawCrypto(
+  apiKey: string,
+  apiSecret: string,
+  opts: WithdrawParams,
+): Promise<WithdrawResult> {
+  const params: Record<string, string> = {
+    coin: opts.coin.toUpperCase(),
+    network: opts.network.toUpperCase(),
+    address: opts.address,
+    amount: String(opts.amount),
+  };
+  if (opts.addressTag) params.addressTag = opts.addressTag;
+  if (opts.withdrawOrderId) params.withdrawOrderId = opts.withdrawOrderId;
+  return signedPost<WithdrawResult>("/sapi/v1/capital/withdraw/apply", apiKey, apiSecret, params);
+}
+
 /* ── WebSocket ticker stream (Combined Multiplexed) ──── */
 
 // Instead of one WS per symbol, we use ONE combined WS per account type.

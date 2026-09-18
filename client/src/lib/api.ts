@@ -334,17 +334,21 @@ export async function depositUpi(amount: number, upiId: string) {
   });
 }
 
-export async function withdrawUpi(usdtAmount: number, upiId: string, accountType = "FUTURES") {
+// mode defaults to "PAPER" (simulated). Pass "LIVE" to trigger a REAL INR
+// payout via RazorpayX on the server.
+export async function withdrawUpi(usdtAmount: number, upiId: string, accountType = "FUTURES", mode: "PAPER" | "LIVE" = "PAPER") {
   return request<any>("/wallet/withdraw/upi", {
     method: "POST",
-    body: JSON.stringify({ usdtAmount, upiId, accountType }),
+    body: JSON.stringify({ usdtAmount, upiId, accountType, mode }),
   });
 }
 
-export async function withdrawCrypto(symbol: string, amount: number, address: string, network: string, accountType = "FUTURES") {
+// mode defaults to "PAPER" (simulated). Pass "LIVE" to submit a REAL on-chain
+// withdrawal via Binance (requires withdrawal-enabled, address-whitelisted key).
+export async function withdrawCrypto(symbol: string, amount: number, address: string, network: string, accountType = "FUTURES", mode: "PAPER" | "LIVE" = "PAPER", addressTag?: string) {
   return request<any>("/wallet/withdraw/crypto", {
     method: "POST",
-    body: JSON.stringify({ symbol, amount, address, network, accountType }),
+    body: JSON.stringify({ symbol, amount, address, network, accountType, mode, addressTag }),
   });
 }
 
