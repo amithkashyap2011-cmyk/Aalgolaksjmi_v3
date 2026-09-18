@@ -53,12 +53,8 @@ export const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
     "CREATE_ORDER",
     "CANCEL_ORDER",
     "APPROVE_AI_PROPOSAL",
-    // A trader manages their OWN account: enabling/disabling autonomous mode
-    // and adjusting their own risk limits are self-service actions, not
-    // privileged admin operations.
     "ENABLE_AUTONOMOUS",
     "DISABLE_AUTONOMOUS",
-    "CHANGE_RISK_LIMIT",
     "EMERGENCY_STOP",
   ]),
 

@@ -38,8 +38,6 @@ jest.setTimeout(60000);
 describe("Regression Suite: 3-View PAPER Wallet Architecture (Indian, Crypto, All Markets)", () => {
   beforeAll(async () => {
     process.env.JWT_SECRET = JWT_SECRET;
-    const connected = await connectIfAvailable();
-    if (!connected || mongoose.connection.readyState !== 1) return;
 
     paper = await import("../src/services/paperState.js");
     ({ Settings } = await import("../src/models/Settings.js"));
@@ -54,6 +52,9 @@ describe("Regression Suite: 3-View PAPER Wallet Architecture (Indian, Crypto, Al
     app.use(express.json());
     app.use("/wallet", walletRouter);
     app.use("/aqea-ui", aqeaUiRouter);
+
+    const connected = await connectIfAvailable();
+    if (!connected || mongoose.connection.readyState !== 1) return;
 
     // Clean test state
     if (mongoose.connection.readyState === 1) {
@@ -160,7 +161,7 @@ describe("Regression Suite: 3-View PAPER Wallet Architecture (Indian, Crypto, Al
   it("7. Proves zero hardcoded fallback balances across all 5 accounts", async () => {
     if (skipIfNoMongo()) return;
     const freshUserId = new mongoose.Types.ObjectId().toString();
-    const freshToken = jwt.sign({ sub: freshUserId }, JWT_SECRET);
+    const freshToken = jwt.sign({ sub: freshUserId }, process.env.JWT_SECRET || JWT_SECRET);
 
     for (const acct of ["SPOT", "FUTURES", "INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50"]) {
       const bal = await request(app).get(`/wallet/balance?mode=PAPER&accountType=${acct}`).set("Authorization", `Bearer ${freshToken}`);
