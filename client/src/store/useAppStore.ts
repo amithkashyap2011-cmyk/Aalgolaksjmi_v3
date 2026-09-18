@@ -121,6 +121,8 @@ export interface Alert {
   level: "GREEN" | "AMBER" | "RED";
   text: string;
   time: string;
+  symbol?: string;   // trading pair e.g. "BTCUSDT"
+  isTrade?: boolean; // true = trade fill/rejection, triggers rich popup
 }
 
 export type BehaviorWeights = Record<string, number>;
@@ -284,7 +286,7 @@ interface AppState {
   setSymbols: (s: string[]) => void;
   setTimeframe: (t: string) => void;
   setBehaviorWeight: (name: string, v: number) => void;
-  addAlert: (level: Alert["level"], text: string) => void;
+  addAlert: (level: Alert["level"], text: string, symbol?: string) => void;
   toggleSidebar: () => void;
   refreshPositions: (m?: Mode, t?: AccountType) => Promise<void>;
   refreshWallet: (m?: Mode, t?: AccountType) => Promise<void>;
@@ -933,10 +935,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { behaviorWeights: next };
     });
   },
-  addAlert: (level, text) =>
+  addAlert: (level, text, symbol?: string) =>
     set((st) => ({
       alerts: [
-        { id: String(Date.now()), level, text, time: new Date().toLocaleTimeString() },
+        {
+          id: String(Date.now()),
+          level,
+          text,
+          time: new Date().toLocaleTimeString(),
+          symbol,
+          isTrade: !!symbol, // any alert with a symbol is a trade alert
+        },
         ...st.alerts.slice(0, 49),     // keep max 50 alerts
       ],
     })),
@@ -1213,7 +1222,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         // Refresh positions & wallet after order
         get().refreshPositions();
         get().refreshWallet();
-        get().addAlert("GREEN", `${side} ${quantity} ${symbol} filled`);
+        get().addAlert("GREEN", `${side} ${quantity} ${symbol} filled`, symbol);
         return result;
       } catch (err: any) {
         get().addAlert("RED", `Order failed: ${err.message}`);
@@ -1238,7 +1247,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // dropped them and made INR renders NaN/₹0.
       wallet: { ...st.wallet, balance: st.wallet.balance - quantity * price },
     }));
-    get().addAlert("GREEN", `${side} ${quantity} ${symbol} filled (mock)`);
+    get().addAlert("GREEN", `${side} ${quantity} ${symbol} filled (mock)`, symbol);
     return { ok: true };
   },
 
@@ -1669,10 +1678,11 @@ function setupSocketListeners(
     });
   });
 
-  socket.on("alert", (data: { level: string; text: string }) => {
+  socket.on("alert", (data: { level: string; text: string; symbol?: string }) => {
     get().addAlert(
       (data.level as "GREEN" | "AMBER" | "RED") ?? "AMBER",
       data.text,
+      data.symbol,
     );
   });
 

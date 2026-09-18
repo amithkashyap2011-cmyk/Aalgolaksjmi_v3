@@ -5,6 +5,7 @@ import TopBar from "./components/layout/TopBar";
 import MarketRibbon from "./components/layout/MarketRibbon";
 import BottomNav from "./components/layout/BottomNav";
 import ToastContainer from "./components/layout/ToastContainer";
+import TradeNotificationPopup from "./components/layout/TradeNotificationPopup";
 import AIFooterTradeBar from "./components/ai/AIFooterTradeBar";
 import ErrorBoundary from "./components/layout/ErrorBoundary";
 import { useAppStore } from "./store/useAppStore";
@@ -165,6 +166,7 @@ export default function App() {
       </div>
 
       <ToastContainer />
+      <TradeNotificationPopup />
     </>
   );
 }
