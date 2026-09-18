@@ -217,14 +217,14 @@ export class BinanceAdapter implements ExchangeAdapter {
 
     const start = Date.now();
     try {
-      if (binanceService.isRestBanned()) return [];
+      if (binanceService.isRestBanned("futures")) return [];
       const res = await fetch(
         `${BINANCE_FAPI_BASE}/fapi/v1/allForceOrders?symbol=${symbol}&limit=${limit}`,
         { signal: AbortSignal.timeout(800) }
       );
       if (!res.ok) {
         const text = await res.text();
-        binanceService.handleRestError(res.status, text);
+        binanceService.handleRestError(res.status, text, "futures");
         return cached?.data ?? [];
       }
       const data = await res.json() as any;

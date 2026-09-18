@@ -37,17 +37,27 @@ const REST_TIMEOUT_MS = 2_500;
 const priceCache = new Map<string, number>();
 
 /* ── Circuit Breaker & IP Ban Interceptor ──────────────── */
-let restBannedUntil = 0;
+// Binance Spot (api.binance.com) and Futures (fapi.binance.com) are separate
+// hosts with independent IP-ban / rate-limit accounting: a ban on one does NOT
+// ban the other. Track them separately so a rate-limit on one surface can never
+// suppress REST calls to the other. (Previously a single shared `restBannedUntil`
+// meant a Spot 429 silently blocked the Futures position-reconciliation reads —
+// and vice versa — for the whole 5-minute window.) Callers pass their surface;
+// it defaults to "spot" so every existing Spot call site is unchanged.
+export type BinanceSurface = "spot" | "futures";
+let spotBannedUntil = 0;
+let futuresBannedUntil = 0;
 
-export function isRestBanned(): boolean {
-  return Date.now() < restBannedUntil;
+export function isRestBanned(surface: BinanceSurface = "spot"): boolean {
+  return Date.now() < (surface === "futures" ? futuresBannedUntil : spotBannedUntil);
 }
 
-export function getRestBanRemainingMs(): number {
-  return Math.max(0, restBannedUntil - Date.now());
+export function getRestBanRemainingMs(surface: BinanceSurface = "spot"): number {
+  const until = surface === "futures" ? futuresBannedUntil : spotBannedUntil;
+  return Math.max(0, until - Date.now());
 }
 
-export function handleRestError(status: number, errorText: string): void {
+export function handleRestError(status: number, errorText: string, surface: BinanceSurface = "spot"): void {
   if (status === 418 || status === 429 || errorText.includes("banned until") || errorText.includes("-1003")) {
     const match = errorText.match(/banned until (\d+)/i);
     let banEndTime = Date.now() + 5 * 60 * 1000; // Default 5 minutes
@@ -63,8 +73,13 @@ export function handleRestError(status: number, errorText: string): void {
         banEndTime = Math.min(parsed, Date.now() + MAX_REST_BAN_MS);
       }
     }
-    restBannedUntil = Math.max(restBannedUntil, banEndTime);
-    console.warn(`[binance-circuit-breaker] Binance REST IP Ban/Rate-Limit detected (HTTP ${status})! Suppressing REST requests until ${new Date(restBannedUntil).toISOString()} (remaining: ${Math.round((restBannedUntil - Date.now()) / 1000)}s). Falling back to WebSocket stream + synthetic price feed.`);
+    if (surface === "futures") {
+      futuresBannedUntil = Math.max(futuresBannedUntil, banEndTime);
+    } else {
+      spotBannedUntil = Math.max(spotBannedUntil, banEndTime);
+    }
+    const until = surface === "futures" ? futuresBannedUntil : spotBannedUntil;
+    console.warn(`[binance-circuit-breaker] Binance ${surface.toUpperCase()} REST IP Ban/Rate-Limit detected (HTTP ${status})! Suppressing ${surface.toUpperCase()} REST requests until ${new Date(until).toISOString()} (remaining: ${Math.round((until - Date.now()) / 1000)}s). Falling back to WebSocket stream + synthetic price feed.`);
   }
 }
 
@@ -221,7 +236,7 @@ async function signedPost<T>(path: string, apiKey: string, apiSecret: string, pa
 }
 
 async function signedFuturesPost<T>(path: string, apiKey: string, apiSecret: string, params: Record<string, string>): Promise<T> {
-  if (isRestBanned()) {
+  if (isRestBanned("futures")) {
     throw new Error(`[CircuitBreaker] Binance Futures POST suppressed during active IP ban window.`);
   }
   const qs = new URLSearchParams({ recvWindow: "60000", ...params, timestamp: getAdjustedTime() });
@@ -233,14 +248,14 @@ async function signedFuturesPost<T>(path: string, apiKey: string, apiSecret: str
   });
   if (!res.ok) {
     const errText = await res.text();
-    handleRestError(res.status, errText);
+    handleRestError(res.status, errText, "futures");
     throw new Error(`Binance Futures ${res.status}: ${errText}`);
   }
   return res.json() as Promise<T>;
 }
 
 async function signedFuturesGet<T>(path: string, apiKey: string, apiSecret: string, params: Record<string, string> = {}): Promise<T> {
-  if (isRestBanned()) {
+  if (isRestBanned("futures")) {
     throw new Error(`[CircuitBreaker] Binance Futures GET suppressed during active IP ban window.`);
   }
   const qs = new URLSearchParams({ recvWindow: "60000", ...params, timestamp: getAdjustedTime() });
@@ -251,7 +266,7 @@ async function signedFuturesGet<T>(path: string, apiKey: string, apiSecret: stri
   });
   if (!res.ok) {
     const errText = await res.text();
-    handleRestError(res.status, errText);
+    handleRestError(res.status, errText, "futures");
     throw new Error(`Binance Futures GET ${res.status}: ${errText}`);
   }
   return res.json() as Promise<T>;
@@ -322,14 +337,14 @@ export async function getFuturesExchangeInfo(): Promise<SymbolInfo[]> {
   if (futuresExchangeInfoCache && now - futuresExchangeInfoFetchTime < 1000 * 60 * 60 * 12) {
     return futuresExchangeInfoCache;
   }
-  if (isRestBanned()) {
+  if (isRestBanned("futures")) {
     return futuresExchangeInfoCache || [];
   }
   try {
     const res = await fetch(`${FUTURES_BASE}/fapi/v1/exchangeInfo`, { signal: AbortSignal.timeout(REST_TIMEOUT_MS) });
     if (!res.ok) {
       const errText = await res.text();
-      handleRestError(res.status, errText);
+      handleRestError(res.status, errText, "futures");
       return futuresExchangeInfoCache || [];
     }
     const data = await res.json() as { symbols: SymbolInfo[] };
@@ -835,14 +850,14 @@ export async function getKlines(
 }
 
 export async function getFuturesOpenInterest(symbol: string): Promise<number> {
-  if (isRestBanned()) return 0;
+  if (isRestBanned("futures")) return 0;
   const binanceSymbol = toBinanceSymbol(symbol, true);
   const params = new URLSearchParams({ symbol: binanceSymbol });
   try {
     const res = await fetch(`${FUTURES_BASE}/fapi/v1/openInterest?${params.toString()}`, { signal: AbortSignal.timeout(REST_TIMEOUT_MS) });
     if (!res.ok) {
       const errText = await res.text();
-      handleRestError(res.status, errText);
+      handleRestError(res.status, errText, "futures");
       return 0;
     }
     const data = await res.json() as { openInterest: string };
@@ -859,14 +874,14 @@ export async function getLatestFundingRate(symbol: string): Promise<number> {
     return cached.rate;
   }
 
-  if (isRestBanned()) return cached?.rate ?? 0.0001;
+  if (isRestBanned("futures")) return cached?.rate ?? 0.0001;
   const binanceSymbol = toBinanceSymbol(symbol, true);
   const params = new URLSearchParams({ symbol: binanceSymbol, limit: "1" });
   try {
     const res = await fetch(`${FUTURES_BASE}/fapi/v1/fundingRate?${params.toString()}`, { signal: AbortSignal.timeout(REST_TIMEOUT_MS) });
     if (!res.ok) {
       const errText = await res.text();
-      handleRestError(res.status, errText);
+      handleRestError(res.status, errText, "futures");
       return cached?.rate ?? 0.0001;
     }
     const data = await res.json() as Array<{ fundingRate: string }>;
@@ -1137,7 +1152,8 @@ export function getActiveSocketsInfo() {
 
 export async function getTickerPrice(symbol: string, isFutures: boolean = false): Promise<number> {
   const cached = getTickerPriceSync(symbol, isFutures);
-  if (isRestBanned()) {
+  const surface: BinanceSurface = isFutures ? "futures" : "spot";
+  if (isRestBanned(surface)) {
     // A live WS/REST cached price is real, last-known market data — safe to serve.
     if (cached !== null) return cached;
     // On ban with a cold cache we have NO real price. Fabricating a plausible
@@ -1158,7 +1174,7 @@ export async function getTickerPrice(symbol: string, isFutures: boolean = false)
     const res = await fetch(url, { signal: AbortSignal.timeout(REST_TIMEOUT_MS) });
     if (!res.ok) {
       const errText = await res.text();
-      handleRestError(res.status, errText);
+      handleRestError(res.status, errText, surface);
       if (cached !== null) return cached;
       throw new Error(`Binance ticker error ${res.status}: ${errText}`);
     }
@@ -1177,7 +1193,8 @@ export async function getTickerPrice(symbol: string, isFutures: boolean = false)
 
 export async function get24hrTicker(symbol: string, isFutures: boolean = false): Promise<any> {
   const cachedPrice = getTickerPriceSync(symbol, isFutures);
-  if (isRestBanned()) {
+  const surface: BinanceSurface = isFutures ? "futures" : "spot";
+  if (isRestBanned(surface)) {
     // Serve a cache-derived ticker ONLY when we hold a real last-known price.
     if (cachedPrice !== null) {
       return {
@@ -1208,7 +1225,7 @@ export async function get24hrTicker(symbol: string, isFutures: boolean = false):
     const res = await fetch(url, { signal: AbortSignal.timeout(REST_TIMEOUT_MS) });
     if (!res.ok) {
       const errText = await res.text();
-      handleRestError(res.status, errText);
+      handleRestError(res.status, errText, surface);
       if (cachedPrice !== null) {
         return {
           symbol: symbol.toUpperCase(),
