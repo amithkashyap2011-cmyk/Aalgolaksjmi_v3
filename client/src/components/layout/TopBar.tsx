@@ -478,18 +478,20 @@ export default function TopBar({ onMenuClick }: Props) {
             title="Autonomous Indian Market AI Auto-Trader"
           />
         </div>
-      ) : (
+      ) : isCrypto ? (
+        /* ── CRYPTO only: 3 crypto cards ──────────────────── */
         <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 6, padding: "0 4px", flexShrink: 0 }} className="hidden lg:flex">
-          {/* Fully separate cards per market — no more "$X · ₹Y" combined
-              into one box. That compact dot-separated format still read as
-              one confusing number (e.g. "WIN RATE 0% · 100%?") even though
-              the underlying values were already split; a genuinely separate
-              card per market removes the ambiguity instead of just
-              formatting around it. */}
+          <DomainCard label="CRYPTO EQUITY" value={formatUsdWithInr(domains.crypto.totalEquity || 0, inrRate, true)} color="#38bdf8" title={`Binance Crypto Wallet Equity: $${(domains.crypto.totalEquity || 0).toFixed(2)} (₹${((domains.crypto.totalEquity || 0) * inrRate).toLocaleString("en-IN")})`} />
+          <DomainCard label="CRYPTO P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
+          <DomainCard label="CRYPTO WIN RATE" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
+        </div>
+      ) : (
+        /* ── GLOBAL: all 6 cards (crypto + india) ─────────── */
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 6, padding: "0 4px", flexShrink: 0 }} className="hidden lg:flex">
           <DomainCard label="CRYPTO EQUITY" value={formatUsdWithInr(domains.crypto.totalEquity || 0, inrRate, true)} color="#38bdf8" title={`Binance Crypto Wallet Equity: $${(domains.crypto.totalEquity || 0).toFixed(2)} (₹${((domains.crypto.totalEquity || 0) * inrRate).toLocaleString("en-IN")})`} />
           <DomainCard label="INDIA EQUITY" value={`₹${(domains.indianStock.totalEquity || 0).toLocaleString("en-IN")}`} color="#f97316" title={`Indian Broker Wallet Equity: ₹${(domains.indianStock.totalEquity || 0).toLocaleString("en-IN")} ($${((domains.indianStock.totalEquity || 0) / inrRate).toFixed(2)})`} />
-          <DomainCard label="CRYPTO P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Wallet Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
-          <DomainCard label="INDIA P&L" value={`${(domains.indianStock.dailyPnL || 0) >= 0 ? "+" : ""}₹${(domains.indianStock.dailyPnL || 0).toFixed(0)}`} color={(domains.indianStock.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Indian Wallet Daily P&L: ₹${(domains.indianStock.dailyPnL || 0).toFixed(2)}`} />
+          <DomainCard label="CRYPTO P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
+          <DomainCard label="INDIA P&L" value={`${(domains.indianStock.dailyPnL || 0) >= 0 ? "+" : ""}₹${(domains.indianStock.dailyPnL || 0).toFixed(0)}`} color={(domains.indianStock.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Indian Daily P&L: ₹${(domains.indianStock.dailyPnL || 0).toFixed(2)}`} />
           <DomainCard label="CRYPTO WIN RATE" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
           <DomainCard label="INDIA WIN RATE" value={`${(domains.indianStock.realizedWinRate ?? domains.indianStock.winRate ?? 0).toFixed(0)}%`} color="#f97316" title={`India Realized Win Rate — ${domains.indianStock.closedTrades || 0} closed trade(s)`} />
         </div>
