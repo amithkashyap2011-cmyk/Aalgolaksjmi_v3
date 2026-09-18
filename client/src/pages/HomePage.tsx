@@ -61,6 +61,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   const [consensus, setConsensus]       = useState<any>(null);
   const [loading, setLoading]           = useState(false);
   const [showValues, setShowValues]     = useState(true);
+  // Per-tab wallet: holds totalDeposited specific to SPOT / FUTURES / combined
+  const [tabWallet, setTabWallet]       = useState<{ totalDeposited: number } | null>(null);
 
   // Quick Order Station state
   const [orderQty, setOrderQty]         = useState<string>("100");
@@ -119,10 +121,18 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       // is never synced to the toggle, so reading it here loaded PAPER positions
       // even in LIVE — which then fed the header equity with simulated funds.
       const activeMode = useAppStore.getState().mode || "PAPER";
-      const [pos, hist, ens] = await Promise.allSettled([
+      const [pos, hist, ens, walletRes] = await Promise.allSettled([
         api.getOpenPositions(activeMode, activeAcct === "BOTH" ? "FUTURES" : activeAcct),
         api.getTradeHistory(activeMode, 12, 0),
         api.getEnsembleReport(symbol),
+        // Fetch the tab-specific wallet so Capital Deposited reflects only
+        // this account type's deposits, not the combined SPOT+FUTURES total.
+        terminalTab === 'all'
+          ? Promise.all([
+              api.getWalletBalance(activeMode, "SPOT").catch(() => null),
+              api.getWalletBalance(activeMode, "FUTURES").catch(() => null),
+            ]).then(([s, f]) => ({ totalDeposited: ((s as any)?.totalDeposited ?? 0) + ((f as any)?.totalDeposited ?? 0) }))
+          : api.getWalletBalance(activeMode, activeAcct as any).catch(() => null),
       ]);
       if (pos.status === "fulfilled" && Array.isArray(pos.value)) setPositions(pos.value);
       if (hist.status === "fulfilled") {
@@ -130,6 +140,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
         setRecentTrades(all.filter((t: any) => t.status === "CLOSED" || t.closedAt));
       }
       if (ens.status === "fulfilled") setConsensus(ens.value);
+      if (walletRes.status === "fulfilled" && walletRes.value) {
+        setTabWallet({ totalDeposited: (walletRes.value as any).totalDeposited ?? 0 });
+      }
     } finally {
       if (!silent) setLoading(false);
     }
@@ -258,7 +271,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   // Capital Invested = total deposited (money actually put in), not just
   // locked margin. invested.total is margin-in-open-positions only, which
   // shows $0 when no trades are open even if the user deposited capital.
-  const depositedCapital = (wallet?.totalDeposited ?? 0);
+  // tabWallet holds the per-tab (SPOT/FUTURES/combined) deposit total so
+  // switching tabs shows the right account's deposits, not a combined sum.
+  const depositedCapital = tabWallet?.totalDeposited ?? (wallet?.totalDeposited ?? 0);
   let terminalCapitalDeposited = depositedCapital;
 
   const futPositions = positions.filter(p => (p.accountType ?? "FUTURES") === "FUTURES");
