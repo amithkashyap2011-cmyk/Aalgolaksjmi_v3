@@ -221,6 +221,7 @@ export async function computeAccountBalance(userId: string, mode: "PAPER" | "LIV
     inrEquivalent: isIndianAcc ? +totalBalance.toFixed(2) : +(totalBalance * rate).toFixed(2),
     inrRate: rate,
     totalDeposited: +deposits.toFixed(4),
+    totalDepositedInr: isIndianAcc ? +(deposits * rate).toFixed(2) : +(deposits * rate).toFixed(2),
     totalWithdrawn: +withdrawals.toFixed(4),
     realizedPnL: +realizedPnL.toFixed(4),
     userId
