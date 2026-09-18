@@ -79,9 +79,11 @@ async function getCachedWalletAggregates(userId: string, mode: string, accountTy
   if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
     try {
       const userObjId = new mongoose.Types.ObjectId(userId);
-      const accountTypeMatch = accountType === "SPOT"
-        ? { accountType: "SPOT" }
-        : { $or: [{ accountType: "FUTURES" }, { accountType: { $exists: false } }, { accountType: null }] };
+      // Match the exact account type. FUTURES also matches legacy docs
+      // where accountType was never set (migrated before the field existed).
+      const accountTypeMatch = accountType === "FUTURES"
+        ? { $or: [{ accountType: "FUTURES" }, { accountType: { $exists: false } }, { accountType: null }] }
+        : { accountType };
 
       const [depGroups, wdGroups, tradesPnl] = await Promise.all([
         WalletTransaction.aggregate([
