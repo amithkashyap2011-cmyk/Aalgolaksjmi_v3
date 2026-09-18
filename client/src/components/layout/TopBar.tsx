@@ -65,7 +65,7 @@ function getIndianSessionStatus(): { label: string; color: string; tooltip: stri
 }
 
 export default function TopBar({ onMenuClick }: Props) {
-  const { mode, setMode, connected, accountType, setAccountType, activeMarket, setActiveMarket } = useAppStore();
+  const { mode, setMode, connected, accountType, setAccountType, activeMarket, setActiveMarket, execMode } = useAppStore();
   const { userId } = useAppStore();
   const { currencyMode, fetchDashboard } = useDashboardStore();
   const summary = useDashboardStore((s) => s.summary) ?? INITIAL_SUMMARY;
@@ -484,6 +484,30 @@ export default function TopBar({ onMenuClick }: Props) {
           <DomainCard label="CRYPTO EQUITY" value={formatUsdWithInr(domains.crypto.totalEquity || 0, inrRate, true)} color="#38bdf8" title={`Binance Crypto Wallet Equity: $${(domains.crypto.totalEquity || 0).toFixed(2)} (₹${((domains.crypto.totalEquity || 0) * inrRate).toLocaleString("en-IN")})`} />
           <DomainCard label="CRYPTO P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
           <DomainCard label="CRYPTO WIN RATE" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
+          {/* AI Agent running status */}
+          <div
+            title={execMode === "AUTO" ? "Crypto AI Agent is ACTIVE — placing trades autonomously" : "AI Agent paused — manual mode only"}
+            style={{
+              display: "flex", alignItems: "center", gap: 5,
+              padding: "3px 9px", borderRadius: 6, flexShrink: 0,
+              background: execMode === "AUTO" ? "rgba(16,185,129,0.12)" : "rgba(100,116,139,0.08)",
+              border: `1px solid ${execMode === "AUTO" ? "rgba(16,185,129,0.4)" : "rgba(100,116,139,0.2)"}`,
+              cursor: "default",
+            }}
+          >
+            <span style={{
+              width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+              background: execMode === "AUTO" ? "#10b981" : "#475569",
+              animation: execMode === "AUTO" ? "agentPulse 1.6s ease-out infinite" : "none",
+            }} />
+            <span style={{
+              fontSize: 9.5, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+              color: execMode === "AUTO" ? "#10b981" : "#475569",
+            }}>
+              AI {execMode === "AUTO" ? "AUTO" : "MANUAL"}
+            </span>
+          </div>
+          <style>{`@keyframes agentPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.7)}70%{box-shadow:0 0 0 6px rgba(16,185,129,0)}100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}}`}</style>
         </div>
       ) : (
         /* ── GLOBAL: all 6 cards (crypto + india) ─────────── */
