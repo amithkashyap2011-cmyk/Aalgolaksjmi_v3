@@ -304,6 +304,7 @@ router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
       await paper.setWalletBalance(userId, mode, "INR", 0, accountType);
     }
     clearDashboardCache();
+    invalidateWalletAggregatesCache();
 
     if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
       try {
@@ -358,6 +359,7 @@ router.post("/initialize-paper", optionalAuth, async (req: AuthRequest, res) => 
     );
 
     clearDashboardCache();
+    invalidateWalletAggregatesCache();
 
     res.json({
       ...result,
@@ -922,6 +924,7 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
       await paper.setWalletBalance(userId, mode, "INR", newBalance, acctType);
       await paper.setWalletBalance(userId, mode, "USDT", 0, acctType);
       clearDashboardCache();
+      invalidateWalletAggregatesCache();
 
       note = `Paper Deposit: +₹${numAmount.toLocaleString("en-IN")} INR`;
       log(`[deposit] Indian Wallet ${userId} (${acctType}) deposited +₹${numAmount} INR. New INR Balance: ₹${newBalance}`);
@@ -945,6 +948,7 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
         await paper.setWalletBalance(userId, mode, "USDT", newBalance, acctType);
         await paper.setWalletBalance(userId, mode, "INR", 0, acctType);
         clearDashboardCache();
+        invalidateWalletAggregatesCache();
 
         note = `Paper Deposit: +${numAmount} USDT`;
         log(`[deposit] Crypto Wallet ${userId} (${acctType}) deposited +${numAmount} USDT. New USDT Balance: ${newBalance}`);
@@ -979,6 +983,7 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
         await paper.setWalletBalance(userId, mode, "USDT", newBalance, acctType);
         await paper.setWalletBalance(userId, mode, "INR", 0, acctType);
         clearDashboardCache();
+        invalidateWalletAggregatesCache();
 
         note = `Paper Deposit (INR→USDT On-Ramp): +${usdtAmount} USDT (converted from ₹${numAmount.toLocaleString("en-IN")} INR @ ₹${rate.toFixed(2)}/USDT)`;
         log(`[deposit] Crypto Wallet ${userId} (${acctType}) converted ₹${numAmount} INR to +${usdtAmount} USDT. New balance: ${newBalance}`);
