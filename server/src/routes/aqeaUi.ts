@@ -6,6 +6,7 @@ import { AQEA_CONFIG } from "../services/aqea/config.js";
 import * as paper from "../services/paperState.js";
 import * as binance from "../services/binanceService.js";
 import { enrichOpenTrades } from "../services/pnlService.js";
+import { computeAccountBalance } from "./wallet.js";
 import { CurrencyService } from "../services/currencyService.js";
 import mongoose from "mongoose";
 import { Settings } from "../models/Settings.js";
@@ -63,7 +64,11 @@ router.get("/dashboard", async (req, res) => {
     }
 
     const reqAcctType = (req.query.accountType as string)?.toUpperCase() || "DEFAULT";
-    const cacheKey = `${userId}:${reqAcctType}`;
+    // LIVE vs PAPER changes which crypto wallet + trades feed the equity cards,
+    // so it must be part of the cache key or a LIVE request could be served a
+    // cached PAPER snapshot (and vice-versa).
+    const mode: "PAPER" | "LIVE" = (req.query.mode as string)?.toUpperCase() === "LIVE" ? "LIVE" : "PAPER";
+    const cacheKey = `${userId}:${reqAcctType}:${mode}`;
     const cached = dashboardCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < 3000) {
       return res.json(cached.data);
@@ -172,8 +177,8 @@ router.get("/dashboard", async (req, res) => {
     }
 
     // ── 1. Fetch ALL trades for this user (both domains) ──
-    const allTrades = await Trade.find({ userId: objectId, mode: "PAPER" }).lean();
-    const allOpenTrades = await Trade.find({ userId: objectId, status: "OPEN", mode: "PAPER" }).lean();
+    const allTrades = await Trade.find({ userId: objectId, mode }).lean();
+    const allOpenTrades = await Trade.find({ userId: objectId, status: "OPEN", mode }).lean();
     await enrichOpenTrades(allOpenTrades);
 
     // ── 2. Split by domain ──
@@ -191,8 +196,23 @@ router.get("/dashboard", async (req, res) => {
     const indianOpen = allOpenTrades.filter(isIndian);
 
     // ── 3. Crypto Wallets ──
-    const cryptoFuturesBalance = paper.getWallet(userId, "PAPER", "FUTURES").get("USDT") ?? 0;
-    const cryptoSpotBalance = paper.getWallet(userId, "PAPER", "SPOT").get("USDT") ?? 0;
+    // In LIVE, the crypto cash balance must come from the real Binance account,
+    // never the paper wallet. computeAccountBalance handles missing API keys and
+    // Binance timeouts, returning 0 (never paper) on failure — so a failed LIVE
+    // read shows $0, not simulated funds.
+    let cryptoFuturesBalance: number;
+    let cryptoSpotBalance: number;
+    if (mode === "LIVE") {
+      const [futLive, spotLive] = await Promise.all([
+        computeAccountBalance(userId, "LIVE", "FUTURES", inrRate).catch(() => null),
+        computeAccountBalance(userId, "LIVE", "SPOT", inrRate).catch(() => null),
+      ]);
+      cryptoFuturesBalance = futLive?.usdt ?? 0;
+      cryptoSpotBalance = spotLive?.usdt ?? 0;
+    } else {
+      cryptoFuturesBalance = paper.getWallet(userId, "PAPER", "FUTURES").get("USDT") ?? 0;
+      cryptoSpotBalance = paper.getWallet(userId, "PAPER", "SPOT").get("USDT") ?? 0;
+    }
 
     let cryptoOpenPnlFutures = 0, cryptoNotionalFutures = 0, cryptoLockedMargin = 0;
     let cryptoOpenPnlSpot = 0, cryptoNotionalSpot = 0, cryptoInvestedSpot = 0;

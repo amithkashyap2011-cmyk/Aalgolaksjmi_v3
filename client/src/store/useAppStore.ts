@@ -819,7 +819,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setMode: (m) => {
+    const prev = get().mode;
     set({ mode: m });
+    // On a mode switch, immediately drop the previous mode's balances so the
+    // paper wallet's simulated funds can never linger on screen while LIVE
+    // loads. In LIVE we mark balanceUnknown until the real Binance figure
+    // arrives, so the UI shows "unavailable" rather than a stale/paper number.
+    if (m !== prev) {
+      const w = get().wallet;
+      set({
+        wallet: {
+          ...w, balance: 0, totalBalance: 0, lockedMargin: 0, realizedBalance: 0,
+          bookedProfit: 0, savingsUsdt: 0, inrEquivalent: 0,
+          totalDeposited: 0, totalWithdrawn: 0, realizedPnL: 0,
+          balanceUnknown: m === "LIVE",
+        },
+      });
+    }
     get().refreshWallet(m);
     get().refreshPositions(m);
     if (get().connected) api.updateSettings({ defaultMode: m }).catch(console.error);
@@ -985,6 +1001,17 @@ export const useAppStore = create<AppState>((set, get) => ({
           get().refreshWallet();
         }).catch(() => {
           set({ connected: false });
+        });
+      } else if (get().mode === "LIVE") {
+        // A failed LIVE Binance read must NOT fall back to the last-shown
+        // numbers — those could be the paper wallet. Surface it as unknown
+        // (components render "unavailable") instead of a misleading balance.
+        const w = get().wallet;
+        set({
+          wallet: {
+            ...w, balance: 0, totalBalance: 0, lockedMargin: 0, realizedBalance: 0,
+            bookedProfit: 0, savingsUsdt: 0, inrEquivalent: 0, balanceUnknown: true,
+          },
         });
       } else {
         if (get().connected) console.warn("[store] refreshWallet failed, keeping current data");

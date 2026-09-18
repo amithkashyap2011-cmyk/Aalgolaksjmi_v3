@@ -153,9 +153,14 @@ export const useDashboardStore = create<DashboardStore>((set) => ({
     try {
       const activeAcctType = accountType || "BOTH";
       const acctParam = `&accountType=${activeAcctType}`;
+      // LIVE/PAPER is owned by the app store. The dashboard equity endpoint
+      // defaults to PAPER, so without forwarding the mode the CRYPTO EQUITY
+      // card keeps showing paper-wallet funds even in LIVE.
+      const mode = useAppStore.getState().mode === "LIVE" ? "LIVE" : "PAPER";
+      const modeParam = `&mode=${mode}`;
       const [dashRes, posRes] = await Promise.all([
-        fetch(`/aqea-ui/dashboard?userId=${userId}${acctParam}`),
-        fetch(`/aqea-ui/positions?userId=${userId}${acctParam}`)
+        fetch(`/aqea-ui/dashboard?userId=${userId}${acctParam}${modeParam}`),
+        fetch(`/aqea-ui/positions?userId=${userId}${acctParam}${modeParam}`)
       ]);
       if (!dashRes.ok) {
         throw new Error(`Dashboard request failed with HTTP ${dashRes.status}`);
