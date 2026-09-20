@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Wallet, ArrowDownCircle, ArrowUpCircle, RefreshCw, History, X, Power, PowerOff,
   AlertTriangle, Repeat, Users, TrendingUp, TrendingDown, Eye, EyeOff, Lock, Unlock,
-  Search, CheckCircle2, ArrowUpRight, ArrowDownLeft, Shield, Sliders, ChevronRight, Plus
+  Search, CheckCircle2, ArrowUpRight, ArrowDownLeft, Shield, ShieldCheck, Sliders, ChevronRight, Plus
 } from 'lucide-react';
 import {
   getWalletBalance, getWalletTransactions, depositPaper, hardReset, enableAutoTrade, disableAutoTrade, getAutoStatus,
@@ -160,7 +160,7 @@ export default function WalletCenter() {
     load(); 
     const interval = setInterval(() => load(true), 8000);
     return () => clearInterval(interval);
-  }, [userId]);
+  }, [userId, appMode]);
 
   const loadP2pOffers = async () => {
     setP2pLoading(true);
@@ -175,6 +175,12 @@ export default function WalletCenter() {
     setDepMsg(""); setWdMsg(""); setXfMsg(""); setP2pMsg(""); setAllocMsg(""); setConfirmConversion(false);
     if (m === "p2p") loadP2pOffers();
     if (m === "withdraw") load(true); // pull fresh balances (Binance in LIVE) for the modal
+    if (m === "transfer") {
+      load(true);
+      if (appMode === "LIVE") {
+        setXfKind("internal");
+      }
+    }
   };
 
   const handleDeposit = async () => {
@@ -244,17 +250,63 @@ export default function WalletCenter() {
 
   const handleTransfer = async () => {
     if (!xfAmt || isNaN(Number(xfAmt))) return;
+    const amount = parseFloat(xfAmt);
+    if (amount <= 0) {
+      setXfMsg("Please enter an amount greater than 0");
+      return;
+    }
+
+    const currentMode = appMode === "LIVE" ? "LIVE" : "PAPER";
+    const toAccount = xfFrom === "SPOT" ? "FUTURES" : "SPOT";
+
+    if (currentMode === "LIVE") {
+      if (xfKind !== "internal") {
+        setXfMsg("In LIVE mode, only internal Spot ⇄ Futures transfers are supported on Binance.");
+        return;
+      }
+      const available = xfFrom === "SPOT" ? balances.spot.usdt : balances.futures.usdt;
+      if (amount > available) {
+        setXfMsg(`Insufficient ${xfFrom} balance. Available: ${available.toFixed(4)} USDT`);
+        return;
+      }
+      const confirmed = window.confirm(
+        `⚠️ CONFIRM LIVE BINANCE TRANSFER\n\n` +
+        `• Amount: ${amount.toFixed(4)} USDT\n` +
+        `• From: Binance ${xfFrom} Account\n` +
+        `• To: Binance ${toAccount} Account\n\n` +
+        `This will execute an official Universal Transfer on your Binance account via API.\n\n` +
+        `Do you want to proceed?`
+      );
+      if (!confirmed) return;
+    } else {
+      if (xfKind === "internal") {
+        const available = xfFrom === "SPOT" ? balances.spot.usdt : balances.futures.usdt;
+        if (amount > available) {
+          setXfMsg(`Insufficient paper ${xfFrom} balance. Available: ${available.toFixed(2)} USDT`);
+          return;
+        }
+      }
+    }
+
     setXfLoading(true);
     setXfMsg("");
     try {
-      const amount = parseFloat(xfAmt);
       const res: any = xfKind === "internal"
-        ? await transferWallet("internal", amount, { from: xfFrom })
-        : await transferWallet("external", amount, { accountType: xfAcc });
-      setXfMsg(res?.message || "Transfer complete!");
-      await load(); refreshWallet();
-      setTimeout(() => { setModal(null); setXfMsg(""); setXfAmt(""); }, 1600);
-    } catch (e: any) { setXfMsg(e?.message || "Transfer failed"); }
+        ? await transferWallet("internal", amount, { from: xfFrom, mode: currentMode })
+        : await transferWallet("external", amount, { accountType: xfAcc, mode: currentMode });
+      const successMsg = res?.message || (currentMode === "LIVE" ? "LIVE Binance Transfer complete!" : "Transfer complete!");
+      setXfMsg(successMsg);
+      await load(true);
+      refreshWallet();
+      if (userId) fetchDashboard(userId, useAppStore.getState().accountType).catch(() => {});
+      setTimeout(() => { setModal(null); setXfMsg(""); setXfAmt(""); }, 1800);
+    } catch (e: any) {
+      const err = e?.message || "Transfer failed";
+      setXfMsg(err);
+      if (currentMode === "LIVE") {
+        window.alert(`❌ Binance Live Transfer Failed\n\n${err}`);
+      }
+    }
     finally { setXfLoading(false); }
   };
 
@@ -1445,71 +1497,196 @@ export default function WalletCenter() {
       {/* =========================================================================
          TRANSFER MODAL
          ========================================================================= */}
-      {modal === "transfer" && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)" }} onClick={() => setModal(null)}>
-          <div style={{ background: CARD, border: `1px solid ${BORD}`, borderRadius: 20, padding: 24, width: "100%", maxWidth: 420, boxShadow: "0 20px 40px rgba(0,0,0,0.5)" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(59,130,246,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: B }}>
-                  <Repeat size={20} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 900, color: "#ffffff" }}>Transfer Capital</div>
-                  <div style={{ fontSize: 11, color: "#94a3b8" }}>Move funds between accounts</div>
-                </div>
-              </div>
-              <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 4, display: "flex" }}><X size={18} /></button>
-            </div>
+      {modal === "transfer" && (() => {
+        const isLive = appMode === "LIVE";
+        const currentFromBal = xfFrom === "SPOT" ? balances.spot.usdt : balances.futures.usdt;
+        const currentToBal = xfFrom === "SPOT" ? balances.futures.usdt : balances.spot.usdt;
+        const toAccount = xfFrom === "SPOT" ? "FUTURES" : "SPOT";
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div>
-                <label style={labelStyle}>Transfer Destination</label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => setXfKind("internal")} style={{ flex: 1, padding: "10px", borderRadius: 10, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: xfKind === "internal" ? B : "rgba(255,255,255,0.05)", color: "#ffffff" }}>Spot ⇄ Futures</button>
-                  <button onClick={() => setXfKind("external")} style={{ flex: 1, padding: "10px", borderRadius: 10, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: xfKind === "external" ? B : "rgba(255,255,255,0.05)", color: "#ffffff" }}>External Binance</button>
-                </div>
-              </div>
-
-              <div>
-                <label style={labelStyle}>Amount (USDT)</label>
-                <input style={inpStyle} type="number" placeholder="0.00" value={xfAmt} onChange={(e) => setXfAmt(e.target.value)} />
-              </div>
-
-              {xfKind === "internal" ? (
-                <div>
-                  <label style={labelStyle}>Transfer Origin</label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {(["SPOT", "FUTURES"] as const).map((a) => (
-                      <button key={a} onClick={() => setXfFrom(a)} style={{ flex: 1, padding: "8px", borderRadius: 8, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: xfFrom === a ? B : "rgba(255,255,255,0.05)", color: "#ffffff" }}>{a}</button>
-                    ))}
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)" }} onClick={() => setModal(null)}>
+            <div style={{ background: CARD, border: `1px solid ${isLive ? "rgba(16,185,129,0.35)" : BORD}`, borderRadius: 20, padding: 24, width: "100%", maxWidth: 440, boxShadow: isLive ? "0 20px 40px rgba(16,185,129,0.12)" : "0 20px 40px rgba(0,0,0,0.5)" }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, background: isLive ? "rgba(16,185,129,0.15)" : "rgba(59,130,246,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: isLive ? G : B }}>
+                    <Repeat size={20} />
                   </div>
-                  <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, fontWeight: 600 }}>→ Capital moves directly into {xfFrom === "SPOT" ? "FUTURES" : "SPOT"}</div>
-                </div>
-              ) : (
-                <div>
-                  <label style={labelStyle}>Source Account</label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {(["SPOT", "FUTURES"] as const).map((a) => (
-                      <button key={a} onClick={() => setXfAcc(a)} style={{ flex: 1, padding: "8px", borderRadius: 8, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: xfAcc === a ? B : "rgba(255,255,255,0.05)", color: "#ffffff" }}>{a}</button>
-                    ))}
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 16, fontWeight: 900, color: "#ffffff" }}>Transfer Capital</span>
+                      <span style={{
+                        fontSize: 10,
+                        fontWeight: 800,
+                        padding: "2px 8px",
+                        borderRadius: 6,
+                        background: isLive ? "rgba(16,185,129,0.15)" : "rgba(59,130,246,0.15)",
+                        color: isLive ? G : B,
+                        border: `1px solid ${isLive ? "rgba(16,185,129,0.3)" : "rgba(59,130,246,0.3)"}`,
+                      }}>
+                        {isLive ? "🟢 LIVE BINANCE" : "🔵 PAPER"}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                      {isLive ? "Move real USDT between Binance Spot & Futures" : "Move simulated funds between accounts"}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, fontWeight: 600 }}>Simulated transfer — dummy paper funds only.</div>
                 </div>
-              )}
+                <button onClick={() => setModal(null)} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: 4, display: "flex" }}><X size={18} /></button>
+              </div>
 
-              {xfMsg && <div style={{ fontSize: 12, fontWeight: 700, color: xfMsg.toLowerCase().includes("fail") ? R : G, textAlign: "center" }}>{xfMsg}</div>}
+              {isLive ? (
+                <div style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)", borderRadius: 10, padding: "10px 12px", display: "flex", gap: 8, alignItems: "center", marginBottom: 14 }}>
+                  <ShieldCheck size={16} color={G} style={{ flexShrink: 0 }} />
+                  <div style={{ fontSize: 11, color: "#cbd5e1", lineHeight: 1.4 }}>
+                    <strong>Official Binance SAPI Transfer</strong>: Instant settlement with 0 fees directly between your Spot &amp; Futures accounts.
+                  </div>
+                </div>
+              ) : null}
 
-              <button
-                onClick={handleTransfer}
-                disabled={xfLoading || !xfAmt}
-                style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: xfLoading ? "#64748b" : B, color: "#ffffff", fontSize: 13, fontWeight: 900, cursor: xfLoading ? "not-allowed" : "pointer", marginTop: 4 }}
-              >
-                {xfLoading ? "Processing..." : "Execute Transfer"}
-              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {!isLive && (
+                  <div>
+                    <label style={labelStyle}>Transfer Destination</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => setXfKind("internal")} style={{ flex: 1, padding: "9px", borderRadius: 10, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: xfKind === "internal" ? B : "rgba(255,255,255,0.05)", color: "#ffffff" }}>Spot ⇄ Futures</button>
+                      <button onClick={() => setXfKind("external")} style={{ flex: 1, padding: "9px", borderRadius: 10, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: xfKind === "external" ? B : "rgba(255,255,255,0.05)", color: "#ffffff" }}>External Binance</button>
+                    </div>
+                  </div>
+                )}
+
+                {xfKind === "internal" ? (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <label style={labelStyle}>Transfer Route</label>
+                      <button
+                        onClick={() => setXfFrom(prev => prev === "SPOT" ? "FUTURES" : "SPOT")}
+                        style={{ background: "rgba(255,255,255,0.06)", border: `1px solid ${BORD}`, color: "#94a3b8", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                      >
+                        <Repeat size={11} /> Flip Direction
+                      </button>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "center" }}>
+                      {/* From Card */}
+                      <div
+                        onClick={() => setXfFrom("SPOT")}
+                        style={{
+                          background: xfFrom === "SPOT" ? (isLive ? "rgba(16,185,129,0.12)" : "rgba(59,130,246,0.12)") : CARD2,
+                          border: `1px solid ${xfFrom === "SPOT" ? (isLive ? G : B) : BORD}`,
+                          borderRadius: 10,
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        <div style={{ fontSize: 9, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase" }}>FROM</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: "#ffffff", marginTop: 2 }}>SPOT</div>
+                        <div style={{ fontSize: 11, color: isLive ? G : "#94a3b8", fontWeight: 600, marginTop: 2 }}>
+                          {balances.spot.usdt.toFixed(2)} USDT
+                        </div>
+                      </div>
+
+                      {/* Direction Icon */}
+                      <div style={{ color: "#64748b", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <ArrowUpRight size={18} />
+                      </div>
+
+                      {/* To Card */}
+                      <div
+                        onClick={() => setXfFrom("FUTURES")}
+                        style={{
+                          background: xfFrom === "FUTURES" ? (isLive ? "rgba(16,185,129,0.12)" : "rgba(59,130,246,0.12)") : CARD2,
+                          border: `1px solid ${xfFrom === "FUTURES" ? (isLive ? G : B) : BORD}`,
+                          borderRadius: 10,
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        <div style={{ fontSize: 9, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase" }}>FROM</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: "#ffffff", marginTop: 2 }}>FUTURES</div>
+                        <div style={{ fontSize: 11, color: isLive ? G : "#94a3b8", fontWeight: 600, marginTop: 2 }}>
+                          {balances.futures.usdt.toFixed(2)} USDT
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, fontWeight: 600 }}>
+                      Moving from <span style={{ color: "#ffffff", fontWeight: 800 }}>{xfFrom}</span> → <span style={{ color: isLive ? G : B, fontWeight: 800 }}>{toAccount}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label style={labelStyle}>Source Account</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {(["SPOT", "FUTURES"] as const).map((a) => (
+                        <button key={a} onClick={() => setXfAcc(a)} style={{ flex: 1, padding: "8px", borderRadius: 8, fontSize: 11, fontWeight: 800, border: "none", cursor: "pointer", background: xfAcc === a ? B : "rgba(255,255,255,0.05)", color: "#ffffff" }}>{a}</button>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, fontWeight: 600 }}>Simulated transfer — dummy paper funds only.</div>
+                  </div>
+                )}
+
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <label style={labelStyle}>Amount (USDT)</label>
+                    {xfKind === "internal" && (
+                      <button
+                        onClick={() => setXfAmt(currentFromBal > 0 ? String(Math.floor(currentFromBal * 10000) / 10000) : "0")}
+                        style={{ background: "none", border: "none", color: isLive ? G : B, fontSize: 11, fontWeight: 800, cursor: "pointer", padding: 0 }}
+                      >
+                        MAX ({currentFromBal.toFixed(2)} USDT)
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    style={inpStyle}
+                    type="number"
+                    step="any"
+                    placeholder="0.00"
+                    value={xfAmt}
+                    onChange={(e) => setXfAmt(e.target.value)}
+                  />
+                </div>
+
+                {xfMsg && (
+                  <div style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: xfMsg.toLowerCase().includes("fail") || xfMsg.toLowerCase().includes("insufficient") || xfMsg.toLowerCase().includes("error") ? R : G,
+                    textAlign: "center",
+                    padding: "8px 12px",
+                    background: "rgba(0,0,0,0.2)",
+                    borderRadius: 8,
+                  }}>
+                    {xfMsg}
+                  </div>
+                )}
+
+                <button
+                  onClick={handleTransfer}
+                  disabled={xfLoading || !xfAmt || parseFloat(xfAmt) <= 0}
+                  style={{
+                    width: "100%",
+                    padding: "12px",
+                    borderRadius: 10,
+                    border: "none",
+                    background: xfLoading ? "#64748b" : (isLive ? G : B),
+                    color: "#ffffff",
+                    fontSize: 13,
+                    fontWeight: 900,
+                    cursor: xfLoading || !xfAmt || parseFloat(xfAmt) <= 0 ? "not-allowed" : "pointer",
+                    marginTop: 4,
+                    boxShadow: !xfLoading && isLive ? "0 4px 14px rgba(16,185,129,0.3)" : undefined,
+                  }}
+                >
+                  {xfLoading ? (isLive ? "Executing on Binance..." : "Processing...") : (isLive ? "Execute Live Binance Transfer" : "Execute Transfer")}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* =========================================================================
          P2P MARKETPLACE MODAL

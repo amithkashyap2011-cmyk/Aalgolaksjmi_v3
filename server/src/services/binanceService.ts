@@ -1109,6 +1109,32 @@ export async function withdrawCrypto(
   return signedPost<WithdrawResult>("/sapi/v1/capital/withdraw/apply", apiKey, apiSecret, params);
 }
 
+/* ── Binance Universal Transfer (SAPI) ─────────────────── */
+
+export interface AssetTransferResult {
+  tranId: number;
+}
+
+/**
+ * Transfer funds between Binance sub-accounts / wallets:
+ * - MAIN_UMFUTURE: Spot account to USDⓈ-M Futures account
+ * - UMFUTURE_MAIN: USDⓈ-M Futures account to Spot account
+ */
+export async function transferAsset(
+  apiKey: string,
+  apiSecret: string,
+  type: "MAIN_UMFUTURE" | "UMFUTURE_MAIN",
+  asset: string,
+  amount: number,
+): Promise<AssetTransferResult> {
+  const params: Record<string, string> = {
+    type,
+    asset: asset.toUpperCase(),
+    amount: String(amount),
+  };
+  return signedPost<AssetTransferResult>("/sapi/v1/asset/transfer", apiKey, apiSecret, params);
+}
+
 /* ── WebSocket ticker stream (Combined Multiplexed) ──── */
 
 // Instead of one WS per symbol, we use ONE combined WS per account type.

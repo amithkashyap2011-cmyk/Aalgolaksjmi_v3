@@ -1288,6 +1288,63 @@ router.post("/transfer", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
+    if (mode === "LIVE") {
+      if (kind === "internal") {
+        const from = (req.body?.from as string) === "SPOT" ? "SPOT" : "FUTURES";
+        const to = from === "SPOT" ? "FUTURES" : "SPOT";
+
+        if (mongoose.connection.readyState !== 1) {
+          return res.status(503).json({ error: "Database unavailable — cannot process LIVE transfer." });
+        }
+        const keys = await ApiKeys.findOne({ userId });
+        if (!keys) {
+          return res.status(400).json({ error: "Binance API keys required for LIVE transfer. Configure them in Settings." });
+        }
+        const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
+        const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
+
+        const type = from === "SPOT" ? "MAIN_UMFUTURE" : "UMFUTURE_MAIN";
+        let result;
+        try {
+          result = await binance.transferAsset(apiKey, apiSecret, type, "USDT", amount);
+        } catch (bErr: any) {
+          return res.status(502).json({ error: `Binance transfer failed: ${bErr.message}` });
+        }
+
+        const txnRef = `BNBXFER${result.tranId || Date.now()}`;
+        try {
+          await WalletTransaction.create({
+            userId: new mongoose.Types.ObjectId(userId),
+            type: "ADJUSTMENT",
+            method: "CRYPTO",
+            capitalSource: "TRANSFER",
+            amount,
+            currency: "USDT",
+            status: "COMPLETED",
+            txnRef,
+            note: `LIVE Binance Transfer: ${amount.toFixed(4)} USDT ${from} → ${to} (tranId: ${result.tranId})`,
+            accountType: to,
+          });
+        } catch (dbErr: any) {
+          console.warn("[wallet] Failed to log live transfer transaction:", dbErr.message);
+        }
+
+        clearDashboardCache();
+        invalidateWalletAggregatesCache();
+
+        return res.json({
+          success: true,
+          message: `LIVE Transfer successful: ${amount.toFixed(2)} USDT moved from ${from} to ${to} on Binance!`,
+          tranId: result.tranId,
+          from,
+          to,
+          amount,
+        });
+      }
+
+      return res.status(400).json({ error: "In LIVE mode, only internal transfers (Spot ⇄ Futures) are supported via Binance API." });
+    }
+
     if (kind === "internal") {
       const from = (req.body?.from as string) === "SPOT" ? "SPOT" : "FUTURES";
       const to = from === "SPOT" ? "FUTURES" : "SPOT";
