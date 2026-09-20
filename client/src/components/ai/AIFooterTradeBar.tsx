@@ -21,6 +21,9 @@ import {
   Minus,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  RotateCw,
   Clock,
   Zap,
   Play,
@@ -61,6 +64,8 @@ const CRYPTO_POOL = [
   { symbol: "BTCUSDT", exchange: "BINANCE FUTURES", basePrice: 64250.0, leverage: 5, reasons: ["Bi-LSTM 2-Layer momentum flip", "1D CNN spatial volume delta", "Transformer micro-structure attention"] },
   { symbol: "ETHUSDT", exchange: "BINANCE FUTURES", basePrice: 3480.0, leverage: 5, reasons: ["Mamba SSM orderbook imbalance +2.8%", "Multi-head cross-attention signal", "Stochastic momentum RSI divergence"] },
   { symbol: "SOLUSDT", exchange: "BINANCE FUTURES", basePrice: 148.5, leverage: 3, reasons: ["High-frequency order flow delta", "Exponential volume surge +18%", "Ensemble neural consensus 4/4"] },
+  { symbol: "XRPUSDT", exchange: "BINANCE FUTURES", basePrice: 0.585, leverage: 5, reasons: ["Order book depth skew +3.2%", "Breakout liquidity sweep detection", "xLSTM exponential memory confirm"] },
+  { symbol: "DOGEUSDT", exchange: "BINANCE FUTURES", basePrice: 0.105, leverage: 4, reasons: ["CVD volume acceleration surge", "Multi-head cross attention spike", "Mean-reversion bounce from VWAP"] },
   { symbol: "BNBUSDT", exchange: "BINANCE SPOT", basePrice: 585.0, leverage: 1, reasons: ["Mean-reversion support bounce", "Microstructure orderbook liquidity depth", "Transformer trend-following confirm"] },
 ];
 
@@ -241,29 +246,41 @@ export default function AIFooterTradeBar() {
     return () => { clearInterval(t); clearTimeout(dip); };
   }, [accountType]);
 
+  /* Active Symbol & Pool Rotation */
+  const currentPool = isIndianRoute ? INDIAN_POOL : CRYPTO_POOL;
+  const [activeSymbol, setActiveSymbol] = useState<string>(() => selectedSymbol || currentPool[0].symbol);
+  const [autoRotate, setAutoRotate] = useState<boolean>(true);
+
+  // Sync when user explicitly changes selectedSymbol elsewhere in the app
+  useEffect(() => {
+    if (selectedSymbol) {
+      setActiveSymbol(selectedSymbol);
+    }
+  }, [selectedSymbol]);
+
   /* Live price */
   const [fetchedPrice, setFetchedPrice] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
-    api.getCurrentTickerPrices([selectedSymbol])
+    api.getCurrentTickerPrices([activeSymbol])
       .then((prices: any) => {
-        if (alive && prices && typeof prices[selectedSymbol] === "number") {
-          setFetchedPrice(prices[selectedSymbol]);
+        if (alive && prices && typeof prices[activeSymbol] === "number") {
+          setFetchedPrice(prices[activeSymbol]);
         }
       })
       .catch(() => {});
     return () => { alive = false; };
-  }, [selectedSymbol]);
+  }, [activeSymbol]);
 
   const getLivePrice = useCallback((sym: string) => {
-    if (sym === selectedSymbol && fetchedPrice && fetchedPrice > 0) return fetchedPrice;
+    if (sym === activeSymbol && fetchedPrice && fetchedPrice > 0) return fetchedPrice;
     return headerData?.find((h) => h.symbol === sym)?.price;
-  }, [headerData, selectedSymbol, fetchedPrice]);
+  }, [headerData, activeSymbol, fetchedPrice]);
 
   /* Prediction */
   const [prediction, setPrediction] = useState<UpcomingTradePrediction>(() => {
-    const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
+    const item = resolvePoolItem(activeSymbol, isIndianRoute, accountType);
     return generatePrediction(item, isIndianRoute, getLivePrice(item.symbol));
   });
 
@@ -279,7 +296,7 @@ export default function AIFooterTradeBar() {
   useEffect(() => {
     if (fetchedPrice && fetchedPrice > 0) {
       setPrediction((prev) => {
-        if (prev.symbol !== selectedSymbol) return prev;
+        if (prev.symbol !== activeSymbol) return prev;
         const tpMult = prev.direction === "SHORT" ? 0.978 : 1.022;
         const slMult = prev.direction === "SHORT" ? 1.012 : 0.988;
         return {
@@ -290,27 +307,46 @@ export default function AIFooterTradeBar() {
         };
       });
     }
-  }, [fetchedPrice, selectedSymbol]);
+  }, [fetchedPrice, activeSymbol]);
+
+  const rotateToNext = useCallback(() => {
+    const symbols = currentPool.map((p) => p.symbol);
+    const idx = symbols.indexOf(activeSymbol);
+    const nextSym = idx >= 0 ? symbols[(idx + 1) % symbols.length] : symbols[0];
+    setActiveSymbol(nextSym);
+    setCountdown(COUNTDOWN_TOTAL);
+  }, [currentPool, activeSymbol]);
+
+  const rotateToPrev = useCallback(() => {
+    const symbols = currentPool.map((p) => p.symbol);
+    const idx = symbols.indexOf(activeSymbol);
+    const prevSym = idx > 0 ? symbols[idx - 1] : symbols[symbols.length - 1];
+    setActiveSymbol(prevSym);
+    setCountdown(COUNTDOWN_TOTAL);
+  }, [currentPool, activeSymbol]);
 
   useEffect(() => {
-    const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
+    const item = resolvePoolItem(activeSymbol, isIndianRoute, accountType);
     applyPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
-    setCountdown(COUNTDOWN_TOTAL);
-  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction]);
+  }, [activeSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction]);
 
   useEffect(() => {
     const t = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
-          applyPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
+          if (autoRotate && !isExpanded) {
+            rotateToNext();
+          } else {
+            const item = resolvePoolItem(activeSymbol, isIndianRoute, accountType);
+            applyPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
+          }
           return COUNTDOWN_TOTAL;
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction]);
+  }, [activeSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction, autoRotate, isExpanded, rotateToNext]);
 
   useEffect(() => { setCustomMargin(String(prediction.allocatedMargin)); setCustomLeverage(String(prediction.estimatedLeverage)); }, []); // eslint-disable-line
 
@@ -479,10 +515,82 @@ export default function AIFooterTradeBar() {
 
                 {/* Row 2 — primary identity */}
                 <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, flexWrap: "nowrap", whiteSpace: "nowrap" }}>
-                  {/* Symbol — 16px primary (φ.fs.md) */}
-                  <span style={{ fontSize: φ.fs.md, fontWeight: 900, color: "var(--ds-text,#0f172a)", letterSpacing: "-0.02em", lineHeight: 1 }}>
-                    {prediction.symbol}
-                  </span>
+                  {/* Symbol with Previous/Next Arrows and Quick Switcher */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); rotateToPrev(); }}
+                      title="Previous AI Opportunity"
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--ds-text-faint,#64748b)",
+                        cursor: "pointer",
+                        padding: "1px 2px",
+                        display: "flex",
+                        alignItems: "center",
+                        borderRadius: 3,
+                        transition: "color 0.15s"
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = "#2563eb")}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--ds-text-faint,#64748b)")}
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+
+                    <select
+                      value={activeSymbol}
+                      onChange={(e) => {
+                        setActiveSymbol(e.target.value);
+                        setCountdown(COUNTDOWN_TOTAL);
+                      }}
+                      style={{
+                        fontSize: φ.fs.md,
+                        fontWeight: 900,
+                        color: "var(--ds-text,#0f172a)",
+                        letterSpacing: "-0.02em",
+                        lineHeight: 1,
+                        background: "transparent",
+                        border: "none",
+                        outline: "none",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        padding: 0,
+                        margin: 0,
+                      }}
+                    >
+                      {currentPool.map((p) => (
+                        <option key={p.symbol} value={p.symbol} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
+                          {p.symbol}
+                        </option>
+                      ))}
+                      {!currentPool.some(p => p.symbol === activeSymbol) && (
+                        <option value={activeSymbol} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
+                          {activeSymbol}
+                        </option>
+                      )}
+                    </select>
+
+                    <button
+                      onClick={(e) => { e.stopPropagation(); rotateToNext(); }}
+                      title="Next AI Opportunity"
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--ds-text-faint,#64748b)",
+                        cursor: "pointer",
+                        padding: "1px 2px",
+                        display: "flex",
+                        alignItems: "center",
+                        borderRadius: 3,
+                        transition: "color 0.15s"
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = "#2563eb")}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = "var(--ds-text-faint,#64748b)")}
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+
                   {/* Direction pill */}
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: `${dc}14`, color: dc, border: `1px solid ${dc}38` }}>
                     {prediction.direction === "LONG" ? <TrendingUp size={φ.ic.sm - 2} /> :
@@ -494,6 +602,29 @@ export default function AIFooterTradeBar() {
                   <span style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }} className="hidden sm:inline">
                     <strong style={{ color: "#2563eb" }}>{prediction.confidence}%</strong>
                   </span>
+
+                  {/* Auto-cycle indicator badge / button */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setAutoRotate(r => !r); }}
+                    title={autoRotate ? "Auto-cycling every 15s across market opportunities (Click to pause)" : "Auto-cycle paused (Click to resume)"}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 3,
+                      padding: "2px 6px",
+                      borderRadius: φ.r.xs,
+                      fontSize: 9,
+                      fontWeight: 800,
+                      background: autoRotate ? "rgba(37,99,235,0.08)" : "var(--ds-surface-2, #f1f5f9)",
+                      color: autoRotate ? "#2563eb" : "var(--ds-text-faint, #94a3b8)",
+                      border: `1px solid ${autoRotate ? "rgba(37,99,235,0.25)" : "var(--ds-border, #cbd5e1)"}`,
+                      cursor: "pointer",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    <RotateCw size={10} className={autoRotate ? "animate-spin" : ""} style={{ animationDuration: "6s" }} />
+                    <span className="hidden lg:inline">{autoRotate ? "RADAR" : "PAUSED"}</span>
+                  </button>
                 </div>
               </div>
             </div>
