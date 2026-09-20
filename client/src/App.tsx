@@ -58,9 +58,9 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"100vh", background:"#070d1a", flexDirection:"column", gap:16 }}>
-        <div style={{ width:40, height:40, border:"2px solid #1e3a5f", borderTopColor:"#3b82f6", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
-        <span style={{ fontSize:12, fontWeight:700, color:"#94a3b8", letterSpacing:"0.12em", textTransform:"uppercase" }}>AALGOLAKSHMI V3</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#070d1a", flexDirection: "column", gap: 16 }}>
+        <div style={{ width: 40, height: 40, border: "2px solid #1e3a5f", borderTopColor: "#3b82f6", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.12em", textTransform: "uppercase" }}>AALGOLAKSHMI V3</span>
         <button
           onClick={() => useAppStore.setState({ ready: true })}
           style={{
@@ -90,23 +90,23 @@ export default function App() {
       {sidebarOpen && (
         <div
           onClick={() => setSidebarOpen(false)}
-          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:40, backdropFilter:"blur(2px)" }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 40, backdropFilter: "blur(2px)" }}
         />
       )}
 
-      <div style={{ display:"flex", height:"100dvh", overflow:"hidden", background:"#070d1a" }}>
+      <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "#070d1a" }}>
         {/* Sidebar */}
         <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
         {/* Main column */}
-        <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0, overflow:"hidden" }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
           <TopBar onMenuClick={() => setSidebarOpen(true)} />
 
           {/* Trending coins ticker — symbol · $USDT / ₹INR · BUY/SELL · trend */}
           <MarketRibbon />
 
           <main
-            style={{ flex:1, overflowY:"auto", overflowX:"hidden", paddingBottom: 0 }}
+            style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 0 }}
             className="page-fade"
           >
             <ErrorBoundary>
@@ -119,39 +119,39 @@ export default function App() {
               >
                 <Routes>
                   {/* Primary Market Routes */}
-                  <Route path="/global"            element={<GlobalDashboard />} />
-                  <Route path="/"                  element={<HomePage defaultTerminal="SPOT" />} />
-                  <Route path="/crypto"            element={<HomePage defaultTerminal="SPOT" />} />
-                  <Route path="/spot"              element={<HomePage defaultTerminal="SPOT" />} />
-                  <Route path="/crypto/spot"       element={<Navigate to="/spot" replace />} />
-                  <Route path="/futures"           element={<HomePage defaultTerminal="FUTURES" />} />
-                  <Route path="/crypto/futures"    element={<Navigate to="/futures" replace />} />
-                  <Route path="/india"             element={<IndianMarketPage />} />
-                  <Route path="/indian-market"     element={<IndianMarketPage />} />
-                  <Route path="/portfolio"         element={<PortfolioCommandCenter />} />
+                  <Route path="/global" element={<GlobalDashboard />} />
+                  <Route path="/" element={<HomePage defaultTerminal="SPOT" />} />
+                  <Route path="/crypto" element={<HomePage defaultTerminal="SPOT" />} />
+                  <Route path="/spot" element={<HomePage defaultTerminal="SPOT" />} />
+                  <Route path="/crypto/spot" element={<Navigate to="/spot" replace />} />
+                  <Route path="/futures" element={<HomePage defaultTerminal="FUTURES" />} />
+                  <Route path="/crypto/futures" element={<Navigate to="/futures" replace />} />
+                  <Route path="/india" element={<IndianMarketPage />} />
+                  <Route path="/indian-market" element={<IndianMarketPage />} />
+                  <Route path="/portfolio" element={<PortfolioCommandCenter />} />
                   <Route path="/portfolio-command" element={<PortfolioCommandCenter />} />
 
                   {/* Core Platform Modules */}
-                  <Route path="/agent-control"     element={<AgentControlCenter />} />
-                  <Route path="/strategy-lab"      element={<StrategyLab />} />
-                  <Route path="/aqea/wallet"        element={<WalletCenter />} />
-                  <Route path="/aqea/positions"     element={<Positions />} />
-                  <Route path="/aqea/orders"        element={<OrdersPage />} />
-                  <Route path="/aqea/ai"            element={<AIMatrix />} />
-                  <Route path="/aqea/risk-center"   element={<RiskCenterV8 />} />
-                  <Route path="/backtest"           element={<BacktestPage />} />
-                  <Route path="/prediction"         element={<ForecastCenter />} />
-                  <Route path="/reports"            element={<ReportsModule />} />
-                  <Route path="/reports/:section"   element={<ReportsModule />} />
-                  <Route path="/settings"           element={<SettingsPage />} />
+                  <Route path="/agent-control" element={<AgentControlCenter />} />
+                  <Route path="/strategy-lab" element={<StrategyLab />} />
+                  <Route path="/aqea/wallet" element={<WalletCenter />} />
+                  <Route path="/aqea/positions" element={<Positions />} />
+                  <Route path="/aqea/orders" element={<OrdersPage />} />
+                  <Route path="/aqea/ai" element={<AIMatrix />} />
+                  <Route path="/aqea/risk-center" element={<RiskCenterV8 />} />
+                  <Route path="/backtest" element={<BacktestPage />} />
+                  <Route path="/prediction" element={<ForecastCenter />} />
+                  <Route path="/reports" element={<ReportsModule />} />
+                  <Route path="/reports/:section" element={<ReportsModule />} />
+                  <Route path="/settings" element={<SettingsPage />} />
 
                   {/* Convenient Route Aliases & Catch-All */}
-                  <Route path="/wallet"             element={<Navigate to="/aqea/wallet" replace />} />
-                  <Route path="/positions"          element={<Navigate to="/aqea/positions" replace />} />
-                  <Route path="/orders"             element={<Navigate to="/aqea/orders" replace />} />
-                  <Route path="/ai"                 element={<Navigate to="/aqea/ai" replace />} />
-                  <Route path="/risk"               element={<Navigate to="/aqea/risk-center" replace />} />
-                  <Route path="*"                   element={<Navigate to="/" replace />} />
+                  <Route path="/wallet" element={<Navigate to="/aqea/wallet" replace />} />
+                  <Route path="/positions" element={<Navigate to="/aqea/positions" replace />} />
+                  <Route path="/orders" element={<Navigate to="/aqea/orders" replace />} />
+                  <Route path="/ai" element={<Navigate to="/aqea/ai" replace />} />
+                  <Route path="/risk" element={<Navigate to="/aqea/risk-center" replace />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </Suspense>
             </ErrorBoundary>

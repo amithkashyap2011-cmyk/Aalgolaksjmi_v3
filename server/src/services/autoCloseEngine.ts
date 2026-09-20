@@ -21,8 +21,11 @@ export class AutoCloseEngine {
     // 1. Profit Lock (e.g., lock 50% of gains if price drops 20% from peak)
     // (Requires tracking peak price which is handled in autoTradeEngine.ts but I can add logic here)
 
-    // 2. Break Even Protection (Move SL to entry if profit > 1%)
-    if (pnlPct > 1.0 && trade.sl !== trade.entryPrice) {
+    // 2. Break Even Protection (Move SL to entry if profit > 2.5%)
+    // Raised from 1.0% → 2.5%: at 1% the gain barely covered round-trip fees
+    // (0.08%), causing SL thrashing that cut otherwise profitable trades early.
+    // 2.5% provides a meaningful cushion before locking break-even.
+    if (pnlPct > 2.5 && trade.sl !== trade.entryPrice) {
        return { triggered: true, reason: "BREAK_EVEN_PROTECTION", action: "MOVE_SL_TO_BE" };
     }
 

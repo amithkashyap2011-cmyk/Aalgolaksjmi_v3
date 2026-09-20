@@ -5,6 +5,7 @@ import { useAppStore, type Mode, type AccountType } from "../../store/useAppStor
 import { formatCurrency, formatInrWithUsd, formatUsdWithInr } from "../../lib/currency";
 import { hardReset } from "../../lib/api";
 import { Menu, Settings, Wifi, WifiOff, RotateCcw, AlertOctagon, ShieldAlert } from "lucide-react";
+import { LiveGovernanceModal } from "./LiveGovernanceModal";
 
 const MODES: { value: Mode; label: string; color: string }[] = [
   { value: "PAPER",    label: "Paper",    color: "#10b981" },
@@ -83,6 +84,7 @@ export default function TopBar({ onMenuClick }: Props) {
   const [emergencyLoading, setEmergencyLoading] = useState(false);
   const [emergencyStatus, setEmergencyStatus] = useState<string | null>(null);
   const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [showGovernanceModal, setShowGovernanceModal] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetSuccess, setResetSuccess] = useState("");
 
@@ -352,6 +354,23 @@ export default function TopBar({ onMenuClick }: Props) {
           );
         })}
       </div>
+
+      {/* 🛡️ GAP #15 FIX: OOS Live Governance Button & Tracker */}
+      <button
+        onClick={() => setShowGovernanceModal(true)}
+        title="View 13 Out-of-Sample (OOS) Criteria & Live Promotion Progress"
+        style={{
+          display: "flex", alignItems: "center", gap: 5,
+          padding: "3px 8px", borderRadius: 6,
+          border: "1px solid rgba(56, 189, 248, 0.35)",
+          background: "rgba(56, 189, 248, 0.1)",
+          color: "#38bdf8", fontSize: 10, fontWeight: 800,
+          cursor: "pointer", letterSpacing: "0.03em"
+        }}
+      >
+        <ShieldAlert size={12} />
+        <span>OOS Gates</span>
+      </button>
 
       {/* Market-Specific Account Mode Selector / Broker Tag */}
       {!isIndian ? (
@@ -733,6 +752,12 @@ export default function TopBar({ onMenuClick }: Props) {
           </div>
         </div>
       )}
+
+      {/* 🛡️ Live Governance Modal */}
+      <LiveGovernanceModal
+        isOpen={showGovernanceModal}
+        onClose={() => setShowGovernanceModal(false)}
+      />
     </header>
   );
 }

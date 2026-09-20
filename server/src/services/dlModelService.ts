@@ -126,17 +126,28 @@ export function buildSequenceInput(
     effectiveBars = [...padding, ...bars];
   }
 
-  // Compute per‑bar indicators for the enriched sequence
+  // Compute per‑bar indicators and microstructure order flow for the enriched sequence
   const rsiCalc = new StreamingRSI(14);
   const ema9Calc = new StreamingEMA(9);
   const ema21Calc = new StreamingEMA(21);
   const macdCalc = new StreamingMACD();
 
+  let runningCvd = 0;
   const enriched: SequenceBar[] = effectiveBars.map((b) => {
     const rsi = rsiCalc.update(b.close);
     const e9 = ema9Calc.update(b.close);
     const e21 = ema21Calc.update(b.close);
     const macd = macdCalc.update(b.close);
+
+    // Microstructure volume delta & order flow imbalance
+    const spread = Math.max(1e-6, b.high - b.low);
+    const buyPressure = (b.close - b.low) / spread;
+    const sellPressure = (b.high - b.close) / spread;
+    const barDelta = (buyPressure - sellPressure) * (b.volume ?? 0);
+    runningCvd += barDelta;
+    const imbalance = clamp(buyPressure - sellPressure, -1, 1);
+    const atr = spread;
+
     return {
       open: b.open,
       high: b.high,
@@ -147,6 +158,9 @@ export function buildSequenceInput(
       ema9: e9 ?? undefined,
       ema21: e21 ?? undefined,
       macdHist: macd?.histogram ?? undefined,
+      atr,
+      imbalance,
+      cvd: runningCvd,
     };
   });
 
@@ -245,13 +259,14 @@ export function predictSequenceLocalAttention(input: SequenceInput): DLPredictio
 export function predictSequenceLocalTransformer(input: SequenceInput): DLPrediction {
   const window = input.window;
   const len = window.length;
-  if (len < 4) return { ...STUB_DL_PREDICTION, modelName: "local-transformer-v1" };
+  if (len < 4) return { ...STUB_DL_PREDICTION, modelName: "local-transformer-v2" };
 
-  const D = 5; // feature dim: [close_ret, rsi_norm, ema_cross, macd_hist_norm, vol_norm]
+  // Feature dimension expanded to D = 7: [ret, rsiN, emaCross, macdN, volN, imbalance, cvdNorm]
+  const D = 7;
   const heads = 2;
   const Dh = Math.floor(D / heads) || 1;
 
-  // Build feature matrix F[t] = [close_ret, rsi_norm, ema_cross, macd_hist_norm, vol_norm]
+  // Build 7-D feature matrix F[t]
   const F: number[][] = window.map((b, t) => {
     const prev = t > 0 ? window[t - 1].close : b.close;
     const ret = prev > 0 ? (b.close - prev) / prev : 0;
@@ -260,7 +275,9 @@ export function predictSequenceLocalTransformer(input: SequenceInput): DLPredict
       ? (b.ema9 - b.ema21) / b.ema21 * 10 : 0;
     const macdN = b.macdHist !== undefined ? clamp(b.macdHist / Math.max(Math.abs(b.macdHist) + 1e-6, 1e-4), -1, 1) : 0;
     const volN = b.high > b.low ? clamp((b.close - b.low) / (b.high - b.low) - 0.5, -0.5, 0.5) : 0;
-    return [ret, rsiN, emaCross, macdN, volN];
+    const imbN = b.imbalance !== undefined ? clamp(b.imbalance, -1, 1) : 0;
+    const cvdN = b.cvd !== undefined ? clamp(b.cvd / (Math.abs(b.cvd) + 5000), -1, 1) : 0;
+    return [ret, rsiN, emaCross, macdN, volN, imbN, cvdN];
   });
 
   // Sinusoidal positional encoding
@@ -271,10 +288,19 @@ export function predictSequenceLocalTransformer(input: SequenceInput): DLPredict
   );
   const X = F.map((f, t) => f.map((v, i) => v + PE[t][i] * 0.1));
 
-  // Fixed Q/K/V projection weights (deterministic, not trained — approximates uniform attention baseline)
-  const Wq = [[0.3, -0.1, 0.5, 0.2, 0.1], [0.1, 0.4, -0.2, 0.3, 0.2]];
-  const Wk = [[0.2, 0.3, 0.4, -0.1, 0.1], [-0.1, 0.2, 0.1, 0.5, 0.3]];
-  const Wv = [[0.5, 0.1, 0.2, 0.3, -0.1], [0.3, -0.2, 0.4, 0.1, 0.2]];
+  // Multi-head Q/K/V projections with microstructure sensitivity
+  const Wq = [
+    [0.28, -0.10, 0.40, 0.20, 0.10, 0.25, 0.20],
+    [0.10, 0.35, -0.15, 0.25, 0.15, 0.20, 0.25],
+  ];
+  const Wk = [
+    [0.20, 0.25, 0.35, -0.10, 0.10, 0.20, 0.15],
+    [-0.10, 0.20, 0.10, 0.40, 0.25, 0.15, 0.30],
+  ];
+  const Wv = [
+    [0.40, 0.10, 0.20, 0.25, -0.10, 0.30, 0.25],
+    [0.25, -0.15, 0.35, 0.10, 0.20, 0.25, 0.30],
+  ];
 
   let contextSum = 0;
   let contextCount = 0;
@@ -315,7 +341,7 @@ export function predictSequenceLocalTransformer(input: SequenceInput): DLPredict
     directionScore,
     predictedMove: netScore * 0.018,
     confidence,
-    modelName: "local-transformer-v1",
+    modelName: "local-transformer-v2",
   };
 }
 
@@ -357,7 +383,8 @@ export function predictSequenceLocalMamba(input: SequenceInput): DLPrediction {
 
   for (let t = 0; t < len; t++) {
     const bar = window[t];
-    const u = bar.close > bar.open ? 1 : -1;
+    const imbBias = bar.imbalance !== undefined ? bar.imbalance * 0.4 : 0;
+    const u = (bar.close > bar.open ? 1 : -1) + imbBias;
     const vol = bar.high > 0 ? (bar.high - bar.low) / bar.close : meanVol;
     const recency = Math.exp(-0.02 * (len - 1 - t));
     const output = selectiveScan(u * (1 + (bar.rsi !== undefined ? Math.abs(bar.rsi - 50) / 100 : 0)), vol);
@@ -389,7 +416,7 @@ export function predictSequenceLocalxLSTM(input: SequenceInput): DLPrediction {
   const len = window.length;
 
   // xLSTM simulates exponential gating over the input sequence
-  // It handles long-range memory by tracking moving variances and directional consistency
+  // It handles long-range memory by tracking moving variances, CVD, and directional consistency
   
   let gateSum = 0;
   let directionalMomentum = 0;
@@ -410,15 +437,16 @@ export function predictSequenceLocalxLSTM(input: SequenceInput): DLPrediction {
     
     const returnDir = bar.close >= bar.open ? 1.0 : -1.0;
     const bodySize = Math.abs(bar.close - bar.open) / bar.close;
+    const imb = bar.imbalance !== undefined ? bar.imbalance : 0;
     
-    // Gating mechanism: Only count bars that exceed mean volatility (explosive momentum)
-    const gateOpen = bodySize > (volatilityThreshold * 0.8) ? 1.5 : 0.5;
+    // Gating mechanism: Prioritize bars with explosive volatility or significant order flow imbalance
+    const gateOpen = (bodySize > (volatilityThreshold * 0.8) || Math.abs(imb) > 0.35) ? 1.5 : 0.5;
     
     // Combine features with exponential weight
     const rsiFactor = bar.rsi !== undefined ? (bar.rsi - 50) / 25.0 : 0;
     const macdFactor = bar.macdHist !== undefined ? (bar.macdHist > 0 ? 0.5 : -0.5) : 0;
     
-    const barInfluence = (returnDir * 0.40 + rsiFactor * 0.30 + macdFactor * 0.30);
+    const barInfluence = (returnDir * 0.35 + imb * 0.25 + rsiFactor * 0.20 + macdFactor * 0.20);
     
     directionalMomentum += (barInfluence * gateOpen * expWeight);
     gateSum += (gateOpen * expWeight);

@@ -76,6 +76,7 @@ import * as autoTradeEngine from "./services/autoTradeEngine.js";
 import * as paperState from "./services/paperState.js";
 import { setIO } from "./services/socketService.js";
 import { UITelemetryService } from "./services/uiTelemetry.js";
+import { startManualSLTPMonitor, stopManualSLTPMonitor } from "./services/manualSLTPMonitor.js";
 
 // 🛡️ CRITICAL: Process-level Error Handlers
 process.on("uncaughtException", (err) => {
@@ -713,6 +714,10 @@ async function boot() {
         autoTradeEngine.start();
         bootLog("AutoTradeEngine confirmed running.");
 
+        // 🛡️ GAP #1 FIX: Monitor SL/TP for ALL open positions (including manual trades)
+        startManualSLTPMonitor(30_000); // every 30s
+        bootLog("ManualSLTPMonitor started — all paper positions monitored.");
+
         setInterval(() => UITelemetryService.emitSystemHealth(), 5000);
         setInterval(async () => {
           const { AITelemetryService } = await import("./services/aqea/aiTelemetryService.js");
@@ -785,8 +790,9 @@ async function shutdown(signal: string) {
   try {
     // 1. Stop Trade Engine + Quant Engine
     autoTradeEngine.stop();
+    stopManualSLTPMonitor();
     systemManager.stopQuantEngine();
-    console.log("[SHUTDOWN] AutoTradeEngine + QuantEngine stopped.");
+    console.log("[SHUTDOWN] AutoTradeEngine + ManualSLTPMonitor + QuantEngine stopped.");
 
     // 2. Close Server and IO
     if (io) {

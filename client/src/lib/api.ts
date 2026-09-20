@@ -609,3 +609,7 @@ export async function clearArchivedTrades(userId: string) {
 export async function getTradesWithArchived(userId: string, limit = 100) {
   return request<any[]>(`/aqea-ui/trades?userId=${encodeURIComponent(userId)}&limit=${limit}&archived=true`);
 }
+
+export async function getEvidenceGovernorReport() {
+  return request<{ success: boolean; report: any }>("/aqea-ui/evidence-governor");
+}

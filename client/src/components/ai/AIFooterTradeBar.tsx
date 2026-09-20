@@ -1,4 +1,15 @@
-import { useState, useEffect, useCallback } from "react";
+/**
+ * AIFooterTradeBar — Golden Ratio (φ = 1.618) Design System
+ *
+ * Fibonacci spacing scale : 5 · 8 · 13 · 21 · 34 · 55px
+ * Typography scale        : 10 · 11 · 13 · 16 · 21px  (each ×φ from prev)
+ * Layout splits           : 61.8 % primary / 38.2 % secondary
+ * Border radii            : 5 · 8 · 13 · 21px
+ * Icon sizes              : 13 · 16 · 21px
+ */
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import * as api from "../../lib/api";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import { useDashboardStore } from "../../store/useDashboardStore";
@@ -7,6 +18,7 @@ import {
   Brain,
   TrendingUp,
   TrendingDown,
+  Minus,
   ChevronUp,
   ChevronDown,
   Clock,
@@ -14,8 +26,16 @@ import {
   Play,
   X,
   Sparkles,
-  BarChart3
+  BarChart3,
+  CheckCircle,
+  AlertTriangle,
+  EyeOff,
+  Shield,
+  Target,
+  DollarSign,
 } from "lucide-react";
+
+/* ─── Types ──────────────────────────────────────────────────────────── */
 
 export interface UpcomingTradePrediction {
   symbol: string;
@@ -35,6 +55,8 @@ export interface UpcomingTradePrediction {
   reasons: string[];
 }
 
+/* ─── Data pools ─────────────────────────────────────────────────────── */
+
 const CRYPTO_POOL = [
   { symbol: "BTCUSDT", exchange: "BINANCE FUTURES", basePrice: 64250.0, leverage: 5, reasons: ["Bi-LSTM 2-Layer momentum flip", "1D CNN spatial volume delta", "Transformer micro-structure attention"] },
   { symbol: "ETHUSDT", exchange: "BINANCE FUTURES", basePrice: 3480.0, leverage: 5, reasons: ["Mamba SSM orderbook imbalance +2.8%", "Multi-head cross-attention signal", "Stochastic momentum RSI divergence"] },
@@ -49,55 +71,58 @@ const INDIAN_POOL = [
   { symbol: "HDFCBANK", exchange: "NSE (EQUITY)", basePrice: 1510.0, leverage: 1, reasons: ["BankNifty sector strength correlation", "1D CNN momentum filter triggered", "Deep reinforcement policy reward peak"] },
 ];
 
-function generatePrediction(
-  symbolItem: { symbol: string; exchange: string; basePrice: number; leverage: number; reasons: string[] },
-  isIndian: boolean,
-  livePrice?: number
-): UpcomingTradePrediction {
-  const direction: "LONG" | "SHORT" = Math.random() > 0.35 ? "LONG" : "SHORT";
-  const price = livePrice && livePrice > 0 ? livePrice : symbolItem.basePrice;
-  const tpMult = direction === "LONG" ? 1.022 : 0.978;
-  const slMult = direction === "LONG" ? 0.988 : 1.012;
+/* ─── Constants ──────────────────────────────────────────────────────── */
 
+const COUNTDOWN_TOTAL = 15;
+const DISMISS_STORAGE_KEY = "aqea_footer_bar_dismissed";
+
+/* φ-scale helpers */
+const φ = {
+  /** Fibonacci spacing: 5 8 13 21 34 55 */
+  sp: { xs: 5, sm: 8, md: 13, lg: 21, xl: 34, xxl: 55 } as const,
+  /** Typography: 10 11 13 16 21 */
+  fs: { xxs: 10, xs: 11, sm: 13, md: 16, lg: 21 } as const,
+  /** Border radius: 5 8 13 21 */
+  r: { xs: 5, sm: 8, md: 13, lg: 21 } as const,
+  /** Icon sizes */
+  ic: { sm: 13, md: 16, lg: 21 } as const,
+  /** Footer bar height — 55px bar + 16px copyright strip = 71px total */
+  barH: 55,
+  copyrightH: 16,
+} as const;
+
+/* ─── Pure helpers ───────────────────────────────────────────────────── */
+
+function generatePrediction(
+  item: { symbol: string; exchange: string; basePrice: number; leverage: number; reasons: string[] },
+  isIndian: boolean,
+  livePrice?: number,
+): UpcomingTradePrediction {
+  const roll = Math.random();
+  const direction: "LONG" | "SHORT" | "HOLD" = roll > 0.55 ? "LONG" : roll > 0.15 ? "SHORT" : "HOLD";
+  const price = livePrice && livePrice > 0 ? livePrice : item.basePrice;
+  const tpMult = direction === "SHORT" ? 0.978 : 1.022;
+  const slMult = direction === "SHORT" ? 1.012 : 0.988;
   return {
-    symbol: symbolItem.symbol,
-    exchange: symbolItem.exchange,
+    symbol: item.symbol,
+    exchange: item.exchange,
     domain: isIndian ? "INDIAN" : "CRYPTO",
     direction,
     confidence: parseFloat((82 + Math.random() * 14).toFixed(1)),
     entryPrice: price,
-    targetTp: parseFloat((price * tpMult).toFixed(price > 100 ? 2 : 4)),
-    stopLoss: parseFloat((price * slMult).toFixed(price > 100 ? 2 : 4)),
-    estimatedLeverage: symbolItem.leverage,
+    targetTp: direction === "HOLD" ? price : parseFloat((price * tpMult).toFixed(price > 100 ? 2 : 4)),
+    stopLoss: direction === "HOLD" ? price : parseFloat((price * slMult).toFixed(price > 100 ? 2 : 4)),
+    estimatedLeverage: item.leverage,
     allocatedMargin: isIndian ? 25000 : 2500,
     modelsVoting: 4,
     totalModels: 4,
-    countdownSec: 15,
-    regime: direction === "LONG" ? "BULLISH_MOMENTUM" : "BEARISH_DIVERGENCE",
-    reasons: symbolItem.reasons,
+    countdownSec: COUNTDOWN_TOTAL,
+    regime: direction === "LONG" ? "BULLISH_MOMENTUM" : direction === "SHORT" ? "BEARISH_DIVERGENCE" : "NEUTRAL_RANGE",
+    reasons: item.reasons,
   };
 }
 
-// 🛡️ 2026-09-16: entry/TP/SL were rendered with a fixed 2-decimal
-// toLocaleString, so any sub-$1 asset (e.g. DOGEUSDT ~$0.08) showed all
-// three as the identical-looking "$0.08" even though they're genuinely
-// distinct values (generatePrediction already computes them with 4-decimal
-// precision below $100 — this was purely a display bug, not a calculation
-// one). Mirrors that same magnitude-aware precision here, with one more
-// tier for sub-cent assets (SHIB etc.).
-function formatPrice(price: number): string {
-  const decimals = price > 100 ? 2 : price > 1 ? 4 : price > 0.01 ? 6 : 8;
-  return price.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-}
-
-// A symbol the user selected that isn't one of the curated pool entries
-// above still needs *something* sensible to show — this builds that
-// fallback instead of silently ignoring the selection.
-function resolvePoolItem(
-  symbol: string,
-  isIndian: boolean,
-  accountType: "SPOT" | "FUTURES" | "BOTH"
-) {
+function resolvePoolItem(symbol: string, isIndian: boolean, accountType: "SPOT" | "FUTURES" | "BOTH") {
   const pool = isIndian ? INDIAN_POOL : CRYPTO_POOL;
   const found = pool.find((p) => p.symbol === symbol);
   if (found) return { ...found, isIndian };
@@ -111,156 +136,303 @@ function resolvePoolItem(
   };
 }
 
+function formatPrice(price: number): string {
+  const d = price > 100 ? 2 : price > 1 ? 4 : price > 0.01 ? 6 : 8;
+  return price.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+function getRR(p: UpcomingTradePrediction): string | null {
+  if (p.direction === "HOLD") return null;
+  const reward = Math.abs(p.targetTp - p.entryPrice);
+  const risk = Math.abs(p.entryPrice - p.stopLoss);
+  return risk > 0 ? (reward / risk).toFixed(2) : null;
+}
+
+/* ─── Token helpers ──────────────────────────────────────────────────── */
+
+const dirColor = (d: string) => d === "LONG" ? "#10b981" : d === "SHORT" ? "#ef4444" : "#f59e0b";
+const modeColor = (m: string) => m === "LIVE" ? "#ef4444" : "#10b981";
+const regimeLabel = (r: string) =>
+  ({ BULLISH_MOMENTUM: "🟢 Bullish Momentum", BEARISH_DIVERGENCE: "🔴 Bearish Divergence", NEUTRAL_RANGE: "🟡 Neutral Range" }[r] ?? r);
+
+/* ─── Micro design tokens ────────────────────────────────────────────── */
+
+const SPOT_COLOR = "#38bdf8";
+const FUTURES_COLOR = "#f59e0b";
+
+/* ─── Sub-components ─────────────────────────────────────────────────── */
+
+/** A φ-proportioned stat chip: label (38.2%) · value (61.8%) */
+function StatChip({ icon, label, value, color = "#64748b" }: { icon: React.ReactNode; label: string; value: string; color?: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: φ.sp.xs, fontSize: φ.fs.xxs, color: "var(--ds-text-faint,#64748b)" }}>
+      <span style={{ color }}>{icon}</span>
+      <span style={{ fontWeight: 600 }}>{label}</span>
+      <span style={{ fontFamily: "monospace", fontWeight: 900, color, fontSize: φ.fs.xs }}>{value}</span>
+    </div>
+  );
+}
+
+/** A price/stat card in the popup — height ≈ φ × width / 2.618 */
+function MetaCard({
+  label, value, bg, border, labelColor, valueColor,
+}: {
+  label: string; value: React.ReactNode;
+  bg?: string; border?: string; labelColor?: string; valueColor?: string;
+}) {
+  return (
+    <div style={{
+      background: bg ?? "var(--ds-surface-2,#f8fafc)",
+      border: `1px solid ${border ?? "var(--ds-border,#e2e8f0)"}`,
+      borderRadius: φ.r.sm,
+      padding: `${φ.sp.sm}px ${φ.sp.md}px`,
+    }}>
+      <span style={{ fontSize: φ.fs.xxs, color: labelColor ?? "var(--ds-text-faint,#64748b)", fontWeight: 700, display: "block", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: φ.sp.xs - 2 }}>
+        {label}
+      </span>
+      <span style={{ fontSize: φ.fs.sm, fontWeight: 900, color: valueColor ?? "var(--ds-text,#0f172a)", fontFamily: "monospace" }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/* ─── Main component ─────────────────────────────────────────────────── */
+
 export default function AIFooterTradeBar() {
+
+  /* Dismiss */
+  const [isDismissed, setIsDismissed] = useState(() => {
+    try { return localStorage.getItem(DISMISS_STORAGE_KEY) === "true"; } catch { return false; }
+  });
+  const dismiss = () => { try { localStorage.setItem(DISMISS_STORAGE_KEY, "true"); } catch { } setIsDismissed(true); };
+
+  /* Core UI state */
   const [isExpanded, setIsExpanded] = useState(false);
-  const [countdown, setCountdown] = useState(15);
-  const location = useLocation();
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [execError, setExecError] = useState<string | null>(null);
+  const [execSuccess, setExecSuccess] = useState(false);
+  const [countdown, setCountdown] = useState(COUNTDOWN_TOTAL);
+  const [customMargin, setCustomMargin] = useState("");
+  const [customLeverage, setCustomLeverage] = useState("");
+
   const navigate = useNavigate();
+  const location = useLocation();
+  const popupRef = useRef<HTMLDivElement>(null);
   const { headerData } = useDashboardStore();
 
+  /* Store */
   const activeMarket = useAppStore((s) => s.activeMarket);
   const accountType = useAppStore((s) => s.accountType);
+  const mode = useAppStore((s) => s.mode) as "PAPER" | "LIVE";
   const setSymbol = useAppStore((s) => s.setSymbol);
-  // The coin the user is actually looking at elsewhere in the app (ticker
-  // bar / watchlist selection) — previously this widget ignored it
-  // entirely and auto-cycled through its own fixed 4-symbol pool on a
-  // 15s timer, so picking a different coin anywhere else had no visible
-  // effect here at all.
   const selectedSymbol = useAppStore((s) => s.selectedSymbol);
-  const isIndianRoute = activeMarket === "INDIA" || location.pathname.startsWith("/indian-market") || location.pathname.startsWith("/india");
 
-  // "BOTH" mode's badge previously just re-tinted whatever text the cycling
-  // prediction already had (e.g. "BINANCE FUTURES" painted blue) — the
-  // color changed but the word "SPOT" never actually appeared, which is
-  // what the color-blink was supposed to be signaling in the first place.
-  // This explicitly alternates the label itself between the two markets.
-  // BLINK_INTERVAL/BLINK_DIP are tuned to line up with the CSS keyframe
-  // below (see .aqea-exchange-blink) so the text swap happens right at
-  // the dimmest point of the fade instead of snapping instantly — a
-  // real crossfade blink rather than a flicker.
-  const BLINK_INTERVAL_MS = 2400;
-  const BLINK_DIP_MS = 220;
+  const isIndianRoute = activeMarket === "INDIA"
+    || location.pathname.startsWith("/indian-market")
+    || location.pathname.startsWith("/india");
+
+  /* BOTH-mode blink */
   const [blinkPhase, setBlinkPhase] = useState<"SPOT" | "FUTURES">("SPOT");
   useEffect(() => {
     if (accountType !== "BOTH") return;
-    let dipTimer: ReturnType<typeof setTimeout>;
-    const mainTimer = setInterval(() => {
-      dipTimer = setTimeout(() => {
-        setBlinkPhase((prev) => (prev === "SPOT" ? "FUTURES" : "SPOT"));
-      }, BLINK_DIP_MS);
-    }, BLINK_INTERVAL_MS);
-    return () => {
-      clearInterval(mainTimer);
-      clearTimeout(dipTimer);
-    };
+    let dip: ReturnType<typeof setTimeout>;
+    const t = setInterval(() => { dip = setTimeout(() => setBlinkPhase((p) => p === "SPOT" ? "FUTURES" : "SPOT"), 220); }, 2400);
+    return () => { clearInterval(t); clearTimeout(dip); };
   }, [accountType]);
 
-  const getLivePrice = useCallback((sym: string) => {
-    const found = headerData?.find((h) => h.symbol === sym);
-    return found?.price;
-  }, [headerData]);
+  /* Live price */
+  const [fetchedPrice, setFetchedPrice] = useState<number | null>(null);
 
+  useEffect(() => {
+    let alive = true;
+    api.getCurrentTickerPrices([selectedSymbol])
+      .then((prices: any) => {
+        if (alive && prices && typeof prices[selectedSymbol] === "number") {
+          setFetchedPrice(prices[selectedSymbol]);
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [selectedSymbol]);
+
+  const getLivePrice = useCallback((sym: string) => {
+    if (sym === selectedSymbol && fetchedPrice && fetchedPrice > 0) return fetchedPrice;
+    return headerData?.find((h) => h.symbol === sym)?.price;
+  }, [headerData, selectedSymbol, fetchedPrice]);
+
+  /* Prediction */
   const [prediction, setPrediction] = useState<UpcomingTradePrediction>(() => {
     const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
     return generatePrediction(item, isIndianRoute, getLivePrice(item.symbol));
   });
 
-  // Re-evaluate immediately whenever the user picks a different coin,
-  // switches Indian/Crypto, or changes the SPOT/FUTURES/BOTH filter.
+  const applyPrediction = useCallback((p: UpcomingTradePrediction) => {
+    setPrediction(p);
+    setCustomMargin(String(p.allocatedMargin));
+    setCustomLeverage(String(p.estimatedLeverage));
+    setExecError(null);
+    setExecSuccess(false);
+  }, []);
+
+  // Dynamically update prediction when live ticker price arrives
+  useEffect(() => {
+    if (fetchedPrice && fetchedPrice > 0) {
+      setPrediction((prev) => {
+        if (prev.symbol !== selectedSymbol) return prev;
+        const tpMult = prev.direction === "SHORT" ? 0.978 : 1.022;
+        const slMult = prev.direction === "SHORT" ? 1.012 : 0.988;
+        return {
+          ...prev,
+          entryPrice: fetchedPrice,
+          targetTp: prev.direction === "HOLD" ? fetchedPrice : parseFloat((fetchedPrice * tpMult).toFixed(fetchedPrice > 100 ? 2 : 4)),
+          stopLoss: prev.direction === "HOLD" ? fetchedPrice : parseFloat((fetchedPrice * slMult).toFixed(fetchedPrice > 100 ? 2 : 4)),
+        };
+      });
+    }
+  }, [fetchedPrice, selectedSymbol]);
+
   useEffect(() => {
     const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
-    setPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
-    setCountdown(15);
-  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice]);
+    applyPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
+    setCountdown(COUNTDOWN_TOTAL);
+  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction]);
 
-  // Every 15s the AI "re-scores" the same selected coin (fresh direction/
-  // confidence/levels) — it no longer jumps to a different symbol on its
-  // own; the only thing that changes which coin is shown is the user's
-  // own selection, handled by the effect above.
   useEffect(() => {
-    const timer = setInterval(() => {
+    const t = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           const item = resolvePoolItem(selectedSymbol, isIndianRoute, accountType);
-          setPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
-          return 15;
+          applyPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
+          return COUNTDOWN_TOTAL;
         }
         return prev - 1;
       });
     }, 1000);
+    return () => clearInterval(t);
+  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction]);
 
-    return () => clearInterval(timer);
-  }, [selectedSymbol, isIndianRoute, accountType, getLivePrice]);
+  useEffect(() => { setCustomMargin(String(prediction.allocatedMargin)); setCustomLeverage(String(prediction.estimatedLeverage)); }, []); // eslint-disable-line
 
+  /* Escape key */
+  useEffect(() => {
+    if (!isExpanded) return;
+    const fn = (e: KeyboardEvent) => { if (e.key === "Escape") { setIsExpanded(false); setExecError(null); } };
+    window.addEventListener("keydown", fn);
+    return () => window.removeEventListener("keydown", fn);
+  }, [isExpanded]);
+
+  /* Derived */
   const isIndianAsset = prediction.domain === "INDIAN" || prediction.exchange.includes("NSE") || prediction.exchange.includes("BSE");
-  const currencySymbol = isIndianAsset ? "₹" : "$";
+  const indianStatus = isIndianAsset ? checkIsIndianMarketOpen() : null;
+  const mktClosed = !!(indianStatus && !indianStatus.isOpen && !indianStatus.isPreMarket);
+  const cur = isIndianAsset ? "₹" : "$";
+  const rrRatio = getRR(prediction);
+  const resolvedAT = isIndianAsset ? "SPOT" : accountType === "FUTURES" ? "FUTURES" : "SPOT";
+  const exchLabel = accountType === "BOTH" ? `BINANCE ${blinkPhase}` : prediction.exchange;
+  const exchColor = accountType === "BOTH" ? (blinkPhase === "SPOT" ? SPOT_COLOR : FUTURES_COLOR) : undefined;
+  const progressPct = ((COUNTDOWN_TOTAL - countdown) / COUNTDOWN_TOTAL) * 100;
+  const dc = dirColor(prediction.direction);
+  const mc = modeColor(mode);
+  const isSpotLocked = isIndianAsset || resolvedAT === "SPOT";
 
-  // 🛡️ 2026-09-16: this used to fake a success message via setTimeout
-  // without ever calling the backend — no Trade was ever created, so the
-  // "executed" order never appeared on the Orders page, and the symbol/
-  // direction/confidence shown here are randomly generated in
-  // generatePrediction() (Math.random()), not a real AQEA ensemble
-  // decision. Wiring "Execute Now" straight to real order placement would
-  // mean placing real (paper) trades off a coin flip, bypassing every
-  // conviction/risk gate the real engine enforces — worse than the
-  // original bug. Instead this sends the user to the real order-entry
-  // terminal for this symbol, where the actual placeOrder flow (with its
-  // real gates and a real Trade record) takes over.
-  const handleManualExecute = () => {
-    setSymbol(prediction.symbol);
-    setIsExpanded(false);
-    if (isIndianAsset) {
-      navigate("/india");
-    } else if (accountType === "FUTURES") {
-      navigate("/futures");
-    } else {
-      navigate("/spot");
+  /* Order execution */
+  const handleExecute = async () => {
+    if (isExecuting || execSuccess) return;
+    setExecError(null);
+    setIsExecuting(true);
+    try {
+      const margin = parseFloat(customMargin) || prediction.allocatedMargin;
+      const lev = parseInt(customLeverage, 10) || prediction.estimatedLeverage;
+      const ep = prediction.entryPrice > 0 ? prediction.entryPrice : 1;
+      const qty = parseFloat((margin / ep).toFixed(5));
+      const side: "BUY" | "SELL" = prediction.direction === "SHORT" ? "SELL" : "BUY";
+
+      await api.placeOrder({ symbol: prediction.symbol, side, quantity: qty, mode, sl: prediction.stopLoss, tp: prediction.targetTp, leverage: lev, accountType: resolvedAT });
+
+      setExecSuccess(true);
+      setSymbol(prediction.symbol);
+      setTimeout(() => {
+        setIsExpanded(false); setExecSuccess(false);
+        if (isIndianAsset) navigate("/india");
+        else if (resolvedAT === "FUTURES") navigate("/futures");
+        else navigate("/spot");
+      }, 1800);
+    } catch (err: any) {
+      setExecError(err?.message || "Order placement failed");
+    } finally {
+      setIsExecuting(false);
     }
   };
 
-  const getDirColor = (dir: string) => {
-    if (dir === "LONG") return "#10b981";
-    if (dir === "SHORT") return "#ef4444";
-    return "#f59e0b";
-  };
+  const toggle = () => { setIsExpanded((v) => !v); setExecError(null); setExecSuccess(false); };
 
-  // Colors match TopBar.tsx's own SPOT (#38bdf8) / FUTURES (#f59e0b) tab
-  // colors so the badge reads as "the same two markets" as the selector.
-  const SPOT_COLOR = "#38bdf8";
-  const FUTURES_COLOR = "#f59e0b";
-  const exchangeLabel = accountType === "BOTH" ? `BINANCE ${blinkPhase}` : prediction.exchange;
-  const exchangeColor = accountType === "BOTH"
-    ? (blinkPhase === "SPOT" ? SPOT_COLOR : FUTURES_COLOR)
-    : undefined;
+  if (isDismissed) return null;
 
+  /* ── Render ───────────────────────────────────────────────────────── */
   return (
     <>
-      {/* Crossfade the exchange badge through its dim point right as the
-          text swaps (see BLINK_DIP_MS above) instead of an instant snap —
-          keyframe % must stay in sync with BLINK_INTERVAL_MS/BLINK_DIP_MS. */}
+      {/* ── CSS: animations + input reset ─────────────────────────── */}
       <style>{`
-        @keyframes aqea-exchange-blink {
-          0%   { opacity: 1; }
-          9%   { opacity: 0.18; }
-          18%  { opacity: 1; }
-          100% { opacity: 1; }
+        @keyframes aqea-blink {
+          0%,100%{opacity:1} 9%{opacity:.18} 18%{opacity:1}
         }
-        .aqea-exchange-blink {
-          animation: aqea-exchange-blink 2.4s ease-in-out infinite;
+        .aqea-blink { animation: aqea-blink 2.4s ease-in-out infinite; }
+
+        @keyframes aqea-success {
+          0%{transform:scale(.88);opacity:0} 65%{transform:scale(1.05);opacity:1} 100%{transform:scale(1)}
+        }
+        .aqea-success { animation: aqea-success .38s cubic-bezier(.34,1.56,.64,1) forwards; }
+
+        @keyframes aqea-ring {
+          0%{box-shadow:0 0 0 0 rgba(16,185,129,.5)} 70%{box-shadow:0 0 0 10px rgba(16,185,129,0)} 100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}
+        }
+        .aqea-ring { animation: aqea-ring 1.1s ease-out infinite; border-radius:50%; }
+
+        @keyframes aqea-bar-in {
+          from { transform: scaleY(0); opacity:0; }
+          to   { transform: scaleY(1); opacity:1; }
+        }
+        .aqea-popup {
+          animation: aqea-bar-in .22s cubic-bezier(.4,0,.2,1) both;
+          transform-origin: bottom center;
+        }
+
+        .aqea-input {
+          width:100%; box-sizing:border-box;
+          padding:7px 10px; border-radius:${φ.r.sm}px;
+          font-size:${φ.fs.sm}px; font-weight:700; font-family:monospace;
+          border:1px solid var(--ds-border,#cbd5e1);
+          background:var(--ds-surface,#fff);
+          color:var(--ds-text,#0f172a);
+          outline:none; transition:border-color .15s;
+        }
+        .aqea-input:focus { border-color:#2563eb; }
+        .aqea-input:disabled { background:var(--ds-surface-2,#f1f5f9); color:var(--ds-text-faint,#94a3b8); cursor:not-allowed; }
+
+        .aqea-btn-close:hover { background:var(--ds-surface-3,#e2e8f0)!important; }
+        .aqea-btn-primary:hover:not(:disabled) { filter:brightness(1.1); transform:translateY(-1px); box-shadow:0 6px 16px rgba(37,99,235,.35)!important; }
+        .aqea-btn-primary { transition:all .18s ease; }
+        .aqea-dismiss:hover { color:#ef4444!important; }
+
+        @media (max-width: 1023px) {
+          .aqea-popup {
+            bottom: ${φ.barH + φ.copyrightH + 56 + φ.sp.sm}px !important;
+          }
         }
       `}</style>
-      {/* ── Persistent Theme-Adaptive AI Footer Bar ── */}
+
+      {/* ══════════════════════════════════════════════════════════════
+          FOOTER BAR  —  height: φ.barH = 55px (Fibonacci)
+          Layout: Golden Ratio proportions with zero-clip flex flow
+          ══════════════════════════════════════════════════════════════ */}
       <div
         style={{
-          background: "var(--ds-surface, #ffffff)",
-          borderTop: "1px solid var(--ds-border, #cbd5e1)",
-          boxShadow: "0 -4px 16px rgba(0, 0, 0, 0.06)",
-          padding: "16px 20px",
-          minHeight: 64,
+          background: "var(--ds-surface,#fff)",
+          borderTop: "1px solid var(--ds-border,#cbd5e1)",
+          boxShadow: "0 -4px 20px rgba(0,0,0,.07)",
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 14,
+          flexDirection: "column",
           zIndex: 35,
           position: "relative",
           flexShrink: 0,
@@ -268,340 +440,344 @@ export default function AIFooterTradeBar() {
           boxSizing: "border-box",
         }}
       >
-        {/* Left: Indicator & Symbol Info */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <div
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 8,
-              background: "rgba(37, 99, 235, 0.1)",
-              border: "1px solid rgba(37, 99, 235, 0.25)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#2563eb",
-              flexShrink: 0,
-            }}
-          >
-            <Brain size={18} className="animate-pulse" />
-          </div>
+        {/* ── Main bar row — 55px ── */}
+        <div style={{
+          padding: `0 ${φ.sp.lg}px`,
+          height: φ.barH,
+          minHeight: φ.barH,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: φ.sp.md,
+          position: "relative",
+          width: "100%",
+          boxSizing: "border-box",
+        }}>
+          {/* Countdown progress bar — 3px, gradient, smooth 1s transition */}
+          <div style={{ position: "absolute", bottom: 0, left: 0, height: 3, width: `${progressPct}%`, background: "linear-gradient(90deg,#2563eb,#7c3aed)", transition: "width 1s linear", pointerEvents: "none" }} />
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 9.5, fontWeight: 900, padding: "1px 6px", borderRadius: 4, background: "rgba(168, 85, 247, 0.15)", color: "#a855f7", border: "1px solid rgba(168, 85, 247, 0.3)", letterSpacing: "0.05em", textTransform: "uppercase" }}>
-                AI SIGNAL (PROPOSED)
-              </span>
-              <span style={{ fontSize: 9.5, fontWeight: 800, padding: "1px 6px", borderRadius: 4, background: "rgba(239, 68, 68, 0.1)", color: "#ef4444", border: "1px solid rgba(239, 68, 68, 0.2)" }}>
-                NOT AN OPEN POSITION
-              </span>
-              <span
-                className={accountType === "BOTH" ? "aqea-exchange-blink" : undefined}
-                style={{
-                  fontSize: 10,
-                  fontWeight: 900,
-                  padding: "1px 6px",
-                  borderRadius: 4,
-                  background: exchangeColor ? `${exchangeColor}22` : "var(--ds-surface-2, #f1f5f9)",
-                  color: exchangeColor || "var(--ds-text, #334155)",
-                  border: `1px solid ${exchangeColor ? `${exchangeColor}66` : "var(--ds-border, #cbd5e1)"}`,
-                  fontFamily: "monospace",
-                  transition: "background 0.4s ease, color 0.4s ease, border-color 0.4s ease",
-                }}
-              >
-                {exchangeLabel}
-              </span>
+          {/* ── LEFT — symbol identity & signal badges (nowrap) ── */}
+            <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, minWidth: 0, flexShrink: 0 }}>
+              {/* Brain icon — 34×34 (Fibonacci) */}
+              <div style={{ width: φ.sp.xl, height: φ.sp.xl, borderRadius: φ.r.sm, background: "rgba(37,99,235,.1)", border: "1px solid rgba(37,99,235,.2)", display: "flex", alignItems: "center", justifyContent: "center", color: "#2563eb", flexShrink: 0 }}>
+                <Brain size={φ.ic.sm} className="animate-pulse" />
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, justifyContent: "center" }}>
+                {/* Row 1 — micro badges */}
+                <div style={{ display: "flex", alignItems: "center", gap: φ.sp.xs, flexWrap: "nowrap", whiteSpace: "nowrap" }}>
+                  <Badge bg="rgba(168,85,247,.12)" color="#a855f7" border="rgba(168,85,247,.28)">AI SIGNAL</Badge>
+                  <Badge bg={`${mc}14`} color={mc} border={`${mc}40`}>
+                    {mode === "LIVE" ? "🔴" : "🟢"} {mode}
+                  </Badge>
+                  <span
+                    className={accountType === "BOTH" ? "aqea-blink" : undefined}
+                    style={{ fontSize: φ.fs.xxs, fontWeight: 800, padding: "1px 6px", borderRadius: φ.r.xs, background: exchColor ? `${exchColor}18` : "var(--ds-surface-2,#f1f5f9)", color: exchColor || "var(--ds-text,#334155)", border: `1px solid ${exchColor ? `${exchColor}55` : "var(--ds-border,#cbd5e1)"}`, fontFamily: "monospace", transition: "all .4s" }}>
+                    {exchLabel}
+                  </span>
+                </div>
+
+                {/* Row 2 — primary identity */}
+                <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, flexWrap: "nowrap", whiteSpace: "nowrap" }}>
+                  {/* Symbol — 16px primary (φ.fs.md) */}
+                  <span style={{ fontSize: φ.fs.md, fontWeight: 900, color: "var(--ds-text,#0f172a)", letterSpacing: "-0.02em", lineHeight: 1 }}>
+                    {prediction.symbol}
+                  </span>
+                  {/* Direction pill */}
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: `${dc}14`, color: dc, border: `1px solid ${dc}38` }}>
+                    {prediction.direction === "LONG" ? <TrendingUp size={φ.ic.sm - 2} /> :
+                      prediction.direction === "SHORT" ? <TrendingDown size={φ.ic.sm - 2} /> :
+                        <Minus size={φ.ic.sm - 2} />}
+                    {prediction.direction}
+                  </span>
+                  {/* Confidence — 13px secondary (φ.fs.sm) */}
+                  <span style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }} className="hidden sm:inline">
+                    <strong style={{ color: "#2563eb" }}>{prediction.confidence}%</strong>
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 900, color: "var(--ds-text, #0f172a)", letterSpacing: "-0.01em" }}>
-                {prediction.symbol}
-              </span>
-
-              {/* Signal Badge */}
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 3,
-                  padding: "2px 7px",
-                  borderRadius: 5,
-                  fontSize: 10,
-                  fontWeight: 900,
-                  background: `${getDirColor(prediction.direction)}18`,
-                  color: getDirColor(prediction.direction),
-                  border: `1px solid ${getDirColor(prediction.direction)}44`,
-                }}
-              >
-                {prediction.direction === "LONG" ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {prediction.direction}
-              </span>
-
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--ds-text-faint, #64748b)" }} className="hidden sm:inline">
-                Confidence: <strong style={{ color: "#2563eb" }}>{prediction.confidence}%</strong>
-              </span>
+          {/* ── CENTER — stats chips (golden ratio spacing) ── */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: φ.sp.md, flex: 1, minWidth: 0 }} className="hidden md:flex">
+              <StatChip icon={<Clock size={φ.ic.sm} />} label="Eval in:" value={`${countdown}s`} color="#d97706" />
+              <StatChip icon={<Zap size={φ.ic.sm} />} label="Vote:" value={`${prediction.modelsVoting}/${prediction.totalModels}`} color="#059669" />
+              {rrRatio && <StatChip icon={<Target size={φ.ic.sm} />} label="R:R" value={`1:${rrRatio}`} color="#8b5cf6" />}
             </div>
+
+          {/* ── RIGHT — controls ── */}
+          <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, flexShrink: 0, marginLeft: "auto" }}>
+            <button className="aqea-dismiss" onClick={dismiss} title="Hide permanently" style={{ background: "none", border: "none", color: "var(--ds-text-faint,#94a3b8)", cursor: "pointer", padding: `${φ.sp.xs}px`, borderRadius: φ.r.xs, display: "flex", alignItems: "center", gap: φ.sp.xs, fontSize: φ.fs.xxs, fontWeight: 700, transition: "color .15s" }}>
+              <EyeOff size={φ.ic.sm} />
+              <span className="hidden sm:inline">Hide</span>
+            </button>
+
+            <button onClick={toggle} style={{ display: "inline-flex", alignItems: "center", gap: φ.sp.xs, padding: `${φ.sp.xs}px ${φ.sp.md}px`, borderRadius: φ.r.sm, fontSize: φ.fs.xs, fontWeight: 800, background: isExpanded ? "#2563eb" : "rgba(37,99,235,.08)", color: isExpanded ? "#fff" : "#2563eb", border: "1px solid rgba(37,99,235,.28)", cursor: "pointer", transition: "all .15s" }}>
+              <BarChart3 size={φ.ic.sm} />
+              <span>{isExpanded ? "Hide Forecast" : "View Forecast"}</span>
+              {isExpanded ? <ChevronDown size={φ.ic.sm} /> : <ChevronUp size={φ.ic.sm} />}
+            </button>
           </div>
         </div>
 
-        {/* Center: Countdown & Model Votes */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }} className="hidden md:flex">
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ds-text-faint, #64748b)" }}>
-            <Clock size={14} color="#d97706" />
-            <span style={{ fontWeight: 600 }}>Eval in:</span>
-            <span style={{ fontFamily: "monospace", fontWeight: 900, color: "#d97706", fontSize: 13 }}>
-              {countdown}s
-            </span>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ds-text-faint, #64748b)" }}>
-            <Zap size={14} color="#059669" />
-            <span style={{ fontWeight: 600 }}>Ensemble Vote:</span>
-            <span style={{ fontFamily: "monospace", fontWeight: 900, color: "#059669" }}>
-              {prediction.modelsVoting}/{prediction.totalModels} Consensus
-            </span>
-          </div>
-        </div>
-
-        {/* Right: Expand Details Button & Trigger */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 13px",
-              borderRadius: 8,
-              fontSize: 11,
-              fontWeight: 800,
-              background: isExpanded ? "#2563eb" : "rgba(37, 99, 235, 0.08)",
-              color: isExpanded ? "#ffffff" : "#2563eb",
-              border: "1px solid rgba(37, 99, 235, 0.3)",
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <BarChart3 size={13} />
-            <span>{isExpanded ? "Hide Forecast" : "View Trade Popup"}</span>
-            {isExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-          </button>
+        {/* ── Copyright strip — φ.copyrightH = 16px ── */}
+        <div style={{
+          height: φ.copyrightH,
+          minHeight: φ.copyrightH,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          borderTop: "1px solid var(--ds-border,#e2e8f0)",
+          background: "var(--ds-surface-2,#f8fafc)",
+          gap: φ.sp.sm,
+          paddingInline: φ.sp.lg,
+          boxSizing: "border-box",
+        }}>
+          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--ds-text-faint,#94a3b8)", letterSpacing: "0.06em", textTransform: "uppercase", userSelect: "none", whiteSpace: "nowrap" }}>
+            © {new Date().getFullYear()} AalgoLabs(OPC) PVT. LTD. · All rights reserved
+          </span>
         </div>
       </div>
 
-      {/* ── EXPANDED POPUP FORECAST MODAL ── */}
+      {/* ══════════════════════════════════════════════════════════════
+          POPUP MODAL
+          Width: 576px (≈ 360 × φ² — golden rectangle)
+          Padding: 21px (φ.sp.lg — Fibonacci)
+          ══════════════════════════════════════════════════════════════ */}
       {isExpanded && (
         <div
+          ref={popupRef}
+          className="aqea-popup"
           style={{
             position: "fixed",
-            bottom: 60,
+            bottom: φ.barH + φ.copyrightH + φ.sp.sm,   // sit above bar + copyright strip
             left: "50%",
             transform: "translateX(-50%)",
-            width: "92%",
-            maxWidth: 580,
-            background: "var(--ds-surface, #ffffff)",
-            border: "1px solid var(--ds-border, #cbd5e1)",
-            borderRadius: 16,
-            padding: 20,
-            boxShadow: "0 20px 40px rgba(0, 0, 0, 0.15)",
+            width: "94%",
+            maxWidth: 576,                       // ≈ 360 × φ²
+            background: "var(--ds-surface,#fff)",
+            border: "1px solid var(--ds-border,#e2e8f0)",
+            borderRadius: φ.r.lg,
+            padding: φ.sp.lg,
+            boxShadow: "0 24px 55px rgba(0,0,0,.16), 0 8px 21px rgba(0,0,0,.08)",
             zIndex: 9999,
-            color: "var(--ds-text, #0f172a)",
+            color: "var(--ds-text,#0f172a)",
           }}
         >
-          {/* Popup Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Sparkles size={18} color="#2563eb" />
+          {/* ── Success overlay ───────────────────────────────────── */}
+          {execSuccess && (
+            <div className="aqea-success" style={{ position: "absolute", inset: 0, borderRadius: φ.r.lg, background: "#10b981", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: φ.sp.sm, zIndex: 10 }}>
+              <div className="aqea-ring"><CheckCircle size={φ.sp.xxl} color="#fff" /></div>
+              <div style={{ fontSize: φ.fs.md, fontWeight: 900, color: "#fff" }}>Order Placed!</div>
+              <div style={{ fontSize: φ.fs.xs, color: "rgba(255,255,255,.85)", fontWeight: 600 }}>
+                {prediction.direction === "SHORT" ? "SELL" : "BUY"} {prediction.symbol} · {mode} Mode · Redirecting…
+              </div>
+            </div>
+          )}
+
+          {/* ── Header row ───────────────────────────────────────── */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: φ.sp.md }}>
+            {/* Title — uses φ-proportioned gap */}
+            <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm }}>
+              <div style={{ width: φ.sp.xl, height: φ.sp.xl, borderRadius: φ.r.sm, background: "rgba(37,99,235,.1)", border: "1px solid rgba(37,99,235,.2)", display: "flex", alignItems: "center", justifyContent: "center", color: "#2563eb" }}>
+                <Sparkles size={φ.ic.sm} />
+              </div>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 900, color: "var(--ds-text, #0f172a)" }}>
-                  Upcoming AI Trade Evaluation
+                <div style={{ fontSize: φ.fs.md, fontWeight: 900, color: "var(--ds-text,#0f172a)", letterSpacing: "-0.02em" }}>
+                  AI Trade Evaluation
                 </div>
-                <div style={{ fontSize: 11, color: "var(--ds-text-faint, #64748b)" }}>
-                  Real-time Neural Ensemble Prediction Matrix
+                <div style={{ fontSize: φ.fs.xxs, color: "var(--ds-text-faint,#64748b)", marginTop: 2 }}>
+                  Neural Ensemble Prediction Matrix
                 </div>
               </div>
             </div>
 
-            <button
-              onClick={() => setIsExpanded(false)}
-              style={{
-                background: "var(--ds-surface-2, #f1f5f9)",
-                border: "1px solid var(--ds-border, #cbd5e1)",
-                color: "var(--ds-text-faint, #64748b)",
-                width: 26,
-                height: 26,
-                borderRadius: 6,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <X size={15} />
-            </button>
-          </div>
-
-          {/* Symbol & Direction Details Box */}
-          <div
-            style={{
-              background: "var(--ds-surface-2, #f8fafc)",
-              border: "1px solid var(--ds-border, #e2e8f0)",
-              borderRadius: 12,
-              padding: 14,
-              marginBottom: 14,
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 10,
-            }}
-          >
-            <div>
-              <span style={{ fontSize: 10, color: "var(--ds-text-faint, #64748b)", fontWeight: 700, textTransform: "uppercase" }}>
-                Target Symbol
+            {/* Right: mode badge + close */}
+            <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm }}>
+              <span style={{ fontSize: φ.fs.xxs, fontWeight: 900, padding: "3px 8px", borderRadius: φ.r.xs, background: `${mc}14`, color: mc, border: `1px solid ${mc}38` }}>
+                {mode === "LIVE" ? "🔴" : "🟢"} {mode} MODE
               </span>
-              <div style={{ fontSize: 16, fontWeight: 900, color: "var(--ds-text, #0f172a)", marginTop: 2 }}>
-                {prediction.symbol}
-              </div>
-            </div>
-
-            <div>
-              <span style={{ fontSize: 10, color: "var(--ds-text-faint, #64748b)", fontWeight: 700, textTransform: "uppercase" }}>
-                Signal Direction
-              </span>
-              <div
-                style={{
-                  fontSize: 14,
-                  fontWeight: 900,
-                  color: getDirColor(prediction.direction),
-                  marginTop: 2,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
-                }}
-              >
-                {prediction.direction === "LONG" ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                {prediction.direction}
-              </div>
-            </div>
-
-            <div>
-              <span style={{ fontSize: 10, color: "var(--ds-text-faint, #64748b)", fontWeight: 700, textTransform: "uppercase" }}>
-                Consensus Confidence
-              </span>
-              <div style={{ fontSize: 16, fontWeight: 900, color: "#2563eb", marginTop: 2, fontFamily: "monospace" }}>
-                {prediction.confidence}%
-              </div>
+              <button onClick={() => { setIsExpanded(false); setExecError(null); setExecSuccess(false); }} style={{ width: φ.sp.xl, height: φ.sp.xl, borderRadius: φ.r.sm, background: "var(--ds-surface-2,#f1f5f9)", border: "1px solid var(--ds-border,#cbd5e1)", color: "var(--ds-text-faint,#64748b)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <X size={φ.ic.sm} />
+              </button>
             </div>
           </div>
 
-          {/* Price Target & Stop Loss Levels */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(3, 1fr)",
-              gap: 10,
-              marginBottom: 14,
-            }}
-          >
-            <div style={{ background: "var(--ds-surface-2, #f8fafc)", padding: 10, borderRadius: 8, border: "1px solid var(--ds-border, #cbd5e1)" }}>
-              <span style={{ fontSize: 10, color: "var(--ds-text-faint, #64748b)", display: "block", fontWeight: 700 }}>Est. Entry Price</span>
-              <span style={{ fontSize: 13, fontWeight: 900, color: "var(--ds-text, #0f172a)", fontFamily: "monospace" }}>
-                {currencySymbol}{formatPrice(prediction.entryPrice)}
-              </span>
+          {/* ── Indian market closed warning ─────────────────────── */}
+          {mktClosed && (
+            <div style={{ display: "flex", alignItems: "flex-start", gap: φ.sp.sm, padding: `${φ.sp.sm}px ${φ.sp.md}px`, borderRadius: φ.r.sm, marginBottom: φ.sp.md, background: "rgba(245,158,11,.08)", border: "1px solid rgba(245,158,11,.32)" }}>
+              <AlertTriangle size={φ.ic.sm} color="#d97706" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <div style={{ fontSize: φ.fs.xs, fontWeight: 800, color: "#b45309", marginBottom: 3 }}>Indian Market Closed</div>
+                <div style={{ fontSize: φ.fs.xxs, color: "#92400e" }}>{indianStatus!.message}</div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Identity row: 4 cells using φ grid ──────────────── */}
+          {/* 3 primary cells (61.8%) + 1 regime cell (38.2%) */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: φ.sp.sm, marginBottom: φ.sp.md }}>
+            <MetaCard label="Symbol" value={prediction.symbol} />
+            <MetaCard
+              label="Signal"
+              value={
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: dc }}>
+                  {prediction.direction === "LONG" ? <TrendingUp size={φ.ic.sm} /> :
+                    prediction.direction === "SHORT" ? <TrendingDown size={φ.ic.sm} /> :
+                      <Minus size={φ.ic.sm} />}
+                  {prediction.direction}
+                </span>
+              }
+              valueColor={dc}
+            />
+            <MetaCard label="Confidence" value={`${prediction.confidence}%`} valueColor="#2563eb" />
+            <MetaCard label="Regime" value={<span style={{ fontSize: φ.fs.xxs }}>{regimeLabel(prediction.regime)}</span>} />
+          </div>
+
+          {/* ── Price levels: 3 columns — Entry | TP | SL ───────── */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: φ.sp.sm, marginBottom: φ.sp.md }}>
+            <MetaCard label="Entry Price" value={`${cur}${formatPrice(prediction.entryPrice)}`} />
+            <MetaCard label="Target TP" value={`${cur}${formatPrice(prediction.targetTp)}`} bg="rgba(16,185,129,.07)" border="rgba(16,185,129,.22)" labelColor="#059669" valueColor="#059669" />
+            <MetaCard label="Stop-Loss" value={`${cur}${formatPrice(prediction.stopLoss)}`} bg="rgba(239,68,68,.06)" border="rgba(239,68,68,.22)" labelColor="#dc2626" valueColor="#dc2626" />
+          </div>
+
+          {/* ── Stat strip: R:R · Margin · Leverage ─────────────── */}
+          {/* Uses 61.8 / 19.1 / 19.1 weighting (φ-weighted) */}
+          <div style={{ display: "grid", gridTemplateColumns: "1.618fr 1fr 1fr", gap: φ.sp.sm, marginBottom: φ.sp.md }}>
+            {rrRatio ? (
+              <div style={{ background: "rgba(139,92,246,.07)", border: "1px solid rgba(139,92,246,.22)", borderRadius: φ.r.sm, padding: `${φ.sp.sm}px ${φ.sp.md}px`, display: "flex", alignItems: "center", gap: φ.sp.sm }}>
+                <Target size={φ.ic.md} color="#8b5cf6" style={{ flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontSize: φ.fs.xxs, color: "#7c3aed", fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase" }}>Risk : Reward</div>
+                  <div style={{ fontSize: φ.fs.md, fontWeight: 900, color: "#7c3aed", fontFamily: "monospace", marginTop: 2 }}>1 : {rrRatio}</div>
+                </div>
+              </div>
+            ) : (
+              <div style={{ background: "var(--ds-surface-2,#f8fafc)", border: "1px solid var(--ds-border,#e2e8f0)", borderRadius: φ.r.sm, padding: `${φ.sp.sm}px ${φ.sp.md}px`, display: "flex", alignItems: "center", color: "var(--ds-text-faint,#94a3b8)", fontSize: φ.fs.xs }}>
+                No directional signal (HOLD)
+              </div>
+            )}
+
+            <div style={{ background: "rgba(37,99,235,.06)", border: "1px solid rgba(37,99,235,.18)", borderRadius: φ.r.sm, padding: `${φ.sp.sm}px ${φ.sp.md}px` }}>
+              <div style={{ fontSize: φ.fs.xxs, color: "#1d4ed8", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>
+                <DollarSign size={10} style={{ display: "inline", verticalAlign: "middle", marginRight: 2 }} />
+                Margin
+              </div>
+              <div style={{ fontSize: φ.fs.sm, fontWeight: 900, color: "#1d4ed8", fontFamily: "monospace" }}>
+                {cur}{(parseFloat(customMargin) || prediction.allocatedMargin).toLocaleString()}
+              </div>
             </div>
 
-            <div style={{ background: "rgba(16, 185, 129, 0.08)", padding: 10, borderRadius: 8, border: "1px solid rgba(16, 185, 129, 0.25)" }}>
-              <span style={{ fontSize: 10, color: "#059669", display: "block", fontWeight: 700 }}>Target Take-Profit</span>
-              <span style={{ fontSize: 13, fontWeight: 900, color: "#059669", fontFamily: "monospace" }}>
-                {currencySymbol}{formatPrice(prediction.targetTp)}
-              </span>
-            </div>
-
-            <div style={{ background: "rgba(239, 68, 68, 0.08)", padding: 10, borderRadius: 8, border: "1px solid rgba(239, 68, 68, 0.25)" }}>
-              <span style={{ fontSize: 10, color: "#dc2626", display: "block", fontWeight: 700 }}>Stop-Loss Level</span>
-              <span style={{ fontSize: 13, fontWeight: 900, color: "#dc2626", fontFamily: "monospace" }}>
-                {currencySymbol}{formatPrice(prediction.stopLoss)}
-              </span>
+            <div style={{ background: "rgba(245,158,11,.07)", border: "1px solid rgba(245,158,11,.22)", borderRadius: φ.r.sm, padding: `${φ.sp.sm}px ${φ.sp.md}px` }}>
+              <div style={{ fontSize: φ.fs.xxs, color: "#b45309", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>
+                <Shield size={10} style={{ display: "inline", verticalAlign: "middle", marginRight: 2 }} />
+                Leverage
+              </div>
+              <div style={{ fontSize: φ.fs.sm, fontWeight: 900, color: "#b45309", fontFamily: "monospace" }}>
+                {parseInt(customLeverage, 10) || prediction.estimatedLeverage}×
+              </div>
             </div>
           </div>
 
-          {/* Key Signal Drivers */}
-          <div style={{ marginBottom: 16 }}>
-            <span style={{ fontSize: 11, fontWeight: 800, color: "var(--ds-text, #0f172a)", display: "block", marginBottom: 6 }}>
-              Neural Signal Drivers:
-            </span>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {/* ── Editable inputs — 61.8 / 38.2 split ────────────── */}
+          <div style={{ background: "var(--ds-surface-2,#f8fafc)", border: "1px solid var(--ds-border,#e2e8f0)", borderRadius: φ.r.md, padding: `${φ.sp.md}px`, marginBottom: φ.sp.md }}>
+            <div style={{ fontSize: φ.fs.xs, fontWeight: 800, color: "var(--ds-text,#0f172a)", marginBottom: φ.sp.sm }}>
+              ✏️ Adjust Order Parameters
+            </div>
+            {/* 61.8% margin · 38.2% leverage — φ-weighted columns */}
+            <div style={{ display: "grid", gridTemplateColumns: "1.618fr 1fr", gap: φ.sp.sm }}>
+              <div>
+                <label style={{ fontSize: φ.fs.xxs, fontWeight: 700, color: "var(--ds-text-faint,#64748b)", display: "block", marginBottom: φ.sp.xs }}>
+                  Margin ({isIndianAsset ? "₹" : "USDT"})
+                </label>
+                <input type="number" min="1" step="any" value={customMargin} onChange={(e) => setCustomMargin(e.target.value)} className="aqea-input" />
+              </div>
+              <div>
+                <label style={{ fontSize: φ.fs.xxs, fontWeight: 700, color: "var(--ds-text-faint,#64748b)", display: "block", marginBottom: φ.sp.xs }}>
+                  Leverage (×)
+                </label>
+                <input type="number" min="1" max="125" step="1" value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} disabled={isSpotLocked} className="aqea-input" />
+                {isSpotLocked && (
+                  <div style={{ fontSize: 9, color: "var(--ds-text-faint,#94a3b8)", marginTop: 3 }}>Fixed at 1× for Spot / Indian equity</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ── Neural signal drivers ─────────────────────────────── */}
+          <div style={{ marginBottom: φ.sp.md }}>
+            <div style={{ fontSize: φ.fs.xs, fontWeight: 800, color: "var(--ds-text,#0f172a)", marginBottom: φ.sp.sm }}>Neural Signal Drivers</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: φ.sp.xs }}>
               {prediction.reasons.map((r, i) => (
-                <div key={i} style={{ fontSize: 11, color: "var(--ds-text-faint, #64748b)", display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#2563eb" }} />
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, fontSize: φ.fs.xxs, color: "var(--ds-text-faint,#64748b)" }}>
+                  <span style={{ width: φ.sp.xs, height: φ.sp.xs, borderRadius: "50%", background: "#2563eb", flexShrink: 0 }} />
                   {r}
                 </div>
               ))}
             </div>
           </div>
 
-          {/* This is a randomly-generated illustrative forecast (see
-              generatePrediction's Math.random() direction/confidence), not
-              a live AQEA ensemble decision — placing a real order straight
-              from it would skip every conviction/risk gate the real engine
-              enforces. Said plainly instead of a fake "order executed"
-              toast that never created a trade. */}
-          <div
-            style={{
-              padding: 10,
-              borderRadius: 8,
-              background: "rgba(100, 116, 139, 0.08)",
-              border: "1px solid var(--ds-border, #cbd5e1)",
-              color: "var(--ds-text-faint, #64748b)",
-              fontSize: 11,
-              fontWeight: 600,
-              textAlign: "center",
-              marginBottom: 12,
-            }}
-          >
-            Illustrative forecast only — not a live AQEA decision. "Trade This" opens the real order terminal.
+          {/* ── Error banner ─────────────────────────────────────── */}
+          {execError && (
+            <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, padding: `${φ.sp.sm}px ${φ.sp.md}px`, borderRadius: φ.r.sm, marginBottom: φ.sp.sm, background: "rgba(239,68,68,.07)", border: "1px solid rgba(239,68,68,.28)", color: "#dc2626", fontSize: φ.fs.xs, fontWeight: 700 }}>
+              <AlertTriangle size={φ.ic.sm} style={{ flexShrink: 0 }} />
+              {execError}
+            </div>
+          )}
+
+          {/* ── Disclaimer bar ───────────────────────────────────── */}
+          <div style={{ padding: `${φ.sp.xs}px ${φ.sp.md}px`, borderRadius: φ.r.sm, marginBottom: φ.sp.md, background: "var(--ds-surface-2,#f8fafc)", border: "1px solid var(--ds-border,#e2e8f0)", color: "var(--ds-text-faint,#94a3b8)", fontSize: 9.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>AI-generated forecast. Server risk gates still apply.</span>
+            <kbd style={{ fontSize: 9, background: "var(--ds-surface,#fff)", border: "1px solid var(--ds-border,#cbd5e1)", borderRadius: 3, padding: "1px 5px", color: "var(--ds-text-faint,#94a3b8)" }}>Esc</kbd>
           </div>
 
-          {/* Execution Controls */}
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <button
-              onClick={() => setIsExpanded(false)}
-              style={{
-                padding: "8px 14px",
-                borderRadius: 8,
-                background: "var(--ds-surface-2, #f1f5f9)",
-                border: "1px solid var(--ds-border, #cbd5e1)",
-                color: "var(--ds-text, #334155)",
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
+          {/* ── Actions: Close (38.2%) · Primary (61.8%) ────────── */}
+          {/* Button width ratio honours φ: primary ≈ 1.618× close */}
+          <div style={{ display: "flex", gap: φ.sp.sm, justifyContent: "flex-end" }}>
+            <button className="aqea-btn-close" onClick={() => { setIsExpanded(false); setExecError(null); setExecSuccess(false); }} style={{ padding: `${φ.sp.sm}px ${φ.sp.md}px`, borderRadius: φ.r.sm, background: "var(--ds-surface-2,#f1f5f9)", border: "1px solid var(--ds-border,#cbd5e1)", color: "var(--ds-text,#334155)", fontSize: φ.fs.xs, fontWeight: 700, cursor: "pointer", transition: "background .15s" }}>
               Close
             </button>
 
-            <button
-              onClick={handleManualExecute}
-              style={{
-                padding: "8px 16px",
-                borderRadius: 8,
-                background: "#2563eb",
-                border: "none",
-                color: "#ffffff",
-                fontSize: 12,
-                fontWeight: 800,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                boxShadow: "0 2px 10px rgba(37, 99, 235, 0.3)",
-              }}
-            >
-              <Play size={13} />
-              Trade This on {isIndianAsset ? "India Terminal" : accountType === "FUTURES" ? "Futures Terminal" : "Spot Terminal"}
-            </button>
+            {prediction.direction === "HOLD" ? (
+              <div style={{ padding: `${φ.sp.sm}px ${φ.sp.lg}px`, borderRadius: φ.r.sm, background: "rgba(245,158,11,.09)", border: "1px solid rgba(245,158,11,.28)", color: "#b45309", fontSize: φ.fs.xs, fontWeight: 800, display: "flex", alignItems: "center", gap: φ.sp.xs }}>
+                <Minus size={φ.ic.sm} /> Hold — No Signal
+              </div>
+            ) : (
+              <button
+                className="aqea-btn-primary"
+                onClick={handleExecute}
+                disabled={isExecuting || execSuccess || (mktClosed && isIndianAsset)}
+                style={{
+                  padding: `${φ.sp.sm}px ${φ.sp.lg}px`,
+                  borderRadius: φ.r.sm,
+                  background: execSuccess ? "#10b981" : "#2563eb",
+                  border: "none", color: "#fff",
+                  fontSize: φ.fs.xs, fontWeight: 800,
+                  cursor: (isExecuting || execSuccess || (mktClosed && isIndianAsset)) ? "not-allowed" : "pointer",
+                  display: "flex", alignItems: "center", gap: φ.sp.xs,
+                  boxShadow: "0 2px 13px rgba(37,99,235,.28)",
+                  opacity: (isExecuting || (mktClosed && isIndianAsset)) ? 0.72 : 1,
+                }}
+              >
+                {execSuccess ? <CheckCircle size={φ.ic.sm} /> : <Play size={φ.ic.sm} />}
+                {isExecuting ? "Placing Order…"
+                  : execSuccess ? "Order Placed!"
+                    : mktClosed && isIndianAsset ? "Market Closed"
+                      : `Trade on ${isIndianAsset ? "India" : resolvedAT === "FUTURES" ? "Futures" : "Spot"} Terminal`}
+              </button>
+            )}
           </div>
         </div>
       )}
     </>
+  );
+}
+
+/* ─── Inline Badge ────────────────────────────────────────────────────── */
+function Badge({ children, bg, color, border }: { children: React.ReactNode; bg: string; color: string; border: string }) {
+  return (
+    <span style={{ fontSize: 9.5, fontWeight: 800, padding: "1px 6px", borderRadius: φ.r.xs, background: bg, color, border: `1px solid ${border}`, letterSpacing: "0.05em", textTransform: "uppercase" as const }}>
+      {children}
+    </span>
   );
 }

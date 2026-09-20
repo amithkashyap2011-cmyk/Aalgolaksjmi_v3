@@ -53,6 +53,7 @@ import { SchedulerAccounting } from "./aqea/dataProvenance.js";
 import { ForwardTelemetryStore } from "./aqea/ensemble/ForwardTelemetryStore.js";
 import { AgentKernel } from "../kernel/AgentKernel.js";
 import { MarketIsolationGuard } from "./market/MarketIsolationGuard.js";
+import { emitAlert } from "./socketService.js";
 
 /* ── State ────────────────────────────────────────────── */
 
@@ -1023,6 +1024,30 @@ async function processSymbol(
               await Trade.findByIdAndUpdate(pos.tradeId, { sl: proposed });
           }
       }
+
+      // 🛡️ GAP #4 FIX: Trailing stop dynamic ratchet
+      // Continuously tighten trailing stop as price advances favorably
+      if (!exitSignal.shouldExit && pos.meta?.trailingStop) {
+          const isLong = pos.side === "BUY";
+          const atr = ctx.ind.atr14 || ctx.ind.close * 0.01;
+          const emaTrail = ctx.ind.ema21 ?? ctx.ind.ema9 ?? ctx.ind.close;
+          let calculatedTrail = ExitEngine.calculateTrailingStop(
+              pos.entryPrice + (isLong ? atr : -atr),
+              emaTrail,
+              ctx.ind.close - (isLong ? atr : -atr),
+              isLong
+          );
+          calculatedTrail = isLong
+              ? Math.min(calculatedTrail, ctx.ind.close - atr)
+              : Math.max(calculatedTrail, ctx.ind.close + atr);
+
+          const curTrail = pos.meta.trailingStop;
+          const ratchetsFavorable = isLong ? calculatedTrail > curTrail : calculatedTrail < curTrail;
+          if (ratchetsFavorable) {
+              pos.meta = { ...pos.meta, trailingStop: calculatedTrail };
+              paper.setPosition(userId, symbol, mode, pos);
+          }
+      }
   }
 }
 
@@ -1747,5 +1772,17 @@ export async function handleExit(
     } catch (resErr) {
       console.warn(`[auto] Failed to resolve forward outcome for ${decId}:`, resErr);
     }
+  }
+
+  // 🛡️ GAP #11 FIX: Real-time in-app socket notification for position exit
+  try {
+    const pnlFormatted = `${totalNetPnl >= 0 ? "+" : ""}$${totalNetPnl.toFixed(2)}`;
+    const alertLevel = totalNetPnl >= 0 ? "GREEN" : (reason.includes("STOP_LOSS") || reason.includes("RISK") ? "RED" : "AMBER");
+    emitAlert(
+      alertLevel,
+      `[AutoTrade: ${reason}] ${symbol} ${pos.side} closed @ $${safeExitPrice.toFixed(2)} | Net PnL: ${pnlFormatted} USDT`
+    );
+  } catch (alertErr) {
+    console.warn(`[auto] Failed to emit exit alert:`, alertErr);
   }
 }

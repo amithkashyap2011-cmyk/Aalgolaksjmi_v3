@@ -40,8 +40,10 @@ export default function ToastContainer() {
     });
   };
 
+  if (toasts.length === 0) return null;
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[9999] flex flex-row overflow-x-auto gap-2 p-2 pointer-events-auto w-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-financial items-center [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+    <div className="fixed bottom-16 left-0 right-0 z-[9998] flex flex-row overflow-x-auto gap-2 p-2 pointer-events-auto w-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-financial items-center [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
       {toasts.map((toast) => {
         const textUpper = (toast.text || "").toUpperCase();
         

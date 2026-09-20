@@ -55,6 +55,10 @@ export interface MLFeatures {
   dailyPnlRatio: number;    // dailyPnl / maxDailyLoss
   tradesToday: number;
   openPositionCount: number;
+
+  /** Order flow & microstructure signals */
+  orderFlowImbalance?: number;
+  cvdNormalized?: number;
 }
 
 /** The ML model's prediction output */
@@ -124,6 +128,8 @@ export function buildMLFeatures(
   maxDailyLoss: number,
   tradesToday: number,
   openPositionCount: number,
+  orderFlowImbalance = 0,
+  cvdNormalized = 0,
 ): MLFeatures {
   return {
     rsi14:           ind.rsi14 ?? 50,
@@ -146,6 +152,8 @@ export function buildMLFeatures(
     dailyPnlRatio:   maxDailyLoss !== 0 ? dailyPnl / maxDailyLoss : 0,
     tradesToday,
     openPositionCount,
+    orderFlowImbalance,
+    cvdNormalized,
   };
 }
 

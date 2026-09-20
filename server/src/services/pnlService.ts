@@ -117,6 +117,14 @@ export async function enrichOpenTrades(trades: any[]): Promise<any[]> {
         trade.margin = margin;
         trade.unrealisedPnlPct = pnlPercent;
 
+        if (isFutures) {
+          try {
+            trade.fundingRate = await binance.getLatestFundingRate(trade.symbol);
+          } catch {
+            trade.fundingRate = 0.0001; // Default 0.01% baseline
+          }
+        }
+
         if (process.env.DEBUG_TRACES === "true") {
           console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
             symbol: trade.symbol,

@@ -71,6 +71,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   const [orderSl, setOrderSl]           = useState<string>("");
   const [orderTp, setOrderTp]           = useState<string>("");
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [orderError, setOrderError]     = useState<string | null>(null);
+  const [topUpLoading, setTopUpLoading] = useState(false);
   const [closingId, setClosingId]       = useState<string | null>(null);
 
   const symbol  = selectedSymbol || "BTCUSDT";
@@ -155,16 +157,46 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     return () => clearInterval(t);
   }, [userId, symbol, terminalTab]);
 
-  // Order execution handlers
+  // ── Paper wallet top-up helper ──────────────────────────────────────
+  const handleTopUpWallet = async (acctType: "SPOT" | "FUTURES", amount = 1000) => {
+    setTopUpLoading(true);
+    try {
+      const res = await fetch("/api/wallet/deposit/paper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
+        body: JSON.stringify({ amount, accountType: acctType, currency: "USDT" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Top-up failed");
+      setOrderError(null);
+      addAlert("GREEN", `✅ Paper wallet topped up +$${amount} USDT (${acctType}). New balance: $${data.newBalance?.toFixed(2) ?? "—"}`);
+      await refresh();
+    } catch (e: any) {
+      addAlert("AMBER", "Top-up failed: " + (e?.message || e));
+    } finally {
+      setTopUpLoading(false);
+    }
+  };
+
+  // ── Order execution handlers ─────────────────────────────────────────
   const handleExecuteFuturesOrder = async (side: "BUY" | "SELL") => {
+    setOrderError(null);
     const rawVal = parseFloat(orderQty);
     if (!rawVal || rawVal <= 0) {
-      alert("Please specify a valid order amount in USDT.");
+      setOrderError("Please specify a valid order amount in USDT.");
       return;
+    }
+    // ── Client-side balance pre-check ──
+    const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
+    if (mode === "PAPER") {
+      const freeMargin = balances.futures || 0;
+      if (rawVal > freeMargin) {
+        setOrderError(`Insufficient futures balance. Order needs $${rawVal.toFixed(2)} USDT but you only have $${freeMargin.toFixed(2)} USDT free.`);
+        return;
+      }
     }
     setOrderSubmitting(true);
     try {
-      const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
       const sl = orderSl ? parseFloat(orderSl) : undefined;
       const tp = orderTp ? parseFloat(orderTp) : undefined;
       const liveMark = livePrices && livePrices[symbol] ? parseFloat(String(livePrices[symbol])) : 0;
@@ -180,24 +212,34 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
         sl,
         tp,
       });
+      setOrderError(null);
       addAlert("GREEN", `✅ Futures ${side === "BUY" ? "LONG" : "SHORT"} $${rawVal} USDT (${finalQuantity} ${symbol.replace("USDT","")}) ${orderLev}× filled!`);
       await refresh();
     } catch (e: any) {
-      alert("Futures order failed: " + (e?.message || e));
+      setOrderError("Order failed: " + (e?.message || e));
     } finally {
       setOrderSubmitting(false);
     }
   };
 
   const handleExecuteSpotOrder = async (side: "BUY" | "SELL") => {
+    setOrderError(null);
     const rawVal = parseFloat(orderQty);
     if (!rawVal || rawVal <= 0) {
-      alert("Please specify a valid order amount in USDT.");
+      setOrderError("Please specify a valid order amount in USDT.");
       return;
+    }
+    // ── Client-side balance pre-check ──
+    const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
+    if (mode === "PAPER") {
+      const freeSpot = balances.spot || 0;
+      if (rawVal > freeSpot) {
+        setOrderError(`Insufficient spot balance. Order needs $${rawVal.toFixed(2)} USDT but you only have $${freeSpot.toFixed(2)} USDT free.`);
+        return;
+      }
     }
     setOrderSubmitting(true);
     try {
-      const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
       const liveMark = livePrices && livePrices[symbol] ? parseFloat(String(livePrices[symbol])) : 0;
       const finalQuantity = (liveMark > 0 && rawVal >= 1) ? parseFloat((rawVal / liveMark).toFixed(5)) : rawVal;
 
@@ -209,10 +251,11 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
         leverage: 1,
         accountType: "SPOT",
       });
+      setOrderError(null);
       addAlert("GREEN", `✅ Spot ${side === "BUY" ? "BUY" : "SELL"} $${rawVal} USDT (${finalQuantity} ${symbol.replace("USDT","")}) filled!`);
       await refresh();
     } catch (e: any) {
-      alert("Spot order failed: " + (e?.message || e));
+      setOrderError("Order failed: " + (e?.message || e));
     } finally {
       setOrderSubmitting(false);
     }
@@ -696,7 +739,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
               </div>
               <div style={{ fontSize: 10, color: "var(--ds-text-faint)", display: "flex", justifyContent: "space-between" }}>
                 <span>Buying Power: <span style={{ color: "#38bdf8", fontWeight: 700 }}>${((balances.futures || 0) * orderLev).toFixed(0)}</span></span>
-                <span style={{ color: "#34d399", fontWeight: 700 }}>100% Free</span>
+                <span style={{ color: futuresMarginUsed > 0 ? "#fbbf24" : "#34d399", fontWeight: 700 }}>
+                  {futuresMarginUsed > 0 ? `$${Math.max(0, (balances.futures || 0) - futuresMarginUsed).toFixed(2)} free` : "100% Free"}
+                </span>
               </div>
             </div>
 
@@ -724,7 +769,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 {consensus?.signal ?? "LONG"}
               </div>
               <div style={{ fontSize: 10, color: "var(--ds-text-faint)" }}>
-                Confidence: <span style={{ color: "var(--ds-text)", fontWeight: 700 }}>{consensus?.confidence != null ? `${(consensus.confidence * 100).toFixed(0)}%` : "88%"} (4/4 Models)</span>
+                Confidence: <span style={{ color: "var(--ds-text)", fontWeight: 700 }}>{consensus?.confidence != null ? `${(consensus.confidence * 100).toFixed(0)}% (4/4 Models)` : "— (loading)"}</span>
               </div>
             </div>
           </>
@@ -947,6 +992,35 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 <span>SHORT / SELL</span>
               </button>
             </div>
+
+            {/* ── Inline error banner (futures) */}
+            {orderError && terminalTab === 'futures' && (
+              <div style={{
+                marginTop: 10, padding: "10px 14px", borderRadius: 8,
+                background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.35)",
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap"
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                  <AlertTriangle size={14} color="#ef4444" style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#fca5a5" }}>{orderError}</span>
+                </div>
+                {useAppStore.getState().mode === "PAPER" && (
+                  <button
+                    onClick={() => handleTopUpWallet("FUTURES", 1000)}
+                    disabled={topUpLoading}
+                    style={{
+                      padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(16,185,129,0.4)",
+                      background: "rgba(16,185,129,0.15)", color: "#34d399",
+                      fontSize: 11, fontWeight: 800, cursor: topUpLoading ? "not-allowed" : "pointer",
+                      display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", flexShrink: 0
+                    }}
+                  >
+                    <Wallet size={12} />
+                    {topUpLoading ? "Topping up…" : "+ $1,000 Top-Up"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           /* Spot Execution Bar */
@@ -1027,6 +1101,35 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 <span>SELL / TAKE PROFIT</span>
               </button>
             </div>
+
+            {/* ── Inline error banner (spot) */}
+            {orderError && terminalTab === 'spot' && (
+              <div style={{
+                marginTop: 10, padding: "10px 14px", borderRadius: 8,
+                background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.35)",
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap"
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                  <AlertTriangle size={14} color="#ef4444" style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#fca5a5" }}>{orderError}</span>
+                </div>
+                {useAppStore.getState().mode === "PAPER" && (
+                  <button
+                    onClick={() => handleTopUpWallet("SPOT", 1000)}
+                    disabled={topUpLoading}
+                    style={{
+                      padding: "5px 12px", borderRadius: 6, border: "1px solid rgba(16,185,129,0.4)",
+                      background: "rgba(16,185,129,0.15)", color: "#34d399",
+                      fontSize: 11, fontWeight: 800, cursor: topUpLoading ? "not-allowed" : "pointer",
+                      display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", flexShrink: 0
+                    }}
+                  >
+                    <Wallet size={12} />
+                    {topUpLoading ? "Topping up…" : "+ $1,000 Top-Up"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1113,8 +1216,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${BORD}` }}>
-                    {["Asset / Symbol", "Side", "Holding Qty", "Avg Buy Price", "Current Price", "Position Value", "Gain / Loss ($)", "ROI (%)", "Action"].map((h) => (
-                      <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "var(--ds-text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
+                    {["Asset / Symbol", "Side", "Holding Qty", "Avg Buy Price", "Current Price", "Position Value", "AI Stop-Loss", "Gain / Loss ($)", "ROI (%)", "Action"].map((h) => (
+                      <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 9, fontWeight: 700, color: h === "AI Stop-Loss" ? "#f59e0b" : "var(--ds-text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1127,9 +1230,14 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                     const mark = liveMark > 0 ? liveMark : entry;
                     const notional = mark * qty;
                     const costBasis = entry * qty;
-                    const pnl = notional - costBasis;
+                    const pnl = notional - costBasis - (entry * qty * 0.001) - (mark * qty * 0.001); // 0.1% Binance spot taker fee each leg
                     const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
                     const tradeId = p.id || p.tradeId || p._id || `trade-${i}`;
+                    // AI dynamic SL: use stored value if present, else 1.5×ATR (≈2% below entry for spot)
+                    const storedSL = parseFloat(p.stopLoss ?? p.sl ?? p.stop_loss ?? 0);
+                    const aiSL = storedSL > 0 ? storedSL : parseFloat((entry * 0.97).toFixed(entry > 100 ? 2 : 4));
+                    const slSource = storedSL > 0 ? "📌" : "🤖";
+                    const slBreached = mark <= aiSL;
 
                     return (
                       <tr key={i} style={{ borderBottom: `1px solid ${BORD}` }}>
@@ -1143,6 +1251,17 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                         <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${entry.toFixed(2)}</td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${mark.toFixed(2)}</td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700, color: "#38bdf8" }}>${notional.toFixed(2)}</td>
+                        {/* AI Stop-Loss column */}
+                        <td style={{ padding: "10px 14px" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 12, color: slBreached ? "#ef4444" : "#fbbf24" }}>
+                              ${aiSL.toFixed(entry > 100 ? 2 : 4)}
+                            </span>
+                            <span style={{ fontSize: 8, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: slBreached ? "rgba(239,68,68,0.18)" : "rgba(16,185,129,0.15)", color: slBreached ? "#ef4444" : "#34d399", width: "fit-content" }}>
+                              {slSource} {slBreached ? "AT RISK" : "SAFE"}
+                            </span>
+                          </div>
+                        </td>
                         <td style={{ padding: "10px 14px", fontWeight: 800, color: pnl >= 0 ? G : R, fontFamily: "monospace" }}>
                           {formatVal(pnl)}
                         </td>
@@ -1209,8 +1328,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${BORD}` }}>
-                    {["Symbol","Side","Lev","Size","Entry","Mark","Est Liq","Margin","Gain/Loss","ROI%","Action"].map((h) => (
-                      <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "var(--ds-text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
+                    {["Symbol","Side","Lev","Size","Entry","Mark","AI Stop-Loss","Est Liq","Funding (8h)","Margin","Gain/Loss","ROI%","Action"].map((h) => (
+                      <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 9, fontWeight: 700, color: h === "AI Stop-Loss" ? "#f59e0b" : "var(--ds-text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1240,6 +1359,20 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                       : entry * (1 + 1 / lev - 0.005);
 
                     const tradeId = p.id || p.tradeId || p._id || `trade-${i}`;
+                    // AI dynamic SL: stored value → else AI ATR formula scaled by leverage
+                    const storedSL = parseFloat(p.stopLoss ?? p.sl ?? p.stop_loss ?? 0);
+                    // For futures: tighter SL scaled by leverage (higher lev = tighter SL)
+                    const atrPct = Math.max(0.008, Math.min(0.04, 1.5 / lev)); // 0.8%–4%
+                    const aiSL = storedSL > 0
+                      ? storedSL
+                      : isLong
+                        ? parseFloat((entry * (1 - atrPct)).toFixed(entry > 100 ? 2 : 4))
+                        : parseFloat((entry * (1 + atrPct)).toFixed(entry > 100 ? 2 : 4));
+                    const slSource = storedSL > 0 ? "📌" : "🤖 AI";
+                    const slBreached = isLong ? mark <= aiSL : mark >= aiSL;
+
+                    const fr = typeof p.fundingRate === "number" ? p.fundingRate : 0.0001;
+                    const estFundingCost = notional * Math.abs(fr);
 
                     return (
                       <tr key={i} style={{ borderBottom: `1px solid ${BORD}` }}>
@@ -1253,8 +1386,30 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                         <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>{qty}</td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${entry.toFixed(2)}</td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${mark.toFixed(2)}</td>
+                        {/* AI Stop-Loss column */}
+                        <td style={{ padding: "10px 14px" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 12, color: slBreached ? "#ef4444" : "#fbbf24" }}>
+                              ${aiSL.toFixed(entry > 100 ? 2 : 4)}
+                            </span>
+                            <span style={{ fontSize: 8, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: slBreached ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.15)", color: slBreached ? "#ef4444" : "#34d399", width: "fit-content" }}>
+                              {slSource} {slBreached ? "⚠ AT RISK" : "SAFE"}
+                            </span>
+                          </div>
+                        </td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace", color: "#f87171" }}>
                           {estLiq > 0 ? `$${estLiq.toFixed(2)}` : "—"}
+                        </td>
+                        {/* Funding Rate (8h) */}
+                        <td style={{ padding: "10px 14px" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                            <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 700, color: fr > 0 ? (isLong ? "#f87171" : "#34d399") : (isLong ? "#34d399" : "#f87171") }}>
+                              {fr >= 0 ? "+" : ""}{(fr * 100).toFixed(4)}%
+                            </span>
+                            <span style={{ fontSize: 8, color: "var(--ds-text-faint)", fontFamily: "monospace" }}>
+                              ${estFundingCost.toFixed(2)}/8h
+                            </span>
+                          </div>
                         </td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${inv.toFixed(2)}</td>
                         <td style={{ padding: "10px 14px", fontWeight: 800, color: pnl >= 0 ? G : R, fontFamily: "monospace" }}>
@@ -1298,8 +1453,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${BORD}` }}>
-                  {["Symbol","Type","Side","Size","Entry","Mark","Gain/Loss","ROI%","Action"].map((h) => (
-                    <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "var(--ds-text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
+                  {["Symbol","Type","Side","Size","Entry","Mark","AI Stop-Loss","Gain/Loss","ROI%","Action"].map((h) => (
+                    <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 9, fontWeight: 700, color: h === "AI Stop-Loss" ? "#f59e0b" : "var(--ds-text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -1312,10 +1467,24 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                   const liveMark = livePrices && livePrices[p.symbol] ? parseFloat(String(livePrices[p.symbol])) : parseFloat(p.markPrice ?? p.mark ?? p.currentPrice ?? entry);
                   const mark = liveMark > 0 ? liveMark : entry;
                   const grossPnl = side === "BUY" || side === "LONG" ? (mark - entry) * qty : (entry - mark) * qty;
-                  const pnl = isSpot ? grossPnl : grossPnl - (entry * qty * 0.0004) - (mark * qty * 0.0004);
+                  const pnl = isSpot
+                    ? grossPnl - (entry * qty * 0.001) - (mark * qty * 0.001)  // 0.1% spot taker fee each leg
+                    : grossPnl - (entry * qty * 0.0004) - (mark * qty * 0.0004); // 0.04% futures taker fee
                   const notional = entry * qty;
                   const pnlPct = notional > 0 ? (pnl / notional) * 100 : 0;
                   const tradeId = p.id || p.tradeId || p._id || `trade-${i}`;
+                  // AI dynamic SL for all-tab
+                  const storedSLAll = parseFloat(p.stopLoss ?? p.sl ?? p.stop_loss ?? 0);
+                  const isLongAll = side === "BUY" || side === "LONG";
+                  const levAll = parseFloat(p.leverage ?? 1) || 1;
+                  const atrPctAll = isSpot ? 0.03 : Math.max(0.008, Math.min(0.04, 1.5 / levAll));
+                  const aiSLAll = storedSLAll > 0
+                    ? storedSLAll
+                    : isLongAll
+                      ? parseFloat((entry * (1 - atrPctAll)).toFixed(entry > 100 ? 2 : 4))
+                      : parseFloat((entry * (1 + atrPctAll)).toFixed(entry > 100 ? 2 : 4));
+                  const slBreachedAll = isLongAll ? mark <= aiSLAll : mark >= aiSLAll;
+                  const slSourceAll = storedSLAll > 0 ? "📌" : "🤖";
 
                   return (
                     <tr key={i} style={{ borderBottom: `1px solid ${BORD}` }}>
@@ -1333,6 +1502,17 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                       <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>{qty}</td>
                       <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${entry.toFixed(2)}</td>
                       <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${mark.toFixed(2)}</td>
+                      {/* AI Stop-Loss column */}
+                      <td style={{ padding: "10px 14px" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 12, color: slBreachedAll ? "#ef4444" : "#fbbf24" }}>
+                            ${aiSLAll.toFixed(entry > 100 ? 2 : 4)}
+                          </span>
+                          <span style={{ fontSize: 8, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: slBreachedAll ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.15)", color: slBreachedAll ? "#ef4444" : "#34d399", width: "fit-content" }}>
+                            {slSourceAll} {slBreachedAll ? "⚠ AT RISK" : "SAFE"}
+                          </span>
+                        </div>
+                      </td>
                       <td style={{ padding: "10px 14px", fontWeight: 800, color: pnl >= 0 ? G : R, fontFamily: "monospace" }}>
                         {formatVal(pnl)}
                       </td>

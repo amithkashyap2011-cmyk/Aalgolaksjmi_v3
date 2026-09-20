@@ -24,6 +24,7 @@ import mongoose from "mongoose";
 import { AI_ENDPOINTS } from "../config/aiEndpointRegistry.js";
 import { Trade } from "../models/Trade.js";
 import { toValidObjectId } from "../utils/mongoUtils.js";
+import { OrderFlowEngine } from "./aqea/orderFlowEngine.js";
 
 export type MarketRegime =
   | "Strong Bull"
@@ -342,53 +343,76 @@ function gatedPlaceholder(name: string, category: string, reason: string): Model
 }
 
 /**
- * Computes dynamic, regime-adaptive weights based on the detected market regime.
- * Trend-following sequence models get boosted in trending regimes,
- * while classical tabular and reinforcement models get boosted in ranging/volatile regimes.
+ * ═══════════════════════════════════════════════════════════════════
+ *  Dynamic Mixture-of-Experts (MoE) Softmax Router
+ * ═══════════════════════════════════════════════════════════════════
+ * Evaluates real-time market micro-conditions to dynamically route
+ * voting weight to specialized model families:
+ *   - Momentum & Deep Sequence Experts: (cnn, lstm-bilstm, mamba-hybrid, xlstm)
+ *   - Microstructure & Mean-Reversion: (transformer, tabular, xgboost, lightgbm)
+ *   - Execution & Risk Preservation Agent: (ppo-agent)
  */
-function getRegimeAdaptiveWeights(
-  baseWeights: Record<string, number>,
-  regime: MarketRegime
-): Record<string, number> {
-  const adapted: Record<string, number> = {};
-  let total = 0;
+export interface MoEContext {
+  regime: MarketRegime;
+  regimeScore: number;
+  adx: number;
+  volatilityScore: number;
+  orderBookImbalance: number;
+  cvdNormalized?: number;
+  fundingRate: number;
+}
 
-  const isTrending = ["Strong Bull", "Bull", "Strong Bear", "Bear"].includes(regime);
-  const isRanging = ["Sideways", "Low Volatility"].includes(regime);
-  const isHighVol = regime === "High Volatility";
+export function getDynamicMoEWeights(
+  baseWeights: Record<string, number>,
+  ctx: MoEContext
+): Record<string, number> {
+  const { regime, adx, volatilityScore, orderBookImbalance, cvdNormalized = 0, fundingRate } = ctx;
+
+  const isTrending = ["Strong Bull", "Bull", "Strong Bear", "Bear"].includes(regime) || adx >= 25;
+  const isChop = ["Sideways", "Low Volatility"].includes(regime) || adx < 20;
+  const isHighVol = regime === "High Volatility" || volatilityScore > 0.045;
+  const strongFlow = Math.abs(cvdNormalized) > 0.3 || Math.abs(orderBookImbalance) > 0.35;
+
+  const adapted: Record<string, number> = {};
+  let totalScore = 0;
 
   for (const [id, baseWeight] of Object.entries(baseWeights)) {
     let multiplier = 1.0;
 
-    if (isTrending) {
-      if (["xlstm", "transformer", "mamba-hybrid"].includes(id)) {
-        multiplier = 1.30;
-      } else if (["xgboost", "lightgbm"].includes(id)) {
-        multiplier = 0.80;
-      }
-    } else if (isRanging) {
-      if (["xgboost", "lightgbm", "ppo-agent"].includes(id)) {
-        multiplier = 1.25;
-      } else if (["xlstm", "transformer", "mamba-hybrid"].includes(id)) {
-        multiplier = 0.75;
-      }
-    } else if (isHighVol) {
-      if (["ppo-agent", "xgboost"].includes(id)) {
-        multiplier = 1.35;
-      } else if (["transformer", "xlstm", "mamba-hybrid"].includes(id)) {
-        multiplier = 0.65;
-      }
+    // 1. Momentum & Deep Sequence Experts
+    if (["cnn", "lstm-bilstm", "mamba-hybrid", "xlstm"].includes(id)) {
+      if (isTrending) multiplier *= 1.45;
+      if (strongFlow) multiplier *= 1.25;
+      if (isChop) multiplier *= 0.70;
+      if (isHighVol) multiplier *= 0.85;
     }
 
-    const adaptedVal = baseWeight * multiplier;
-    adapted[id] = adaptedVal;
-    total += adaptedVal;
+    // 2. Microstructure & Mean-Reversion Experts
+    if (["transformer", "xgboost", "lightgbm"].includes(id)) {
+      if (isChop) multiplier *= 1.40;
+      if (Math.abs(fundingRate) > 0.0003) multiplier *= 1.20; // high basis / funding disparity
+      if (isTrending && adx > 35) multiplier *= 0.75;
+    }
+
+    // 3. Execution & Risk Preservation Agent (PPO)
+    if (id === "ppo-agent") {
+      if (isHighVol) multiplier *= 1.60;
+      if (strongFlow && Math.sign(orderBookImbalance) !== Math.sign(cvdNormalized)) {
+        // Disagreeing order flow + book = high execution slippage risk
+        multiplier *= 1.40;
+      }
+      if (isChop) multiplier *= 1.15;
+    }
+
+    const score = Math.max(0.01, baseWeight * multiplier);
+    adapted[id] = score;
+    totalScore += score;
   }
 
-  // Normalize back to sum to 1.0
+  // Softmax-style temperature normalization (T = 1.2) to maintain diversity while sharp routing
   const normalized: Record<string, number> = {};
   for (const [id, val] of Object.entries(adapted)) {
-    normalized[id] = total > 0 ? +(val / total).toFixed(4) : 0;
+    normalized[id] = totalScore > 0 ? +(val / totalScore).toFixed(4) : 0;
   }
 
   return normalized;
@@ -406,11 +430,12 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   }
 
   // 1. Fetch Market Data in Parallel
-  const [klines, fundingRate, openInterest, book] = await Promise.all([
+  const [klines, fundingRate, openInterest, book, orderFlowRes] = await Promise.all([
     binance.getKlines(normalizedSymbol, interval, undefined, undefined, limit),
     binance.getLatestFundingRate(normalizedSymbol).catch(() => 0),
     binance.getFuturesOpenInterest(normalizedSymbol).catch(() => 0),
-    binance.getOrderBook(normalizedSymbol, 20).catch(() => ({ bids: [], asks: [] }))
+    binance.getOrderBook(normalizedSymbol, 20).catch(() => ({ bids: [], asks: [] })),
+    OrderFlowEngine.analyze(normalizedSymbol).catch(() => null),
   ]);
 
   if (!klines || klines.length === 0) {
@@ -450,12 +475,22 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
     100,
     0,
     0,
+    orderBookImbalance,
+    orderFlowRes?.diagnostics?.cvdNormalized ?? 0,
   );
 
   const activeModels = registry.getEnabledModels();
   const enabledIds = new Set(activeModels.map((m) => m.id));
   const registryWeights = registry.getEnsembleWeights();
-  const modelWeights = getRegimeAdaptiveWeights(registryWeights, regime);
+  const modelWeights = getDynamicMoEWeights(registryWeights, {
+    regime,
+    regimeScore,
+    adx: ind.adx14 ?? 20,
+    volatilityScore,
+    orderBookImbalance,
+    cvdNormalized: orderFlowRes?.diagnostics?.cvdNormalized ?? 0,
+    fundingRate
+  });
   const models: ModelContribution[] = [];
 
   // Live health gate: which quant-engine checkpoints are real+loaded right now.

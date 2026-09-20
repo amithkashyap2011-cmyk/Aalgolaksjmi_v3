@@ -462,7 +462,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
     }
 
     let settings: any = {
-      allowedSymbols: ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "DOGEUSDT", "SHIBUSDT"],
+      allowedSymbols: ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "DOGEUSDT", "SHIBUSDT", "SOLUSDT", "XRPUSDT"],
       riskConfig: { maxPositionSizePct: 100, defaultSL: 2, defaultTP: 4 }
     };
     
@@ -495,13 +495,29 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
     }
 
     const orderValue = quantity * (entryPrice || 1);
-    const buyingPower = (usdt * finalLeverage);
-    const posSizePct = buyingPower > 0 ? (orderValue / buyingPower) * 100 : 100;
+    // Margin required = notional / leverage (what the user actually locks up).
+    // Comparing raw notional against balance × leverage double-counts the
+    // leverage — a $100 order at 20× should only need $5 margin, not block
+    // a user with $50 USDT from placing it.
+    const marginRequired = orderValue / Math.max(1, finalLeverage);
+    const posSizePct = usdt > 0 ? (marginRequired / usdt) * 100 : 100;
 
     if (posSizePct > maxPosSizePct + 0.5) { // +0.5 tolerance for floating-point 100% fills
       return res.status(400).json({
-        error: `Order exceeds max position size (${posSizePct.toFixed(1)}% > ${maxPosSizePct}% of Buying Power)`,
+        error: `Insufficient balance: order needs $${marginRequired.toFixed(2)} USDT margin (${posSizePct.toFixed(1)}% of your $${usdt.toFixed(2)} balance, limit is ${maxPosSizePct}%). Reduce order size or top up your paper wallet.`,
       });
+    }
+
+    // 🛡️ GAP #7 FIX: Duplicate order guard for paper mode
+    // Prevents rapid double-clicks from opening two positions on the same
+    // symbol that each consume the full margin, causing unintended 2× exposure.
+    if (mode === "PAPER") {
+      const existingPos = paper.getPosition(req.userId!, symbol, mode, accountType || "FUTURES");
+      if (existingPos) {
+        return res.status(400).json({
+          error: `You already have an open ${symbol} ${accountType || "FUTURES"} position (side: ${existingPos.side}). Close it first or use the manual close button.`,
+        });
+      }
     }
 
     const todayStart = new Date();
