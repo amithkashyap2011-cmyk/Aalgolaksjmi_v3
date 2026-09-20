@@ -41,6 +41,19 @@ const router = express.Router();
 router.use(optionalAuth);
 
 /**
+ * GET /api/indian-market/session
+ * Real-time authoritative Indian market exchange status (holiday, weekend, open/closed)
+ */
+router.get("/session", (_req, res) => {
+  try {
+    const session = IndianMarketService.getMarketSession();
+    res.json({ success: true, session });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/indian-market/scan
  */
 router.get("/scan", async (req, res) => {
@@ -1151,6 +1164,7 @@ router.get("/funds", async (req, res) => {
       freshness: "AUTHORITATIVE_REALTIME",
       autoTradeEnabled: IndianMarketAutoTrader.isEnabled() && autoPilotMode !== "PAUSED",
       autoPilotMode,
+      session: IndianMarketService.getMarketSession(),
     };
 
     fundsCache = { timestamp: Date.now(), key: cacheKey, data: payload };

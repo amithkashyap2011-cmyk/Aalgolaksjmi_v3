@@ -965,6 +965,97 @@ export default function IndianMarketPage() {
         </div>
       </div>
 
+      {/* ─── 1.5. HOLIDAY & MARKET CLOSED COMPREHENSIVE ALERT BANNER ─── */}
+      {marketSession && !marketSession.isOpen && (
+        <div
+          style={{
+            background: "linear-gradient(135deg, rgba(245, 158, 11, 0.14) 0%, rgba(239, 68, 68, 0.1) 100%)",
+            border: "1px solid rgba(245, 158, 11, 0.4)",
+            borderRadius: 14,
+            padding: "16px 20px",
+            marginBottom: 16,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 16,
+            boxShadow: "0 4px 24px rgba(0, 0, 0, 0.35)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 280, flex: 1 }}>
+            <div
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: 12,
+                background: "rgba(245, 158, 11, 0.2)",
+                border: "1px solid rgba(245, 158, 11, 0.45)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#f59e0b",
+                flexShrink: 0,
+              }}
+            >
+              <AlertTriangle size={24} />
+            </div>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 15, fontWeight: 900, color: "#ffffff", letterSpacing: "-0.01em" }}>
+                  {marketSession.isHoliday ? "🇮🇳 INDIAN EXCHANGE HOLIDAY TODAY" : "🇮🇳 INDIAN MARKET CLOSED TODAY"}
+                </span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    padding: "2px 8px",
+                    borderRadius: 6,
+                    background: marketSession.isHoliday ? "rgba(239, 68, 68, 0.25)" : "rgba(245, 158, 11, 0.25)",
+                    color: marketSession.isHoliday ? "#fca5a5" : "#fcd34d",
+                    border: `1px solid ${marketSession.isHoliday ? "rgba(239, 68, 68, 0.4)" : "rgba(245, 158, 11, 0.4)"}`,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {marketSession.statusBadge || (marketSession.isHoliday ? "EXCHANGE HOLIDAY" : "WEEKEND")}
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 4, lineHeight: 1.5 }}>
+                {marketSession.alertMessage || marketSession.reason}
+                <span style={{ color: "#94a3b8", display: "block", marginTop: 2 }}>
+                  All prices, PCR, and option chain premiums are <strong>frozen at the previous close</strong>. Real-time tick simulations and order execution will resume when the exchange opens.
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              background: "rgba(0, 0, 0, 0.35)",
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+              borderRadius: 10,
+              padding: "10px 14px",
+            }}
+          >
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase" }}>Next Session</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#38bdf8", marginTop: 2 }}>
+                {marketSession.nextSessionOpen || "Monday at 09:15 IST"}
+              </div>
+            </div>
+            <div style={{ width: 1, height: 28, background: "rgba(255, 255, 255, 0.12)" }} />
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase" }}>Auto-Trader</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#34d399", marginTop: 2 }}>
+                SAFE / STANDBY
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── 2. LIVE INDICES & MARKET REGIME STRIP ─────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginBottom: 16 }}>
         
@@ -981,7 +1072,14 @@ export default function IndianMarketPage() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>NIFTY 50 (NSE)</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>NIFTY 50 (NSE)</span>
+              {marketSession && !marketSession.isOpen && (
+                <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 5px", borderRadius: 4, background: "rgba(245, 158, 11, 0.15)", color: "#f59e0b", border: "1px solid rgba(245, 158, 11, 0.3)" }}>
+                  FROZEN (CLOSE)
+                </span>
+              )}
+            </div>
             <span style={{ fontSize: 11, color: niftyStock.change >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>
               {niftyStock.change >= 0 ? "+" : ""}{niftyStock.changePct}%
             </span>
@@ -1009,7 +1107,14 @@ export default function IndianMarketPage() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>BANKNIFTY (NSE)</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>BANKNIFTY (NSE)</span>
+              {marketSession && !marketSession.isOpen && (
+                <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 5px", borderRadius: 4, background: "rgba(245, 158, 11, 0.15)", color: "#f59e0b", border: "1px solid rgba(245, 158, 11, 0.3)" }}>
+                  FROZEN (CLOSE)
+                </span>
+              )}
+            </div>
             <span style={{ fontSize: 11, color: bankNiftyStock.change >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>
               {bankNiftyStock.change >= 0 ? "+" : ""}{bankNiftyStock.changePct}%
             </span>

@@ -68,6 +68,8 @@ export interface MarketSessionStatus {
   currentISTTime: string;
   nextSessionOpen: string;
   reason: string;
+  statusBadge?: string;
+  alertMessage?: string;
 }
 
 export const MarketSessionStatus = {} as unknown as MarketSessionStatus;
@@ -144,6 +146,8 @@ export class ExchangeCalendar {
         currentISTTime,
         nextSessionOpen: `${daysUntilMonday === 1 ? "Tomorrow" : "Monday"} at 09:15 IST`,
         reason: `Market closed: Weekend (${day === 0 ? "Sunday" : "Saturday"})`,
+        statusBadge: "WEEKEND",
+        alertMessage: `NSE & BSE Indian Exchanges are CLOSED today for the Weekend (${day === 0 ? "Sunday" : "Saturday"}). All live trading, tick feeds, and F&O execution are suspended. Next regular session opens ${daysUntilMonday === 1 ? "Tomorrow" : "Monday"} at 09:15 IST. Displayed prices are frozen at Friday's close.`,
       };
     }
 
@@ -158,6 +162,8 @@ export class ExchangeCalendar {
         currentISTTime,
         nextSessionOpen: "Next trading day at 09:15 IST",
         reason: `Market closed: Exchange Holiday (${holidayName})`,
+        statusBadge: "EXCHANGE HOLIDAY",
+        alertMessage: `NSE & BSE Indian Exchanges are CLOSED today for ${holidayName}. All live trading, tick feeds, and F&O execution are suspended. Next regular session opens on the next trading day at 09:15 IST. Displayed prices are frozen at the previous close.`,
       };
     }
 
@@ -171,6 +177,8 @@ export class ExchangeCalendar {
         currentISTTime,
         nextSessionOpen: "Today at 09:15 IST",
         reason: "Pre-market order collection session (09:00 - 09:15 IST)",
+        statusBadge: "PRE-OPEN",
+        alertMessage: "Pre-market price discovery session is active (09:00 - 09:15 IST). Continuous trading starts at 09:15 IST.",
       };
     }
 
@@ -184,6 +192,8 @@ export class ExchangeCalendar {
         currentISTTime,
         nextSessionOpen: "Open now",
         reason: "Regular trading session active (09:15 - 15:30 IST)",
+        statusBadge: "LIVE",
+        alertMessage: "Regular trading session is active (09:15 - 15:30 IST).",
       };
     }
 
@@ -197,6 +207,8 @@ export class ExchangeCalendar {
         currentISTTime,
         nextSessionOpen: "Tomorrow at 09:15 IST",
         reason: "Post-market closing session (15:30 - 16:00 IST)",
+        statusBadge: "POST-MARKET",
+        alertMessage: "Post-market session in progress. Regular trading has concluded for the day.",
       };
     }
 
@@ -210,6 +222,8 @@ export class ExchangeCalendar {
       currentISTTime,
       nextSessionOpen: nextOpen,
       reason: currentMinutes < PRE_MARKET_OPEN ? "Pre-market not started yet" : "Market closed for the day",
+      statusBadge: "MARKET CLOSED",
+      alertMessage: `NSE & BSE Indian Exchanges are CLOSED. Regular market hours are 09:15 - 15:30 IST. Next session opens ${nextOpen}. Displayed prices are frozen at the close.`,
     };
   }
 }

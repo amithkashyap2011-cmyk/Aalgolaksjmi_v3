@@ -145,6 +145,7 @@ export default function ZerodhaKiteTerminal({
 
   // P&L & History Timeframe: daily, weekly, monthly, all
   const [historyTimeframe, setHistoryTimeframe] = useState<"daily" | "weekly" | "monthly" | "all">("daily");
+  const [marketSession, setMarketSession] = useState<any>(null);
 
   // Order Placement Modal State
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
@@ -324,7 +325,10 @@ export default function ZerodhaKiteTerminal({
         fetch("/api/indian-market/funds?userId=guest-user")
           .then((res) => res.json())
           .then((data) => {
-            if (data?.success) setFunds(data);
+            if (data?.success) {
+              setFunds(data);
+              if (data.session) setMarketSession(data.session);
+            }
           }),
       ];
 
@@ -818,6 +822,47 @@ export default function ZerodhaKiteTerminal({
         </div>
       </header>
 
+      {/* ─── MARKET CLOSED / HOLIDAY ALERT BANNER (KITE TERMINAL) ─── */}
+      {marketSession && !marketSession.isOpen && (
+        <div
+          style={{
+            background: "linear-gradient(90deg, rgba(245,158,11,0.15) 0%, rgba(239,68,68,0.1) 100%)",
+            borderBottom: "1px solid rgba(245,158,11,0.35)",
+            padding: "8px 18px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: 12,
+            color: "#fff",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <AlertCircle size={16} color="#f59e0b" style={{ flexShrink: 0 }} />
+            <span style={{
+              background: "rgba(245,158,11,0.25)",
+              color: "#fcd34d",
+              border: "1px solid rgba(245,158,11,0.45)",
+              borderRadius: 4,
+              padding: "2px 6px",
+              fontWeight: 800,
+              fontSize: 10,
+              letterSpacing: "0.04em",
+            }}>
+              {marketSession.statusBadge || (marketSession.isHoliday ? "EXCHANGE HOLIDAY" : "MARKET CLOSED")}
+            </span>
+            <span style={{ fontWeight: 600, color: "#cbd5e1" }}>
+              {marketSession.alertMessage || marketSession.reason}
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#94a3b8" }}>
+            <span>Next Trading Session:</span>
+            <strong style={{ color: "#38bdf8" }}>{marketSession.nextSessionOpen || "Monday at 09:15 IST"}</strong>
+          </div>
+        </div>
+      )}
+
       {/* ─── 2. MAIN LAYOUT: SPLIT SCREEN (MARKETWATCH ON LEFT + ACTIVE VIEW ON RIGHT) ─── */}
       <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", minHeight: "calc(100vh - 56px)" }}>
         
@@ -843,6 +888,9 @@ export default function ZerodhaKiteTerminal({
           >
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
               <span style={{ color: "#94a3b8", fontWeight: 700, fontSize: 11, letterSpacing: "0.02em" }}>NIFTY 50</span>
+              {marketSession && !marketSession.isOpen && (
+                <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: "rgba(245, 158, 11, 0.2)", color: "#f59e0b" }}>CLOSE</span>
+              )}
               <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{niftySpot.price.toLocaleString("en-IN")}</span>
               <span style={{ color: niftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
                 {niftySpot.change >= 0 ? "+" : ""}{niftySpot.changePct}%
@@ -851,6 +899,9 @@ export default function ZerodhaKiteTerminal({
             <div style={{ width: 1, height: 16, background: "#1e293b" }} />
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
               <span style={{ color: "#94a3b8", fontWeight: 700, fontSize: 11, letterSpacing: "0.02em" }}>BANKNIFTY</span>
+              {marketSession && !marketSession.isOpen && (
+                <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: "rgba(245, 158, 11, 0.2)", color: "#f59e0b" }}>CLOSE</span>
+              )}
               <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{bankNiftySpot.price.toLocaleString("en-IN")}</span>
               <span style={{ color: bankNiftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
                 {bankNiftySpot.change >= 0 ? "+" : ""}{bankNiftySpot.changePct}%
