@@ -18,6 +18,33 @@ export class UITelemetryService {
   }
 
   /**
+   * Emits a real-time TRADE_OPENED notification so the UI can show a popup.
+   */
+  public static emitTradeOpened(params: {
+    userId: string;
+    symbol: string;
+    side: "BUY" | "SELL";
+    quantity: number;
+    entryPrice: number;
+    leverage: number;
+    accountType: string;
+    sl?: number;
+    tp?: number;
+    confidence?: number;
+    regime?: string;
+    mode: string;
+    tradeId: string;
+  }) {
+    const io = getIO();
+    if (io) {
+      io.emit("TRADE_OPENED", {
+        timestamp: new Date(),
+        ...params
+      });
+    }
+  }
+
+  /**
    * Emits a real-time position management event (SL/TP update).
    */
   public static emitPositionManaged(userId: string, symbol: string, action: string, reason: string, value: number) {

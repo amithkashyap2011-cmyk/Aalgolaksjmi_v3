@@ -1252,6 +1252,14 @@ export async function handleLong(
     console.log(`[PAPER_ORDER_CREATED] symbol=${symbol} side=BUY qty=${quantity} price=${currentPrice} decisionId=${decisionId}`);
     console.log(`[PAPER_POSITION_OPENED] symbol=${symbol} side=BUY qty=${quantity} entryPrice=${currentPrice} decisionId=${decisionId}`);
 
+    // 🔔 Notify UI in real-time
+    UITelemetryService.emitTradeOpened({
+      userId, symbol, side: "BUY", quantity, entryPrice: currentPrice, leverage,
+      accountType, sl: riskProfile.sl, tp: riskProfile.tp1,
+      confidence: aqeaDecision.confidence, regime: decisionPath.regime,
+      mode, tradeId: trade._id.toString(),
+    });
+
     if (decisionId) {
       ForwardTelemetryStore.updateTerminalState(
         decisionId,
@@ -1498,6 +1506,14 @@ export async function handleShort(
 
     console.log(`[PAPER_ORDER_CREATED] symbol=${symbol} side=SELL qty=${quantity} price=${currentPrice} decisionId=${decisionId}`);
     console.log(`[PAPER_POSITION_OPENED] symbol=${symbol} side=SELL qty=${quantity} entryPrice=${currentPrice} decisionId=${decisionId}`);
+
+    // 🔔 Notify UI in real-time
+    UITelemetryService.emitTradeOpened({
+      userId, symbol, side: "SELL", quantity, entryPrice: currentPrice, leverage,
+      accountType, sl: riskProfile.sl, tp: riskProfile.tp1,
+      confidence: aqeaDecision.confidence, regime: decisionPath.regime,
+      mode, tradeId: trade._id.toString(),
+    });
 
     if (decisionId) {
       ForwardTelemetryStore.updateTerminalState(
