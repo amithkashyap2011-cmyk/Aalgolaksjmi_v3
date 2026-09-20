@@ -866,11 +866,12 @@ router.post("/p2p/buy", authGuard, async (req: AuthRequest, res) => {
 /* ── Dummy Paper Deposit ──────────────────────────────── */
 router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
   try {
-    const { amount, accountType, currency = "USDT", confirmConversion = false } = req.body as {
+    const { amount, accountType, currency = "USDT", confirmConversion = false, setExact = false } = req.body as {
       amount: number;
       accountType?: string;
       currency?: string;
       confirmConversion?: boolean;
+      setExact?: boolean;
     };
     const userId = req.userId || "guest-user";
     const selectedCurrency = (currency || "USDT").toUpperCase();
@@ -944,8 +945,8 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
         }
 
         const currentUsdt = wallet.get("USDT") ?? 0;
-        newBalance = currentUsdt + numAmount;
-        creditedAmount = numAmount;
+        newBalance = setExact ? numAmount : currentUsdt + numAmount;
+        creditedAmount = setExact ? (numAmount - currentUsdt) : numAmount;
         creditedCurrency = "USDT";
 
         await paper.setWalletBalance(userId, mode, "USDT", newBalance, acctType);
@@ -953,8 +954,10 @@ router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
         clearDashboardCache();
         invalidateWalletAggregatesCache();
 
-        note = `Paper Deposit: +${numAmount} USDT`;
-        log(`[deposit] Crypto Wallet ${userId} (${acctType}) deposited +${numAmount} USDT. New USDT Balance: ${newBalance}`);
+        note = setExact
+          ? `Paper Balance Set: ${numAmount} USDT (exact)`
+          : `Paper Deposit: +${numAmount} USDT`;
+        log(`[deposit] Crypto Wallet ${userId} (${acctType}) ${setExact ? 'set to' : 'deposited +'} ${numAmount} USDT. New USDT Balance: ${newBalance}`);
       } else if (selectedCurrency === "INR") {
         // Explicit conversion required for INR → Crypto
         if (!confirmConversion) {
@@ -1084,6 +1087,32 @@ router.post("/init", authGuard, async (req: AuthRequest, res) => {
     }
   } catch (err: any) {
     console.error("[wallet] /init error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ── Admin: set exact balance ─────────────────────────── */
+router.post("/set-balance", authGuard, async (req: AuthRequest, res) => {
+  try {
+    const { accountType = "FUTURES", currency = "USDT", amount } = req.body as {
+      accountType?: string;
+      currency?: string;
+      amount: number;
+    };
+    const numAmount = Number(amount);
+    if (!Number.isFinite(numAmount) || numAmount < 0) {
+      res.status(400).json({ error: "amount must be a non-negative number" });
+      return;
+    }
+    const userId = req.userId!;
+    const mode = "PAPER";
+    await paper.setWalletBalance(userId, mode, currency.toUpperCase(), numAmount, accountType, "PAPER_INITIALIZATION");
+    clearDashboardCache();
+    invalidateWalletAggregatesCache();
+    const w = paper.getWallet(userId, mode, accountType);
+    res.json({ message: `Balance set to ${numAmount} ${currency}`, balance: Object.fromEntries(w), accountType, mode });
+  } catch (err: any) {
+    console.error("[wallet] /set-balance error:", err);
     res.status(500).json({ error: err.message });
   }
 });

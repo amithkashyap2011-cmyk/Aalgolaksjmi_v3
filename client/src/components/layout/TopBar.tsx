@@ -479,11 +479,31 @@ export default function TopBar({ onMenuClick }: Props) {
           />
         </div>
       ) : isCrypto ? (
-        /* ── CRYPTO only: 3 crypto cards ──────────────────── */
+        /* ── CRYPTO only: balance cards ─────────────────────── */
         <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 6, padding: "0 4px", flexShrink: 0 }} className="hidden lg:flex">
-          <DomainCard label="CRYPTO EQUITY" value={formatUsdWithInr(domains.crypto.totalEquity || 0, inrRate, true)} color="#38bdf8" title={`Binance Crypto Wallet Equity: $${(domains.crypto.totalEquity || 0).toFixed(2)} (₹${((domains.crypto.totalEquity || 0) * inrRate).toLocaleString("en-IN")})`} />
-          <DomainCard label="CRYPTO P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
-          <DomainCard label="CRYPTO WIN RATE" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
+          {/* SPOT free cash */}
+          <DomainCard
+            label="SPOT CASH"
+            value={formatUsdWithInr((domains.crypto.balances?.spot ?? 0), inrRate, true)}
+            color="#38bdf8"
+            title={`SPOT Free Cash (available to trade): $${(domains.crypto.balances?.spot ?? 0).toFixed(2)} | Locked in positions: $${(domains.crypto.invested?.spot ?? 0).toFixed(2)} | Open PnL: $${((domains.crypto.totalEquity ?? 0) - (domains.crypto.balances?.spot ?? 0) - (domains.crypto.balances?.futures ?? 0) - (domains.crypto.invested?.spot ?? 0) - (domains.crypto.invested?.futures ?? 0)).toFixed(2)}`}
+          />
+          {/* FUTURES free cash */}
+          <DomainCard
+            label="FUT CASH"
+            value={formatUsdWithInr((domains.crypto.balances?.futures ?? 0), inrRate, true)}
+            color="#f59e0b"
+            title={`FUTURES Free Cash (available to trade): $${(domains.crypto.balances?.futures ?? 0).toFixed(2)} | Locked in positions: $${(domains.crypto.invested?.futures ?? 0).toFixed(2)}`}
+          />
+          {/* Total portfolio equity */}
+          <DomainCard
+            label="TOTAL EQUITY"
+            value={formatUsdWithInr(domains.crypto.totalEquity || 0, inrRate, true)}
+            color="#22c55e"
+            title={`Total Portfolio Equity = Free Cash + Locked Margin + Unrealized PnL\nSPOT: $${(domains.crypto.balances?.spot ?? 0).toFixed(2)} free + $${(domains.crypto.invested?.spot ?? 0).toFixed(2)} locked\nFUTURES: $${(domains.crypto.balances?.futures ?? 0).toFixed(2)} free + $${(domains.crypto.invested?.futures ?? 0).toFixed(2)} locked\nDeposited: $${((domains.crypto.balances?.spot ?? 0) + (domains.crypto.balances?.futures ?? 0) + (domains.crypto.invested?.spot ?? 0) + (domains.crypto.invested?.futures ?? 0)).toFixed(0)} | Total: $${(domains.crypto.totalEquity || 0).toFixed(2)}`}
+          />
+          <DomainCard label="P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
+          <DomainCard label="WIN RATE" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
           {/* AI Agent running status */}
           <div
             title={execMode === "AUTO" ? "Crypto AI Agent is ACTIVE — placing trades autonomously" : "AI Agent paused — manual mode only"}
@@ -510,14 +530,26 @@ export default function TopBar({ onMenuClick }: Props) {
           <style>{`@keyframes agentPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.7)}70%{box-shadow:0 0 0 6px rgba(16,185,129,0)}100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}}`}</style>
         </div>
       ) : (
-        /* ── GLOBAL: all 6 cards (crypto + india) ─────────── */
         <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 6, padding: "0 4px", flexShrink: 0 }} className="hidden lg:flex">
-          <DomainCard label="CRYPTO EQUITY" value={formatUsdWithInr(domains.crypto.totalEquity || 0, inrRate, true)} color="#38bdf8" title={`Binance Crypto Wallet Equity: $${(domains.crypto.totalEquity || 0).toFixed(2)} (₹${((domains.crypto.totalEquity || 0) * inrRate).toLocaleString("en-IN")})`} />
+          {/* Crypto side */}
+          <DomainCard
+            label="CRYPTO CASH"
+            value={formatUsdWithInr((domains.crypto.balances?.spot ?? 0) + (domains.crypto.balances?.futures ?? 0), inrRate, true)}
+            color="#38bdf8"
+            title={`Crypto Free Cash: SPOT $${(domains.crypto.balances?.spot ?? 0).toFixed(2)} + FUTURES $${(domains.crypto.balances?.futures ?? 0).toFixed(2)} = $${((domains.crypto.balances?.spot ?? 0) + (domains.crypto.balances?.futures ?? 0)).toFixed(2)}`}
+          />
+          <DomainCard
+            label="CRYPTO EQUITY"
+            value={formatUsdWithInr(domains.crypto.totalEquity || 0, inrRate, true)}
+            color="#22c55e"
+            title={`Crypto Total Equity (Cash + Locked Margin + Unrealized PnL) = $${(domains.crypto.totalEquity || 0).toFixed(2)}`}
+          />
+          {/* India side */}
           <DomainCard label="INDIA EQUITY" value={`₹${(domains.indianStock.totalEquity || 0).toLocaleString("en-IN")}`} color="#f97316" title={`Indian Broker Wallet Equity: ₹${(domains.indianStock.totalEquity || 0).toLocaleString("en-IN")} ($${((domains.indianStock.totalEquity || 0) / inrRate).toFixed(2)})`} />
           <DomainCard label="CRYPTO P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
           <DomainCard label="INDIA P&L" value={`${(domains.indianStock.dailyPnL || 0) >= 0 ? "+" : ""}₹${(domains.indianStock.dailyPnL || 0).toFixed(0)}`} color={(domains.indianStock.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Indian Daily P&L: ₹${(domains.indianStock.dailyPnL || 0).toFixed(2)}`} />
-          <DomainCard label="CRYPTO WIN RATE" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
-          <DomainCard label="INDIA WIN RATE" value={`${(domains.indianStock.realizedWinRate ?? domains.indianStock.winRate ?? 0).toFixed(0)}%`} color="#f97316" title={`India Realized Win Rate — ${domains.indianStock.closedTrades || 0} closed trade(s)`} />
+          <DomainCard label="CRYPTO WIN" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
+          <DomainCard label="INDIA WIN" value={`${(domains.indianStock.realizedWinRate ?? domains.indianStock.winRate ?? 0).toFixed(0)}%`} color="#f97316" title={`India Realized Win Rate — ${domains.indianStock.closedTrades || 0} closed trade(s)`} />
         </div>
       )}
 
