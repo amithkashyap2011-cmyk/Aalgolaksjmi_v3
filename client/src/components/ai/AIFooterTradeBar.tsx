@@ -58,22 +58,38 @@ export interface UpcomingTradePrediction {
   reasons: string[];
 }
 
-/* ─── Data pools ─────────────────────────────────────────────────────── */
+/* ─── Market Symbol Universes ────────────────────────────────────────── */
 
-const CRYPTO_POOL = [
-  { symbol: "BTCUSDT", exchange: "BINANCE FUTURES", basePrice: 64250.0, leverage: 5, reasons: ["Bi-LSTM 2-Layer momentum flip", "1D CNN spatial volume delta", "Transformer micro-structure attention"] },
-  { symbol: "ETHUSDT", exchange: "BINANCE FUTURES", basePrice: 3480.0, leverage: 5, reasons: ["Mamba SSM orderbook imbalance +2.8%", "Multi-head cross-attention signal", "Stochastic momentum RSI divergence"] },
-  { symbol: "SOLUSDT", exchange: "BINANCE FUTURES", basePrice: 148.5, leverage: 3, reasons: ["High-frequency order flow delta", "Exponential volume surge +18%", "Ensemble neural consensus 4/4"] },
-  { symbol: "XRPUSDT", exchange: "BINANCE FUTURES", basePrice: 0.585, leverage: 5, reasons: ["Order book depth skew +3.2%", "Breakout liquidity sweep detection", "xLSTM exponential memory confirm"] },
-  { symbol: "DOGEUSDT", exchange: "BINANCE FUTURES", basePrice: 0.105, leverage: 4, reasons: ["CVD volume acceleration surge", "Multi-head cross attention spike", "Mean-reversion bounce from VWAP"] },
-  { symbol: "BNBUSDT", exchange: "BINANCE SPOT", basePrice: 585.0, leverage: 1, reasons: ["Mean-reversion support bounce", "Microstructure orderbook liquidity depth", "Transformer trend-following confirm"] },
+export const DEFAULT_CRYPTO_SYMBOLS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "XRPUSDT",
+  "ADAUSDT",
+  "DOGEUSDT",
+  "AVAXUSDT",
+  "DOTUSDT",
+  "LINKUSDT",
+  "BNBUSDT",
+  "SHIBUSDT",
+  "TRXUSDT",
 ];
 
-const INDIAN_POOL = [
-  { symbol: "RELIANCE", exchange: "NSE (EQUITY)", basePrice: 2985.4, leverage: 1, reasons: ["Bi-LSTM momentum flip", "Conv1D spatial volume spike", "Mamba SSM orderbook imbalance +2.4%"] },
-  { symbol: "TCS", exchange: "NSE (EQUITY)", basePrice: 3890.0, leverage: 1, reasons: ["Institutional delivery volume spike", "Multi-timeframe moving average breakout", "RSI divergence bullish confirmation"] },
-  { symbol: "INFY", exchange: "NSE (EQUITY)", basePrice: 1640.5, leverage: 1, reasons: ["Option open interest buildup support", "Neural ensemble volatility breakout", "Order flow buy imbalance +3.1%"] },
-  { symbol: "HDFCBANK", exchange: "NSE (EQUITY)", basePrice: 1510.0, leverage: 1, reasons: ["BankNifty sector strength correlation", "1D CNN momentum filter triggered", "Deep reinforcement policy reward peak"] },
+export const DEFAULT_INDIAN_SYMBOLS = [
+  "NIFTY50",
+  "BANKNIFTY",
+  "SENSEX",
+  "RELIANCE",
+  "TCS",
+  "HDFCBANK",
+  "INFY",
+  "ICICIBANK",
+  "TATASTEEL",
+  "SBIN",
+  "AXISBANK",
+  "KOTAKBANK",
+  "BHARTIARTL",
+  "TATAMOTORS",
 ];
 
 /* ─── Constants ──────────────────────────────────────────────────────── */
@@ -96,49 +112,169 @@ const φ = {
   copyrightH: 16,
 } as const;
 
-/* ─── Pure helpers ───────────────────────────────────────────────────── */
+/* ─── Pure Initial State Factory ─────────────────────────────────────── */
 
-function generatePrediction(
-  item: { symbol: string; exchange: string; basePrice: number; leverage: number; reasons: string[] },
+function createInitialPrediction(
+  symbol: string,
   isIndian: boolean,
+  accountType: "SPOT" | "FUTURES" | "BOTH",
   livePrice?: number,
 ): UpcomingTradePrediction {
-  const roll = Math.random();
-  const direction: "LONG" | "SHORT" | "HOLD" = roll > 0.55 ? "LONG" : roll > 0.15 ? "SHORT" : "HOLD";
-  const price = livePrice && livePrice > 0 ? livePrice : item.basePrice;
-  const tpMult = direction === "SHORT" ? 0.978 : 1.022;
-  const slMult = direction === "SHORT" ? 1.012 : 0.988;
-  return {
-    symbol: item.symbol,
-    exchange: item.exchange,
-    domain: isIndian ? "INDIAN" : "CRYPTO",
-    direction,
-    confidence: parseFloat((82 + Math.random() * 14).toFixed(1)),
-    entryPrice: price,
-    targetTp: direction === "HOLD" ? price : parseFloat((price * tpMult).toFixed(price > 100 ? 2 : 4)),
-    stopLoss: direction === "HOLD" ? price : parseFloat((price * slMult).toFixed(price > 100 ? 2 : 4)),
-    estimatedLeverage: item.leverage,
-    allocatedMargin: isIndian ? 25000 : 2500,
-    modelsVoting: 4,
-    totalModels: 4,
-    countdownSec: COUNTDOWN_TOTAL,
-    regime: direction === "LONG" ? "BULLISH_MOMENTUM" : direction === "SHORT" ? "BEARISH_DIVERGENCE" : "NEUTRAL_RANGE",
-    reasons: item.reasons,
-  };
-}
-
-function resolvePoolItem(symbol: string, isIndian: boolean, accountType: "SPOT" | "FUTURES" | "BOTH") {
-  const pool = isIndian ? INDIAN_POOL : CRYPTO_POOL;
-  const found = pool.find((p) => p.symbol === symbol);
-  if (found) return { ...found, isIndian };
+  const price = livePrice && livePrice > 0 ? livePrice : 0;
   return {
     symbol,
     exchange: isIndian ? "NSE (EQUITY)" : `BINANCE ${accountType === "BOTH" ? "FUTURES" : accountType}`,
-    basePrice: 0,
-    leverage: isIndian || accountType === "SPOT" ? 1 : 5,
-    reasons: ["Ensemble neural consensus", "Order-flow imbalance signal", "Multi-timeframe momentum confirmation"],
-    isIndian,
+    domain: isIndian ? "INDIAN" : "CRYPTO",
+    direction: "HOLD",
+    confidence: 0,
+    entryPrice: price,
+    targetTp: price,
+    stopLoss: price,
+    estimatedLeverage: isIndian || accountType === "SPOT" ? 1 : 5,
+    allocatedMargin: isIndian ? 25000 : 2500,
+    modelsVoting: 0,
+    totalModels: isIndian ? 4 : 8,
+    countdownSec: COUNTDOWN_TOTAL,
+    regime: "Evaluating...",
+    reasons: ["Evaluating live neural consensus from quant engine..."],
   };
+}
+
+/* ─── Real Backend AI Prediction Fetchers ────────────────────────────── */
+
+async function fetchRealCryptoPrediction(
+  symbol: string,
+  accountType: "SPOT" | "FUTURES" | "BOTH",
+  livePrice?: number,
+): Promise<UpcomingTradePrediction> {
+  const report = await api.getEnsembleReport(symbol, "5m", 100);
+  const direction: "LONG" | "SHORT" | "HOLD" =
+    report.signal === "LONG" ? "LONG" : report.signal === "SHORT" ? "SHORT" : "HOLD";
+
+  const confRaw = typeof report.confidence === "number" ? report.confidence : 0.5;
+  const confidence = confRaw <= 1.0 ? parseFloat((confRaw * 100).toFixed(1)) : parseFloat(confRaw.toFixed(1));
+
+  const currentPrice = livePrice && livePrice > 0 ? livePrice : (report.marketPulse?.vwap || 0);
+
+  // Dynamic quantitative ATR bracket calculated from market volatility
+  const vol = Math.max(report.marketPulse?.volatilityScore || 0.012, 0.008);
+  const slPct = Math.min(Math.max(vol * 1.5, 0.008), 0.035);
+  const tpPct = slPct * 1.8;
+
+  const tpMult = direction === "SHORT" ? (1 - tpPct) : (1 + tpPct);
+  const slMult = direction === "SHORT" ? (1 + slPct) : (1 - slPct);
+
+  const decimals = currentPrice > 100 ? 2 : currentPrice > 1 ? 4 : 6;
+  const targetTp = direction === "HOLD" ? currentPrice : parseFloat((currentPrice * tpMult).toFixed(decimals));
+  const stopLoss = direction === "HOLD" ? currentPrice : parseFloat((currentPrice * slMult).toFixed(decimals));
+
+  const models = Array.isArray(report.models) ? report.models : [];
+  const totalModels = models.length > 0 ? models.length : 8;
+
+  let modelsVoting = 0;
+  if (direction === "LONG") {
+    modelsVoting = models.filter((m: any) => (m.longProbability > 0.5) || (m.weight > 0 && m.confidence > 0.5)).length;
+  } else if (direction === "SHORT") {
+    modelsVoting = models.filter((m: any) => (m.shortProbability > 0.5) || (m.weight > 0 && m.confidence > 0.5)).length;
+  } else {
+    modelsVoting = models.filter((m: any) => Math.abs((m.longProbability || 0.5) - 0.5) < 0.15).length;
+  }
+  if (modelsVoting === 0) modelsVoting = Math.max(1, Math.round(totalModels * (confidence / 100)));
+
+  const reasons: string[] = [];
+  models
+    .filter((m: any) => m.notes && (m.weight > 0.04 || m.confidence > 0.6))
+    .slice(0, 3)
+    .forEach((m: any) => {
+      reasons.push(`${m.modelName.replace(/-/g, " ").toUpperCase()}: ${m.notes}`);
+    });
+
+  if (typeof report.marketPulse?.orderBookImbalance === "number") {
+    const obPct = (report.marketPulse.orderBookImbalance * 100).toFixed(1);
+    reasons.push(`Order Book Depth Imbalance: ${Number(obPct) > 0 ? "+" : ""}${obPct}%`);
+  }
+  if (typeof report.marketPulse?.fundingRate === "number") {
+    reasons.push(`Funding Rate: ${(report.marketPulse.fundingRate * 100).toFixed(4)}% | Microstructure: ${report.regime || "Active"}`);
+  }
+  if (reasons.length === 0) {
+    reasons.push(`Consensus: ${direction} signal with ${confidence}% aggregate confidence`);
+    reasons.push(`Market Regime: ${report.regime || "Standard Volatility"}`);
+  }
+
+  const isSpot = accountType === "SPOT";
+  const estimatedLeverage = isSpot ? 1 : 5;
+  const allocatedMargin = isSpot ? 1000 : 2500;
+
+  return {
+    symbol,
+    exchange: isSpot ? "BINANCE SPOT" : "BINANCE FUTURES",
+    domain: "CRYPTO",
+    direction,
+    confidence,
+    entryPrice: currentPrice,
+    targetTp,
+    stopLoss,
+    estimatedLeverage,
+    allocatedMargin,
+    modelsVoting,
+    totalModels,
+    countdownSec: COUNTDOWN_TOTAL,
+    regime: report.regime || "Low Volatility",
+    reasons,
+  };
+}
+
+async function fetchRealIndianPrediction(
+  symbol: string,
+  cachedStocks?: any[],
+): Promise<{ prediction: UpcomingTradePrediction; stocks: any[] }> {
+  let stocks = cachedStocks;
+  if (!stocks || stocks.length === 0) {
+    const res = await fetch("/api/indian-market/scan?userId=guest-user");
+    const json = await res.json();
+    if (json?.success && Array.isArray(json.stocks)) {
+      stocks = json.stocks;
+    }
+  }
+
+  const stock = stocks?.find((s: any) => s.symbol === symbol) || stocks?.[0];
+  if (!stock) {
+    throw new Error(`Symbol ${symbol} not found in Indian market scan`);
+  }
+
+  const direction: "LONG" | "SHORT" | "HOLD" =
+    stock.aiSignal === "LONG" ? "LONG" : stock.aiSignal === "SHORT" ? "SHORT" : "HOLD";
+  const confidence = stock.aiConfidence || 75;
+  const price = stock.price || 0;
+
+  const tpMult = direction === "SHORT" ? 0.98 : 1.025;
+  const slMult = direction === "SHORT" ? 1.015 : 0.985;
+  const targetTp = direction === "HOLD" ? price : parseFloat((price * tpMult).toFixed(2));
+  const stopLoss = direction === "HOLD" ? price : parseFloat((price * slMult).toFixed(2));
+
+  const reasons = Array.isArray(stock.reasons) && stock.reasons.length > 0
+    ? stock.reasons
+    : [`AI Scan Strategy: ${stock.strategy || "MOMENTUM_BREAKOUT"}`, `Market Regime: ${stock.regime || "NORMAL"}`];
+
+  const prediction: UpcomingTradePrediction = {
+    symbol: stock.symbol,
+    exchange: `${stock.exchange || "NSE"} (${stock.category || "EQUITY"})`,
+    domain: "INDIAN",
+    direction,
+    confidence,
+    entryPrice: price,
+    targetTp,
+    stopLoss,
+    estimatedLeverage: 1,
+    allocatedMargin: stock.lotSize ? stock.lotSize * price : 25000,
+    modelsVoting: 4,
+    totalModels: 4,
+    countdownSec: COUNTDOWN_TOTAL,
+    regime: stock.regime || "RANGING",
+    reasons,
+  };
+
+  return { prediction, stocks: stocks || [] };
 }
 
 function formatPrice(price: number): string {
@@ -158,7 +294,21 @@ function getRR(p: UpcomingTradePrediction): string | null {
 const dirColor = (d: string) => d === "LONG" ? "#10b981" : d === "SHORT" ? "#ef4444" : "#f59e0b";
 const modeColor = (m: string) => m === "LIVE" ? "#ef4444" : "#10b981";
 const regimeLabel = (r: string) =>
-  ({ BULLISH_MOMENTUM: "🟢 Bullish Momentum", BEARISH_DIVERGENCE: "🔴 Bearish Divergence", NEUTRAL_RANGE: "🟡 Neutral Range" }[r] ?? r);
+  ({
+    BULLISH_MOMENTUM: "🟢 Bullish Momentum",
+    BEARISH_DIVERGENCE: "🔴 Bearish Divergence",
+    NEUTRAL_RANGE: "🟡 Neutral Range",
+    "Low Volatility": "⚪ Low Volatility",
+    "High Volatility": "⚡ High Volatility",
+    "Strong Bull": "🟢 Strong Bull",
+    "Strong Bear": "🔴 Strong Bear",
+    "Consolidation": "🟡 Consolidation",
+    "Bullish Expansion": "🟢 Bullish Expansion",
+    "Bearish Expansion": "🔴 Bearish Expansion",
+    RANGING: "🟡 Ranging Market",
+    TRENDING_UP: "🟢 Trending Up",
+    TRENDING_DOWN: "🔴 Trending Down",
+  }[r] ?? (r.startsWith("Evaluating") ? "⏳ Evaluating..." : r));
 
 /* ─── Micro design tokens ────────────────────────────────────────────── */
 
@@ -232,10 +382,19 @@ export default function AIFooterTradeBar() {
   const mode = useAppStore((s) => s.mode) as "PAPER" | "LIVE";
   const setSymbol = useAppStore((s) => s.setSymbol);
   const selectedSymbol = useAppStore((s) => s.selectedSymbol);
+  const allowedSymbols = useAppStore((s) => s.allowedSymbols);
 
   const isIndianRoute = activeMarket === "INDIA"
     || location.pathname.startsWith("/indian-market")
     || location.pathname.startsWith("/india");
+
+  /* Dynamic Candidate Symbols across market universe */
+  const [indianSymbols, setIndianSymbols] = useState<string[]>(DEFAULT_INDIAN_SYMBOLS);
+  const indianStocksRef = useRef<any[]>([]);
+
+  const candidateSymbols = isIndianRoute
+    ? indianSymbols
+    : Array.from(new Set([...(allowedSymbols?.length ? allowedSymbols : []), ...DEFAULT_CRYPTO_SYMBOLS]));
 
   /* BOTH-mode blink */
   const [blinkPhase, setBlinkPhase] = useState<"SPOT" | "FUTURES">("SPOT");
@@ -246,17 +405,36 @@ export default function AIFooterTradeBar() {
     return () => { clearInterval(t); clearTimeout(dip); };
   }, [accountType]);
 
-  /* Active Symbol & Pool Rotation */
-  const currentPool = isIndianRoute ? INDIAN_POOL : CRYPTO_POOL;
-  const [activeSymbol, setActiveSymbol] = useState<string>(() => selectedSymbol || currentPool[0].symbol);
+  /* Active Symbol & Dynamic Rotation */
+  const [activeSymbol, setActiveSymbol] = useState<string>(() => {
+    if (selectedSymbol && (isIndianRoute ? DEFAULT_INDIAN_SYMBOLS.includes(selectedSymbol) : true)) {
+      return selectedSymbol;
+    }
+    return isIndianRoute ? DEFAULT_INDIAN_SYMBOLS[0] : (allowedSymbols?.[0] || DEFAULT_CRYPTO_SYMBOLS[0]);
+  });
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
+  const [isLoadingPrediction, setIsLoadingPrediction] = useState<boolean>(false);
+  const predictionCache = useRef<Map<string, { pred: UpcomingTradePrediction; time: number }>>(new Map());
+
+  // Adjust activeSymbol if market domain changes (Crypto <-> Indian)
+  useEffect(() => {
+    if (isIndianRoute) {
+      if (!indianSymbols.includes(activeSymbol)) {
+        setActiveSymbol(indianSymbols[0] || "RELIANCE");
+      }
+    } else {
+      if (!candidateSymbols.includes(activeSymbol)) {
+        setActiveSymbol(candidateSymbols[0] || "BTCUSDT");
+      }
+    }
+  }, [isIndianRoute]); // eslint-disable-line
 
   // Sync when user explicitly changes selectedSymbol elsewhere in the app
   useEffect(() => {
-    if (selectedSymbol) {
+    if (selectedSymbol && candidateSymbols.includes(selectedSymbol)) {
       setActiveSymbol(selectedSymbol);
     }
-  }, [selectedSymbol]);
+  }, [selectedSymbol, candidateSymbols]);
 
   /* Live price */
   const [fetchedPrice, setFetchedPrice] = useState<number | null>(null);
@@ -279,10 +457,9 @@ export default function AIFooterTradeBar() {
   }, [headerData, activeSymbol, fetchedPrice]);
 
   /* Prediction */
-  const [prediction, setPrediction] = useState<UpcomingTradePrediction>(() => {
-    const item = resolvePoolItem(activeSymbol, isIndianRoute, accountType);
-    return generatePrediction(item, isIndianRoute, getLivePrice(item.symbol));
-  });
+  const [prediction, setPrediction] = useState<UpcomingTradePrediction>(() =>
+    createInitialPrediction(activeSymbol, isIndianRoute, accountType, getLivePrice(activeSymbol))
+  );
 
   const applyPrediction = useCallback((p: UpcomingTradePrediction) => {
     setPrediction(p);
@@ -292,11 +469,47 @@ export default function AIFooterTradeBar() {
     setExecSuccess(false);
   }, []);
 
-  // Dynamically update prediction when live ticker price arrives
+  const loadPrediction = useCallback(async (sym: string, forceRefresh = false) => {
+    const now = Date.now();
+    const cached = predictionCache.current.get(sym);
+    if (!forceRefresh && cached && now - cached.time < 20000) {
+      applyPrediction(cached.pred);
+      return;
+    }
+
+    setIsLoadingPrediction(true);
+    try {
+      const liveP = getLivePrice(sym);
+      if (isIndianRoute) {
+        const { prediction: indianPred, stocks } = await fetchRealIndianPrediction(sym, indianStocksRef.current);
+        if (stocks.length > 0) {
+          indianStocksRef.current = stocks;
+          setIndianSymbols(stocks.map((s: any) => s.symbol));
+        }
+        predictionCache.current.set(sym, { pred: indianPred, time: now });
+        applyPrediction(indianPred);
+      } else {
+        const cryptoPred = await fetchRealCryptoPrediction(sym, accountType, liveP);
+        predictionCache.current.set(sym, { pred: cryptoPred, time: now });
+        applyPrediction(cryptoPred);
+      }
+    } catch (err: any) {
+      console.warn("[AIFooterTradeBar] Real AI prediction load warning:", err?.message);
+    } finally {
+      setIsLoadingPrediction(false);
+    }
+  }, [isIndianRoute, accountType, getLivePrice, applyPrediction]);
+
+  // Initial and on-change fetch
+  useEffect(() => {
+    loadPrediction(activeSymbol);
+  }, [activeSymbol, loadPrediction]);
+
+  // Dynamically update prediction entry/TP/SL when live ticker price arrives
   useEffect(() => {
     if (fetchedPrice && fetchedPrice > 0) {
       setPrediction((prev) => {
-        if (prev.symbol !== activeSymbol) return prev;
+        if (!prev || prev.symbol !== activeSymbol) return prev;
         const tpMult = prev.direction === "SHORT" ? 0.978 : 1.022;
         const slMult = prev.direction === "SHORT" ? 1.012 : 0.988;
         return {
@@ -310,25 +523,18 @@ export default function AIFooterTradeBar() {
   }, [fetchedPrice, activeSymbol]);
 
   const rotateToNext = useCallback(() => {
-    const symbols = currentPool.map((p) => p.symbol);
-    const idx = symbols.indexOf(activeSymbol);
-    const nextSym = idx >= 0 ? symbols[(idx + 1) % symbols.length] : symbols[0];
+    const idx = candidateSymbols.indexOf(activeSymbol);
+    const nextSym = idx >= 0 ? candidateSymbols[(idx + 1) % candidateSymbols.length] : candidateSymbols[0];
     setActiveSymbol(nextSym);
     setCountdown(COUNTDOWN_TOTAL);
-  }, [currentPool, activeSymbol]);
+  }, [candidateSymbols, activeSymbol]);
 
   const rotateToPrev = useCallback(() => {
-    const symbols = currentPool.map((p) => p.symbol);
-    const idx = symbols.indexOf(activeSymbol);
-    const prevSym = idx > 0 ? symbols[idx - 1] : symbols[symbols.length - 1];
+    const idx = candidateSymbols.indexOf(activeSymbol);
+    const prevSym = idx > 0 ? candidateSymbols[idx - 1] : candidateSymbols[candidateSymbols.length - 1];
     setActiveSymbol(prevSym);
     setCountdown(COUNTDOWN_TOTAL);
-  }, [currentPool, activeSymbol]);
-
-  useEffect(() => {
-    const item = resolvePoolItem(activeSymbol, isIndianRoute, accountType);
-    applyPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
-  }, [activeSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction]);
+  }, [candidateSymbols, activeSymbol]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -337,8 +543,7 @@ export default function AIFooterTradeBar() {
           if (autoRotate && !isExpanded) {
             rotateToNext();
           } else {
-            const item = resolvePoolItem(activeSymbol, isIndianRoute, accountType);
-            applyPrediction(generatePrediction(item, isIndianRoute, getLivePrice(item.symbol)));
+            loadPrediction(activeSymbol, true);
           }
           return COUNTDOWN_TOTAL;
         }
@@ -346,7 +551,7 @@ export default function AIFooterTradeBar() {
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [activeSymbol, isIndianRoute, accountType, getLivePrice, applyPrediction, autoRotate, isExpanded, rotateToNext]);
+  }, [autoRotate, isExpanded, rotateToNext, activeSymbol, loadPrediction]);
 
   useEffect(() => { setCustomMargin(String(prediction.allocatedMargin)); setCustomLeverage(String(prediction.estimatedLeverage)); }, []); // eslint-disable-line
 
@@ -558,12 +763,12 @@ export default function AIFooterTradeBar() {
                         margin: 0,
                       }}
                     >
-                      {currentPool.map((p) => (
-                        <option key={p.symbol} value={p.symbol} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
-                          {p.symbol}
+                      {candidateSymbols.map((sym) => (
+                        <option key={sym} value={sym} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
+                          {sym}
                         </option>
                       ))}
-                      {!currentPool.some(p => p.symbol === activeSymbol) && (
+                      {!candidateSymbols.includes(activeSymbol) && (
                         <option value={activeSymbol} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
                           {activeSymbol}
                         </option>
@@ -593,10 +798,16 @@ export default function AIFooterTradeBar() {
 
                   {/* Direction pill */}
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: `${dc}14`, color: dc, border: `1px solid ${dc}38` }}>
-                    {prediction.direction === "LONG" ? <TrendingUp size={φ.ic.sm - 2} /> :
-                      prediction.direction === "SHORT" ? <TrendingDown size={φ.ic.sm - 2} /> :
-                        <Minus size={φ.ic.sm - 2} />}
-                    {prediction.direction}
+                    {isLoadingPrediction ? (
+                      <RotateCw size={φ.ic.sm - 2} className="animate-spin" />
+                    ) : prediction.direction === "LONG" ? (
+                      <TrendingUp size={φ.ic.sm - 2} />
+                    ) : prediction.direction === "SHORT" ? (
+                      <TrendingDown size={φ.ic.sm - 2} />
+                    ) : (
+                      <Minus size={φ.ic.sm - 2} />
+                    )}
+                    {isLoadingPrediction ? "EVALUATING" : prediction.direction}
                   </span>
                   {/* Confidence — 13px secondary (φ.fs.sm) */}
                   <span style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }} className="hidden sm:inline">
