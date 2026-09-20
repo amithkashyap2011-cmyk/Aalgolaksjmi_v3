@@ -89,7 +89,8 @@ function BalanceTab({ mode }: { mode: string }) {
   const [indianInr, setIndianInr] = useState(0);
   const [txns, setTxns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [depositAmount, setDepositAmount] = useState("50000");
+  const [depositAmount, setDepositAmount] = useState("20000");
+  const [depositTarget, setDepositTarget] = useState<"BOTH" | "SPOT" | "FUTURES" | "INDIAN_NSE">("BOTH");
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [depositMsg, setDepositMsg] = useState<string | null>(null);
   const [activeAccountFilter, setActiveAccountFilter] = useState<"ALL" | "INDIAN" | "CRYPTO">("ALL");
@@ -135,14 +136,15 @@ function BalanceTab({ mode }: { mode: string }) {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ accountType: "FUTURES", amount: amtInr, mode, currency: "INR" }),
+        body: JSON.stringify({ accountType: depositTarget, amount: amtInr, mode, currency: "INR" }),
       });
+      const data = await res.json();
       if (res.ok) {
         setDepositMsg(`Successfully added +₹${amtInr.toLocaleString("en-IN")} INR!`);
         refresh();
         setTimeout(() => { setShowDepositModal(false); setDepositMsg(null); }, 1500);
       } else {
-        setDepositMsg("Failed to add funds.");
+        setDepositMsg(`Failed to add funds: ${data.error || "Unknown error"}`);
       }
     } catch (err: any) {
       setDepositMsg(`Error: ${err.message}`);
@@ -302,29 +304,97 @@ function BalanceTab({ mode }: { mode: string }) {
       {/* 💳 Add Money Modal */}
       {showDepositModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-          <div style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 16, padding: 24, maxWidth: 420, width: "90%", color: "#fff" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: "#10b981" }}>➕ Add Money (₹ INR)</h3>
+          <div style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 16, padding: 24, maxWidth: 440, width: "92%", color: "#fff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0, color: "#10b981", display: "flex", alignItems: "center", gap: 8 }}>
+                ➕ Add Money (₹ INR)
+              </h3>
               <button onClick={() => setShowDepositModal(false)} style={{ background: "none", border: "none", color: "#94a3b8", fontSize: 18, cursor: "pointer" }}>✕</button>
             </div>
-            <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>Inject virtual testing funds in Indian Rupees (₹ INR) into your main portfolio balance.</p>
+            <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>
+              Inject paper testing funds in Indian Rupees (₹ INR). Funds convert accurately to USDT for crypto wallets at the real-time rate.
+            </p>
 
+            {/* Destination Target Selector */}
             <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#cbd5e1", display: "block", marginBottom: 6 }}>Amount (₹ INR)</label>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#cbd5e1", display: "block", marginBottom: 6 }}>
+                Deposit Destination
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6 }}>
+                {[
+                  { id: "BOTH" as const, label: "⚡ Both (50% Spot / 50% Fut)", desc: "Split equally" },
+                  { id: "SPOT" as const, label: "🪙 Binance Spot", desc: "USDT wallet" },
+                  { id: "FUTURES" as const, label: "📈 Binance Futures", desc: "USD-M margin" },
+                  { id: "INDIAN_NSE" as const, label: "🇮🇳 Indian Market (NSE)", desc: "₹ INR native" },
+                ].map((t) => {
+                  const isSelected = depositTarget === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setDepositTarget(t.id)}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        background: isSelected ? "rgba(16,185,129,0.2)" : "rgba(30,41,59,0.7)",
+                        border: isSelected ? "1.5px solid #10b981" : "1px solid rgba(255,255,255,0.08)",
+                        color: isSelected ? "#34d399" : "#cbd5e1",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        textAlign: "left",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <div>{t.label}</div>
+                      <div style={{ fontSize: 9.5, color: isSelected ? "#86efac" : "#64748b", fontWeight: 500 }}>{t.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#cbd5e1", display: "block", marginBottom: 6 }}>
+                Amount to Deposit (₹ INR)
+              </label>
               <input
                 type="number"
                 value={depositAmount}
                 onChange={(e) => setDepositAmount(e.target.value)}
-                style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "#1e293b", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: 14, fontFamily: "monospace" }}
+                style={{ width: "100%", padding: "10px 14px", borderRadius: 8, background: "#1e293b", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: 15, fontFamily: "monospace", fontWeight: 700 }}
               />
             </div>
 
+            {/* Live Conversion Preview */}
+            <div style={{ background: "rgba(15,23,42,0.9)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "8px 12px", marginBottom: 16 }}>
+              {depositTarget === "INDIAN_NSE" ? (
+                <div style={{ fontSize: 11, color: "#38bdf8", fontWeight: 600 }}>
+                  Credit: <span style={{ color: "#fff", fontWeight: 800 }}>₹{Number(depositAmount || 0).toLocaleString("en-IN")} INR</span> into Indian NSE wallet
+                </div>
+              ) : depositTarget === "BOTH" ? (
+                <div>
+                  <div style={{ fontSize: 11, color: "#34d399", fontWeight: 700 }}>
+                    Total: ₹{Number(depositAmount || 0).toLocaleString("en-IN")} INR ≈ ${((Number(depositAmount || 0)) / rate).toFixed(2)} USDT <span style={{ fontSize: 9.5, color: "#64748b" }}>(@ ₹{rate.toFixed(2)}/USDT)</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                    ➔ Split: <b style={{ color: "#38bdf8" }}>${(((Number(depositAmount || 0)) / 2) / rate).toFixed(2)} USDT (₹{Math.round(Number(depositAmount || 0) / 2).toLocaleString("en-IN")})</b> into Spot and Futures each
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "#34d399", fontWeight: 700 }}>
+                  Credit: ₹{Number(depositAmount || 0).toLocaleString("en-IN")} INR ≈ <span style={{ color: "#fff", fontWeight: 800 }}>${((Number(depositAmount || 0)) / rate).toFixed(2)} USDT</span> <span style={{ fontSize: 9.5, color: "#64748b" }}>(@ ₹{rate.toFixed(2)}/USDT)</span> into {depositTarget}
+                </div>
+              )}
+            </div>
+
             <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-              {[10000, 50000, 100000, 500000].map((preset) => (
+              {[5000, 10000, 20000, 50000].map((preset) => (
                 <button
                   key={preset}
+                  type="button"
                   onClick={() => setDepositAmount(preset.toString())}
-                  style={{ flex: 1, padding: "6px", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#e2e8f0", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                  style={{ flex: 1, padding: "7px 4px", borderRadius: 6, background: depositAmount === preset.toString() ? "rgba(16,185,129,0.25)" : "rgba(255,255,255,0.05)", border: depositAmount === preset.toString() ? "1px solid #10b981" : "1px solid rgba(255,255,255,0.1)", color: depositAmount === preset.toString() ? "#34d399" : "#e2e8f0", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
                 >
                   +₹{(preset / 1000).toFixed(0)}k
                 </button>
@@ -333,12 +403,14 @@ function BalanceTab({ mode }: { mode: string }) {
 
             <div style={{ display: "flex", gap: 10 }}>
               <button
+                type="button"
                 onClick={() => setShowDepositModal(false)}
                 style={{ flex: 1, padding: "10px", borderRadius: 8, background: "#1e293b", color: "#cbd5e1", fontWeight: 800, fontSize: 12, border: "none", cursor: "pointer" }}
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={() => { const amt = Number(depositAmount); if (amt > 0) handleAddMoneyInr(amt); }}
                 style={{ flex: 1, padding: "10px", borderRadius: 8, background: "#10b981", color: "#000", fontWeight: 800, fontSize: 12, border: "none", cursor: "pointer" }}
               >

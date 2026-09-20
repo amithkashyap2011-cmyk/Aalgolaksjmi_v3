@@ -14,6 +14,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, jest, beforeEach } from "@jest/globals";
 import mongoose from "mongoose";
+import request from "supertest";
 
 // ── Mock heavy dependencies that the wallet module imports ──────────
 
@@ -21,6 +22,7 @@ import mongoose from "mongoose";
 jest.unstable_mockModule("../src/services/paperState.js", () => ({
   getWallet: jest.fn<(userId: string, mode: string, accountType: string) => Map<string, number>>(),
   getOpenPositions: jest.fn<(userId: string, mode: string) => any[]>(),
+  setWalletBalance: jest.fn(() => Promise.resolve()),
 }));
 
 // binanceService: live price lookups
@@ -85,6 +87,7 @@ jest.unstable_mockModule("../src/models/WalletTransaction.js", () => ({
     find: jest.fn(() => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve([]) }) }) })),
     findOne: jest.fn(() => Promise.resolve(null)),
     create: jest.fn(() => Promise.resolve({})),
+    insertMany: jest.fn(() => Promise.resolve([])),
     countDocuments: jest.fn(() => Promise.resolve(0)),
   },
 }));
@@ -797,5 +800,137 @@ describe("Wallet: bookedProfit calculation", () => {
       get: () => 0,
       configurable: true,
     });
+  });
+});
+
+describe("Wallet: /deposit/test-funds endpoint unit tests", () => {
+  let app: any;
+  let paperMock: any;
+  const testUserId = new mongoose.Types.ObjectId().toString();
+
+  beforeAll(async () => {
+    const express = (await import("express")).default;
+    const router = (await import("../src/routes/wallet.js")).default;
+    paperMock = await import("../src/services/paperState.js");
+
+    app = express();
+    app.use(express.json());
+    // Attach testUserId to req for authGuard
+    app.use((req: any, _res: any, next: any) => {
+      req.userId = testUserId;
+      next();
+    });
+    app.use("/wallet", router);
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("rejects non-positive deposit amount with 400", async () => {
+    const res = await request(app)
+      .post("/wallet/deposit/test-funds")
+      .send({ amount: 0, currency: "INR" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid deposit amount/i);
+  });
+
+  it("converts INR to USDT for SPOT deposit using exchange rate", async () => {
+    (paperMock.getWallet as jest.Mock).mockReturnValue(new Map([["USDT", 0]]));
+
+    const res = await request(app)
+      .post("/wallet/deposit/test-funds")
+      .send({ amount: 10000, accountType: "SPOT", currency: "INR" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.currency).toBe("INR");
+    // 10000 / 95.96 = 104.2101 USDT (never 10,000 USDT!)
+    expect(res.body.totalUsdt).toBeCloseTo(104.21, 1);
+    expect(paperMock.setWalletBalance).toHaveBeenCalledWith(
+      testUserId,
+      "PAPER",
+      "USDT",
+      expect.closeTo(104.21, 1),
+      "SPOT",
+      "PAPER_INITIALIZATION"
+    );
+  });
+
+  it("converts INR to USDT for FUTURES deposit using exchange rate", async () => {
+    (paperMock.getWallet as jest.Mock).mockReturnValue(new Map([["USDT", 50]]));
+
+    const res = await request(app)
+      .post("/wallet/deposit/test-funds")
+      .send({ amount: 10000, accountType: "FUTURES", currency: "INR" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.currency).toBe("INR");
+    // 10000 / 95.96 = 104.2101 USDT + 50 current = 154.21 USDT
+    expect(res.body.totalUsdt).toBeCloseTo(104.21, 1);
+    expect(res.body.newBalance).toBeCloseTo(154.21, 1);
+    expect(paperMock.setWalletBalance).toHaveBeenCalledWith(
+      testUserId,
+      "PAPER",
+      "USDT",
+      expect.closeTo(154.21, 1),
+      "FUTURES",
+      "PAPER_INITIALIZATION"
+    );
+  });
+
+  it("splits INR 50/50 between SPOT and FUTURES when accountType is BOTH", async () => {
+    (paperMock.getWallet as jest.Mock).mockReturnValue(new Map([["USDT", 0]]));
+
+    const res = await request(app)
+      .post("/wallet/deposit/test-funds")
+      .send({ amount: 20000, accountType: "BOTH", currency: "INR" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.accountType).toBe("BOTH");
+    // 20,000 INR total = ~208.42 USDT total -> ~104.21 USDT to SPOT and ~104.21 USDT to FUTURES
+    expect(res.body.totalUsdt).toBeCloseTo(208.42, 1);
+    expect(res.body.spotBalance).toBeCloseTo(104.21, 1);
+    expect(res.body.futuresBalance).toBeCloseTo(104.21, 1);
+    expect(paperMock.setWalletBalance).toHaveBeenCalledWith(
+      testUserId,
+      "PAPER",
+      "USDT",
+      expect.closeTo(104.21, 1),
+      "SPOT",
+      "PAPER_INITIALIZATION"
+    );
+    expect(paperMock.setWalletBalance).toHaveBeenCalledWith(
+      testUserId,
+      "PAPER",
+      "USDT",
+      expect.closeTo(104.21, 1),
+      "FUTURES",
+      "PAPER_INITIALIZATION"
+    );
+  });
+
+  it("deposits native INR without conversion when accountType is INDIAN_NSE", async () => {
+    (paperMock.getWallet as jest.Mock).mockReturnValue(new Map([["INR", 5000]]));
+
+    const res = await request(app)
+      .post("/wallet/deposit/test-funds")
+      .send({ amount: 10000, accountType: "INDIAN_NSE", currency: "INR" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.currency).toBe("INR");
+    expect(res.body.deposited).toBe(10000);
+    expect(res.body.newBalance).toBe(15000);
+    expect(paperMock.setWalletBalance).toHaveBeenCalledWith(
+      testUserId,
+      "PAPER",
+      "INR",
+      15000,
+      "INDIAN_NSE",
+      "PAPER_INITIALIZATION"
+    );
   });
 });

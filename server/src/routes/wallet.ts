@@ -287,25 +287,135 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
 /* ── Add Test Funds (Dummy Amount for Testing) ────────── */
 router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
   try {
-    const { amount, accountType = "INDIAN_NSE", mode = "PAPER", currency = "INR" } = req.body;
+    const { amount, accountType = "BOTH", mode = "PAPER", currency = "INR" } = req.body;
     const depositAmount = Number(amount);
     if (isNaN(depositAmount) || depositAmount <= 0) {
       return res.status(400).json({ error: "Invalid deposit amount. Must be greater than 0." });
     }
     const userId = req.userId!;
+    const rate = getUsdtInrRate();
 
-    const isIndian = accountType.startsWith("INDIAN_");
-    const currKey = isIndian ? "INR" : "USDT";
-    const wallet = paper.getWallet(userId, mode, accountType);
-    const currentBal = wallet.get(currKey) ?? 0;
-    const newBal = currentBal + depositAmount;
+    const isIndian = typeof accountType === "string" && accountType.startsWith("INDIAN_");
 
-    await paper.setWalletBalance(userId, mode, currKey, newBal, accountType, "PAPER_INITIALIZATION");
     if (isIndian) {
+      // Indian Market account: native INR
+      const wallet = paper.getWallet(userId, mode, accountType);
+      const currentBal = wallet.get("INR") ?? 0;
+      const inrToAdd = currency === "USDT" ? +(depositAmount * rate).toFixed(2) : depositAmount;
+      const newBal = currentBal + inrToAdd;
+
+      await paper.setWalletBalance(userId, mode, "INR", newBal, accountType, "PAPER_INITIALIZATION");
       await paper.setWalletBalance(userId, mode, "USDT", 0, accountType);
-    } else {
-      await paper.setWalletBalance(userId, mode, "INR", 0, accountType);
+      clearDashboardCache();
+      invalidateWalletAggregatesCache();
+
+      if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
+        try {
+          await WalletTransaction.create({
+            userId: new mongoose.Types.ObjectId(userId),
+            type: "DEPOSIT",
+            method: "DEBUG",
+            capitalSource: "PAPER_INITIALIZATION",
+            amount: inrToAdd,
+            currency: "INR",
+            status: "COMPLETED",
+            txnRef: `TEST${Date.now()}`,
+            note: `Dummy Test Funds Deposit: +₹${inrToAdd.toLocaleString("en-IN")} INR`,
+            accountType,
+          });
+        } catch (dbErr: any) {
+          console.warn("[wallet] Failed to log test funds transaction:", dbErr.message);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        accountType,
+        mode,
+        deposited: inrToAdd,
+        newBalance: newBal,
+        currency: "INR",
+      });
     }
+
+    // Crypto Domain (SPOT, FUTURES, or BOTH)
+    // If currency is INR, convert to USDT using the current exchange rate
+    const totalUsdt = currency === "INR" ? +(depositAmount / rate).toFixed(4) : depositAmount;
+
+    if (accountType === "BOTH") {
+      const halfUsdt = +(totalUsdt / 2).toFixed(4);
+      const halfInr = +(depositAmount / 2).toFixed(2);
+
+      const spotWallet = paper.getWallet(userId, mode, "SPOT");
+      const currentSpot = spotWallet.get("USDT") ?? 0;
+      const newSpotBal = currentSpot + halfUsdt;
+      await paper.setWalletBalance(userId, mode, "USDT", newSpotBal, "SPOT", "PAPER_INITIALIZATION");
+      await paper.setWalletBalance(userId, mode, "INR", 0, "SPOT");
+
+      const futWallet = paper.getWallet(userId, mode, "FUTURES");
+      const currentFut = futWallet.get("USDT") ?? 0;
+      const newFutBal = currentFut + halfUsdt;
+      await paper.setWalletBalance(userId, mode, "USDT", newFutBal, "FUTURES", "PAPER_INITIALIZATION");
+      await paper.setWalletBalance(userId, mode, "INR", 0, "FUTURES");
+
+      clearDashboardCache();
+      invalidateWalletAggregatesCache();
+
+      if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
+        const userObjId = new mongoose.Types.ObjectId(userId);
+        const now = Date.now();
+        await WalletTransaction.insertMany([
+          {
+            userId: userObjId,
+            type: "DEPOSIT",
+            method: "DEBUG",
+            capitalSource: "PAPER_INITIALIZATION",
+            amount: halfUsdt,
+            currency: "USDT",
+            status: "COMPLETED",
+            txnRef: `TEST_SPOT_${now}`,
+            note: currency === "INR"
+              ? `Paper Deposit: +${halfUsdt} USDT (converted from ₹${halfInr} INR @ ₹${rate.toFixed(2)}/USDT)`
+              : `Paper Deposit: +${halfUsdt} USDT`,
+            accountType: "SPOT",
+          },
+          {
+            userId: userObjId,
+            type: "DEPOSIT",
+            method: "DEBUG",
+            capitalSource: "PAPER_INITIALIZATION",
+            amount: halfUsdt,
+            currency: "USDT",
+            status: "COMPLETED",
+            txnRef: `TEST_FUT_${now}`,
+            note: currency === "INR"
+              ? `Paper Deposit: +${halfUsdt} USDT (converted from ₹${halfInr} INR @ ₹${rate.toFixed(2)}/USDT)`
+              : `Paper Deposit: +${halfUsdt} USDT`,
+            accountType: "FUTURES",
+          }
+        ]).catch((err: any) => console.warn("[wallet] Failed to log test funds transactions:", err.message));
+      }
+
+      return res.json({
+        ok: true,
+        accountType: "BOTH",
+        mode,
+        deposited: depositAmount,
+        currency,
+        totalUsdt,
+        spotBalance: newSpotBal,
+        futuresBalance: newFutBal,
+      });
+    }
+
+    // Single crypto account: SPOT or FUTURES
+    const targetAcct = accountType === "SPOT" ? "SPOT" : "FUTURES";
+    const wallet = paper.getWallet(userId, mode, targetAcct);
+    const currentBal = wallet.get("USDT") ?? 0;
+    const newBal = currentBal + totalUsdt;
+
+    await paper.setWalletBalance(userId, mode, "USDT", newBal, targetAcct, "PAPER_INITIALIZATION");
+    await paper.setWalletBalance(userId, mode, "INR", 0, targetAcct);
     clearDashboardCache();
     invalidateWalletAggregatesCache();
 
@@ -316,12 +426,14 @@ router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
           type: "DEPOSIT",
           method: "DEBUG",
           capitalSource: "PAPER_INITIALIZATION",
-          amount: depositAmount,
-          currency: currKey,
+          amount: totalUsdt,
+          currency: "USDT",
           status: "COMPLETED",
-          txnRef: `TEST${Date.now()}`,
-          note: `Dummy Test Funds Deposit: +${depositAmount} ${currKey}`,
-          accountType,
+          txnRef: `TEST_${Date.now()}`,
+          note: currency === "INR"
+            ? `Paper Deposit: +${totalUsdt} USDT (converted from ₹${depositAmount} INR @ ₹${rate.toFixed(2)}/USDT)`
+            : `Paper Deposit: +${totalUsdt} USDT`,
+          accountType: targetAcct,
         });
       } catch (dbErr: any) {
         console.warn("[wallet] Failed to log test funds transaction:", dbErr.message);
@@ -330,11 +442,12 @@ router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
 
     res.json({
       ok: true,
-      accountType,
+      accountType: targetAcct,
       mode,
       deposited: depositAmount,
+      currency,
+      totalUsdt,
       newBalance: newBal,
-      currency: currKey,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
