@@ -263,6 +263,7 @@ export default function IndianMarketPage() {
   });
 
   // Data Stores
+  const [marketSession, setMarketSession] = useState<any>(null);
   const [scanStocks, setScanStocks] = useState<any[]>([]);
   const [optionChain, setOptionChain] = useState<any | null>(null);
   const [strategies, setStrategies] = useState<StrategyItem[]>([]);
@@ -307,7 +308,10 @@ export default function IndianMarketPage() {
 
         // 1. Scan & Market Overview
         safeFetch("/api/indian-market/scan?userId=guest-user").then((json) => {
-          if (json?.success) setScanStocks(json.stocks || []);
+          if (json?.success) {
+            setScanStocks(json.stocks || []);
+            if (json.session) setMarketSession(json.session);
+          }
         }),
 
         // 2. Option Chain for Selected Underlying
@@ -569,7 +573,22 @@ export default function IndianMarketPage() {
                 <IstClock />
               </span>
               <span>•</span>
-              <span style={{ color: "#10b981", fontWeight: 600 }}>Regular Market (09:15 - 15:30 IST)</span>
+              <span style={{
+                color: marketSession ? (marketSession.isOpen ? "#10b981" : "#f59e0b") : "#10b981",
+                fontWeight: 700,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+              }}>
+                <span style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: marketSession ? (marketSession.isOpen ? "#10b981" : "#f59e0b") : "#10b981",
+                  display: "inline-block",
+                }} />
+                {marketSession ? (marketSession.isOpen ? "Regular Market (09:15 - 15:30 IST)" : marketSession.reason) : "Regular Market (09:15 - 15:30 IST)"}
+              </span>
               <span>•</span>
               <span style={{ color: "#e2e8f0" }}>NFO / BFO Supported</span>
             </div>

@@ -48,20 +48,24 @@ router.get("/scan", async (req, res) => {
     const userId = (req.query.userId as string) || "guest-user";
     const session = IndianMarketService.getMarketSession();
 
-    const now = Date.now();
-    SUPPORTED_INDIAN_SYMBOLS.forEach((sym, idx) => {
-      const item = MOCK_LIVE_INDIAN_TIKERS[sym];
-      if (item) {
-        const wave = Math.sin(now / 15000 + idx * 1.3);
-        const deltaPct = wave * 0.0012;
-        const newLtp = Number((item.ltp * (1 + deltaPct)).toFixed(2));
-        item.ltp = newLtp;
-        if (newLtp > item.high) item.high = newLtp;
-        if (newLtp < item.low) item.low = newLtp;
-        item.rsi14 = Number(Math.max(35, Math.min(75, 52 + Math.sin(now / 20000 + idx) * 18)).toFixed(1));
-        item.adx14 = Number(Math.max(15, Math.min(50, 28 + Math.cos(now / 25000 + idx) * 12)).toFixed(1));
-      }
-    });
+    // Only simulate live micro-ticks when the market is strictly OPEN.
+    // On weekends, holidays, and off-hours, prices remain strictly frozen at the last close.
+    if (session.isOpen) {
+      const now = Date.now();
+      SUPPORTED_INDIAN_SYMBOLS.forEach((sym, idx) => {
+        const item = MOCK_LIVE_INDIAN_TIKERS[sym];
+        if (item) {
+          const wave = Math.sin(now / 15000 + idx * 1.3);
+          const deltaPct = wave * 0.0012;
+          const newLtp = Number((item.ltp * (1 + deltaPct)).toFixed(2));
+          item.ltp = newLtp;
+          if (newLtp > item.high) item.high = newLtp;
+          if (newLtp < item.low) item.low = newLtp;
+          item.rsi14 = Number(Math.max(35, Math.min(75, 52 + Math.sin(now / 20000 + idx) * 18)).toFixed(1));
+          item.adx14 = Number(Math.max(15, Math.min(50, 28 + Math.cos(now / 25000 + idx) * 12)).toFixed(1));
+        }
+      });
+    }
 
     const results = await Promise.all(
       SUPPORTED_INDIAN_SYMBOLS.map(async (symbol) => {
