@@ -1172,6 +1172,23 @@ interface PendingSubscription {
 
 const subscriptionQueue: PendingSubscription[] = [];
 let isProcessingQueue = false;
+const lastSendTimes = new Map<string, number>();
+
+async function safeSendControlMessage(type: string, ws: WebSocket, msg: object): Promise<void> {
+  const now = Date.now();
+  const last = lastSendTimes.get(type) || 0;
+  const elapsed = now - last;
+  const MIN_MSG_INTERVAL_MS = 250; // Max 4 control msgs/sec (Binance cap is 5)
+
+  if (elapsed < MIN_MSG_INTERVAL_MS) {
+    await new Promise(res => setTimeout(res, MIN_MSG_INTERVAL_MS - elapsed));
+  }
+
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(msg));
+    lastSendTimes.set(type, Date.now());
+  }
+}
 
 async function processSubscriptionQueue() {
   if (isProcessingQueue || subscriptionQueue.length === 0) return;
@@ -1179,34 +1196,59 @@ async function processSubscriptionQueue() {
 
   try {
     while (subscriptionQueue.length > 0) {
-      const batch = subscriptionQueue.splice(0, 5); // Max 5 per batch
+      const batch = subscriptionQueue.splice(0, 20); // Process up to 20 at a time
       
+      // Group by socket type
+      const byType = new Map<"spot" | "futures", { symbols: string[]; io: IOServer }>();
       for (const sub of batch) {
         const type = sub.isFutures ? "futures" : "spot";
+        if (!byType.has(type)) {
+          byType.set(type, { symbols: [], io: sub.io });
+        }
+        byType.get(type)!.symbols.push(sub.symbol);
+      }
+
+      for (const [type, { symbols, io }] of byType.entries()) {
+        const isFutures = type === "futures";
         const existing = combinedSockets.get(type);
 
         if (!existing) {
-          const cs = createCombinedSocket([sub.symbol], sub.io, sub.isFutures);
+          // Creating combined socket includes all initial streams in the URL query string (0 WS messages needed)
+          const cs = createCombinedSocket(symbols, io, isFutures);
           combinedSockets.set(type, cs);
         } else {
-          existing.symbols.add(sub.symbol.toUpperCase());
-          const binSym = toBinanceSymbol(sub.symbol, false);
-          const newStreams = getStreamsForSymbol(binSym);
-          const subId = nextSubId++;
+          // Socket exists: collect only truly new symbols
+          const newSymbols: string[] = [];
+          for (const sym of symbols) {
+            const upSym = sym.toUpperCase();
+            if (!existing.symbols.has(upSym)) {
+              existing.symbols.add(upSym);
+              newSymbols.push(sym);
+            }
+          }
 
-          if (existing.ws.readyState === WebSocket.OPEN) {
-            existing.ws.send(JSON.stringify({
-              method: "SUBSCRIBE",
-              params: newStreams,
-              id: subId,
-            }));
-            console.log(`[binance-ws] Batched subscription for ${sub.symbol} on ${type}`);
+          if (newSymbols.length > 0) {
+            // Aggregate all streams for ALL new symbols into ONE single SUBSCRIBE payload
+            const allStreams = newSymbols.flatMap(sym => {
+              const binSym = toBinanceSymbol(sym, false);
+              return getStreamsForSymbol(binSym);
+            });
+
+            if (allStreams.length > 0 && existing.ws.readyState === WebSocket.OPEN) {
+              const subId = nextSubId++;
+              await safeSendControlMessage(type, existing.ws, {
+                method: "SUBSCRIBE",
+                params: allStreams,
+                id: subId,
+              });
+              console.log(`[binance-ws] Batched 1 SUBSCRIBE frame for ${newSymbols.length} symbols (${allStreams.length} streams) on ${type}`);
+            }
           }
         }
       }
       
       if (subscriptionQueue.length > 0) {
-        await new Promise(resolve => setTimeout(resolve, 250)); // 250ms delay between batches
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
   } finally {
@@ -1633,45 +1675,82 @@ export function subscribeTicker(symbol: string, io: IOServer, isFutures: boolean
   processSubscriptionQueue().catch(err => console.error("[binance-ws] Queue processing error:", err));
 }
 
+interface PendingUnsubscription {
+  symbol: string;
+  isFutures: boolean;
+}
+
+const unsubscriptionQueue: PendingUnsubscription[] = [];
+let isProcessingUnsubQueue = false;
+let unsubDebounceTimer: NodeJS.Timeout | null = null;
+
+async function processUnsubscriptionQueue() {
+  if (isProcessingUnsubQueue || unsubscriptionQueue.length === 0) return;
+  isProcessingUnsubQueue = true;
+
+  try {
+    const batch = unsubscriptionQueue.splice(0, unsubscriptionQueue.length);
+    const byType = new Map<"spot" | "futures", string[]>();
+
+    for (const item of batch) {
+      const type = item.isFutures ? "futures" : "spot";
+      if (!byType.has(type)) byType.set(type, []);
+      byType.get(type)!.push(item.symbol);
+    }
+
+    for (const [type, symbols] of byType.entries()) {
+      const cs = combinedSockets.get(type);
+      if (!cs) continue;
+
+      const streamsToUnsub: string[] = [];
+      for (const sym of symbols) {
+        cs.symbols.delete(sym.toUpperCase());
+        const binSym = toBinanceSymbol(sym, false);
+        streamsToUnsub.push(...getStreamsForSymbol(binSym));
+      }
+
+      if (streamsToUnsub.length > 0 && cs.ws.readyState === WebSocket.OPEN) {
+        const subId = nextSubId++;
+        await safeSendControlMessage(type, cs.ws, {
+          method: "UNSUBSCRIBE",
+          params: streamsToUnsub,
+          id: subId,
+        });
+        console.log(`[binance-ws] Batched 1 UNSUBSCRIBE frame for ${symbols.length} symbols (${streamsToUnsub.length} streams) on ${type}`);
+      }
+
+      // If no symbols left, close the combined socket
+      if (cs.symbols.size === 0) {
+        intentionalClose.add(type);
+        cs.ws.close();
+        combinedSockets.delete(type);
+        lastTickTimes.delete(type);
+        console.log(`[binance-ws] Combined ${type} socket closed (no symbols remaining)`);
+      }
+    }
+
+    if (combinedSockets.size === 0 && watchdogInterval) {
+      clearInterval(watchdogInterval);
+      watchdogInterval = null;
+      console.log("[binance-ws] All WebSocket sockets disconnected. Watchdog interval cleared.");
+    }
+  } finally {
+    isProcessingUnsubQueue = false;
+  }
+}
+
 export function unsubscribeTicker(symbol: string, isFutures: boolean = false): void {
   const type = isFutures ? "futures" : "spot";
   const symKey = `${symbol.toUpperCase()}-${type}`;
   subscribedSymbolKeys.delete(symKey);
 
-  const cs = combinedSockets.get(type);
-  if (cs) {
-    cs.symbols.delete(symbol.toUpperCase());
-    
-    // Send UNSUBSCRIBE to the combined WS
-    // ALWAYS use spot symbol format for WS connection
-    const binSym = toBinanceSymbol(symbol, false);
-    const streams = getStreamsForSymbol(binSym);
-    const subId = nextSubId++;
-    
-    if (cs.ws.readyState === WebSocket.OPEN) {
-      cs.ws.send(JSON.stringify({
-        method: "UNSUBSCRIBE",
-        params: streams,
-        id: subId,
-      }));
-      console.log(`[binance-ws] Unsubscribed ${symbol} from combined ${type} stream`);
-    }
+  unsubscriptionQueue.push({ symbol, isFutures });
 
-    // If no symbols left, close the combined socket
-    if (cs.symbols.size === 0) {
-      intentionalClose.add(type);
-      cs.ws.close();
-      combinedSockets.delete(type);
-      lastTickTimes.delete(type);
-      console.log(`[binance-ws] Combined ${type} socket closed (no symbols remaining)`);
-    }
-  }
-
-  if (combinedSockets.size === 0 && watchdogInterval) {
-    clearInterval(watchdogInterval);
-    watchdogInterval = null;
-    console.log("[binance-ws] All WebSocket sockets disconnected. Watchdog interval cleared.");
-  }
+  if (unsubDebounceTimer) clearTimeout(unsubDebounceTimer);
+  unsubDebounceTimer = setTimeout(() => {
+    unsubDebounceTimer = null;
+    processUnsubscriptionQueue().catch(err => console.error("[binance-ws] Unsub queue error:", err));
+  }, 100);
 }
 
 

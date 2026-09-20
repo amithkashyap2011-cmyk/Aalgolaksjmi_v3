@@ -47,6 +47,7 @@ export interface ReconciliationSummary {
 // more than once per this window, even if reconciliation runs every few
 // minutes and the same real mismatch is still present.
 const ALERT_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
+const lastReconcileErrorLog = new Map<string, number>();
 
 async function alertOnce(userId: string, severity: "RED" | "AMBER", symbol: string, title: string, message: string) {
   const recent = await Alert.findOne({
@@ -82,8 +83,14 @@ export async function reconcileUserLive(userId: string): Promise<ReconciliationS
   try {
     exchangePositions = await binance.getFuturesPositions(apiKey, apiSecret);
   } catch (err: any) {
-    summary.errors.push(`Failed to fetch exchange positions: ${err.message}`);
-    log(`[reconciliation] ${userId}: ${summary.errors[summary.errors.length - 1]}`);
+    const errMsg = `Failed to fetch exchange positions: ${err.message}`;
+    summary.errors.push(errMsg);
+    const lastLog = lastReconcileErrorLog.get(userId) || 0;
+    const now = Date.now();
+    if (now - lastLog > 15 * 60 * 1000) {
+      log(`[reconciliation] ${userId}: ${errMsg} (Repeated logs throttled for 15m)`);
+      lastReconcileErrorLog.set(userId, now);
+    }
     return summary;
   }
   summary.exchangePositions = exchangePositions.length;

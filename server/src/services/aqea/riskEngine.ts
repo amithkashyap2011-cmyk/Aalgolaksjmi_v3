@@ -212,7 +212,7 @@ export class RiskEngine {
   }
 
   private static reject(reason: string): RiskResponse {
-    if (process.env.NODE_ENV !== "test") console.warn(`[AQEA_RISK_REJECT] ${reason}`);
+    if (process.env.NODE_ENV !== "test") console.log(`[AQEA_RISK_REJECT] ${reason}`);
     return {
       allowed: false,
       riskScore: 0,
