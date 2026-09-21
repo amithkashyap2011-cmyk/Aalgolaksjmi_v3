@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Highcharts from "highcharts/highstock";
 import HighchartsReact from "highcharts-react-official";
 import { ensureHighchartsConfigured } from "../../lib/chartSetup";
 import * as api from "../../lib/api";
-import { RefreshCw } from "lucide-react";
+import { socket, subscribeTicker, unsubscribeTicker, type TickData } from "../../lib/socket";
+import { RefreshCw, Activity } from "lucide-react";
 
 ensureHighchartsConfigured();
 
@@ -24,27 +25,111 @@ interface Props {
 }
 
 export default function KlineChart({ symbol, interval: initInterval = "60", height = 420 }: Props) {
-  const [interval, setInterval] = useState(initInterval);
+  const [interval, setChartInterval] = useState(initInterval);
   const binInterval = TF_MAP[interval] || "1h";
   const [ohlc, setOhlc]     = useState<number[][]>([]);
   const [volume, setVolume] = useState<number[][]>([]);
   const [err, setErr]       = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [livePrice, setLivePrice] = useState<number | null>(null);
+  const isFetchingRef = useRef(false);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setErr(null);
+  const load = useCallback((isSilent = false) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    if (!isSilent) {
+      setLoading(true);
+      setErr(null);
+    }
     api.getKlines(symbol, binInterval, 200)
       .then((kl: any[]) => {
-        if (!Array.isArray(kl) || kl.length === 0) { setErr("No market data"); return; }
-        setOhlc(kl.map((k) => [Number(k.openTime), parseFloat(k.open), parseFloat(k.high), parseFloat(k.low), parseFloat(k.close)]));
-        setVolume(kl.map((k) => [Number(k.openTime), parseFloat(k.volume)]));
+        if (!Array.isArray(kl) || kl.length === 0) {
+          if (!isSilent) setErr("No market data");
+          return;
+        }
+        const ohlcData = kl.map((k) => [Number(k.openTime), parseFloat(k.open), parseFloat(k.high), parseFloat(k.low), parseFloat(k.close)]);
+        const volData = kl.map((k) => [Number(k.openTime), parseFloat(k.volume)]);
+        setOhlc(ohlcData);
+        setVolume(volData);
+        if (ohlcData.length > 0) {
+          setLivePrice(ohlcData[ohlcData.length - 1][4]);
+        }
       })
-      .catch((e: any) => setErr(e?.message || "Failed to load"))
-      .finally(() => setLoading(false));
+      .catch((e: any) => {
+        if (!isSilent) setErr(e?.message || "Failed to load");
+      })
+      .finally(() => {
+        isFetchingRef.current = false;
+        if (!isSilent) setLoading(false);
+      });
   }, [symbol, binInterval]);
 
-  useEffect(() => { load(); }, [load]);
+  // Initial load on symbol / interval switch
+  useEffect(() => {
+    load(false);
+  }, [load]);
+
+  // Real-time WebSocket streaming & live tick ingestion
+  useEffect(() => {
+    subscribeTicker(symbol, false);
+
+    const stepMs = (function(tf: string) {
+      if (tf === "1") return 60 * 1000;
+      if (tf === "5") return 5 * 60 * 1000;
+      if (tf === "15") return 15 * 60 * 1000;
+      if (tf === "60") return 60 * 60 * 1000;
+      if (tf === "240") return 240 * 60 * 1000;
+      if (tf === "D") return 24 * 60 * 60 * 1000;
+      return 60 * 1000;
+    })(interval);
+
+    const handleTick = (tick: TickData) => {
+      if (tick.symbol !== symbol) return;
+      const price = parseFloat(tick.price);
+      if (!Number.isFinite(price) || price <= 0) return;
+      setLivePrice(price);
+
+      setOhlc((prev) => {
+        if (!prev || prev.length === 0) return prev;
+        const last = prev[prev.length - 1];
+        const now = tick.time || Date.now();
+        const candleOpenTime = last[0];
+
+        if (now < candleOpenTime + stepMs) {
+          // Inside current candle — update high, low, close
+          const updated = [
+            candleOpenTime,
+            last[1],
+            Math.max(last[2], price),
+            Math.min(last[3], price),
+            price,
+          ];
+          return [...prev.slice(0, -1), updated];
+        } else {
+          // Candle interval closed — append new live candle
+          const newCandleTime = Math.floor(now / stepMs) * stepMs;
+          const newCandle = [newCandleTime, price, price, price, price];
+          return [...prev.slice(1), newCandle];
+        }
+      });
+    };
+
+    socket.on("tick", handleTick);
+
+    return () => {
+      socket.off("tick", handleTick);
+      unsubscribeTicker(symbol, false);
+    };
+  }, [symbol, interval]);
+
+  // Background authoritative auto-refresh timer (fast 3.5s for 1m candles, 10s for higher)
+  useEffect(() => {
+    const pollMs = interval === "1" ? 3500 : 10000;
+    const timer = window.setInterval(() => {
+      load(true);
+    }, pollMs);
+    return () => window.clearInterval(timer);
+  }, [load, interval]);
 
   const options: Highcharts.Options = {
     chart: { backgroundColor: "#070d1a", animation: false, height },
@@ -89,15 +174,23 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
 
   const center: React.CSSProperties = { display:"flex", alignItems:"center", justifyContent:"center", background:"#070d1a", height, flexDirection:"column", gap:12 };
 
+  const formatPrice = (p: number) => {
+    if (!Number.isFinite(p)) return "0.00";
+    if (p < 0.001) return p.toFixed(6);
+    if (p < 1) return p.toFixed(4);
+    if (p < 100) return p.toFixed(3);
+    return p.toFixed(2);
+  };
+
   return (
     <div style={{ position:"relative", background:"#070d1a" }}>
       {/* Toolbar */}
-      <div style={{ display:"flex", alignItems:"center", gap:4, padding:"8px 12px", borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
-        <span style={{ fontSize:11, fontWeight:700, color:"#94a3b8", marginRight:8 }}>{symbol}</span>
+      <div style={{ display:"flex", alignItems:"center", gap:6, padding:"8px 12px", borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
+        <span style={{ fontSize:11, fontWeight:800, color:"#f8fafc", marginRight:4 }}>{symbol}</span>
         {TF_OPTIONS.map((tf) => (
           <button
             key={tf.key}
-            onClick={() => setInterval(tf.key)}
+            onClick={() => setChartInterval(tf.key)}
             style={{
               padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:700,
               border:"none", cursor:"pointer",
@@ -109,10 +202,22 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
             {tf.label}
           </button>
         ))}
+
+        {/* Live Stream Indicator & Real-Time Price */}
+        <div style={{ display:"flex", alignItems:"center", gap:6, marginLeft:"auto", marginRight:12 }}>
+          <span style={{ width:7, height:7, borderRadius:"50%", background:"#10b981", boxShadow:"0 0 8px #10b981", display:"inline-block" }} />
+          <span style={{ fontSize:10, fontWeight:800, color:"#10b981", letterSpacing:"0.04em" }}>LIVE {binInterval.toUpperCase()}</span>
+          {livePrice !== null && (
+            <span style={{ fontSize:12, fontWeight:800, color:"#f8fafc", marginLeft:4, fontVariantNumeric:"tabular-nums" }}>
+              ${formatPrice(livePrice)}
+            </span>
+          )}
+        </div>
+
         <button
-          onClick={load}
-          style={{ marginLeft:"auto", background:"none", border:"none", color:"#475569", cursor:"pointer", padding:4, display:"flex" }}
-          title="Refresh"
+          onClick={() => load(false)}
+          style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", padding:4, display:"flex" }}
+          title="Manual Sync"
         >
           <RefreshCw size={13} />
         </button>
@@ -127,7 +232,7 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
       {!loading && err && (
         <div style={center}>
           <span style={{ fontSize:12, color:"#ef4444" }}>{err}</span>
-          <button onClick={load} style={{ fontSize:11, color:"#3b82f6", background:"none", border:"none", cursor:"pointer" }}>Retry</button>
+          <button onClick={() => load(false)} style={{ fontSize:11, color:"#3b82f6", background:"none", border:"none", cursor:"pointer" }}>Retry</button>
         </div>
       )}
       {!loading && !err && (
