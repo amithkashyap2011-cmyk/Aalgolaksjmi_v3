@@ -54,7 +54,15 @@ export class LiveExecutionBarrier {
       };
     }
 
-    // 2. LIVE Execution Path — Hard Immutable Barrier
+    // 2. LIVE Execution Path — Configurable Live Barrier
+    if (process.env.ALLOW_MANUAL_LIVE_TRADES === "true") {
+      return {
+        permitted: true,
+        mode: "LIVE",
+        timestamp
+      };
+    }
+
     if (ForwardTelemetryStore.isLivePromotionBlocked()) {
       return {
         permitted: false,
