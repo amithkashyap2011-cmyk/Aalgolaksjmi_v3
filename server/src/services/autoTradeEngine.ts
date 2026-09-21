@@ -1185,7 +1185,7 @@ export async function handleLong(
       }
       const { decrypt } = await import("../lib/crypto.js");
       const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
-      const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.iv, authTag: keys.authTag });
+      const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
 
       const clientOrderId = binance.genClientOrderId("aalgo-long");
       let result: any;
@@ -1441,7 +1441,7 @@ export async function handleShort(
       }
       const { decrypt } = await import("../lib/crypto.js");
       const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
-      const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.iv, authTag: keys.authTag });
+      const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
 
       const clientOrderId = binance.genClientOrderId("aalgo-short");
       let result: any;
@@ -1590,7 +1590,7 @@ export async function handleExit(
     if (!keys) return;
     const { decrypt } = await import("../lib/crypto.js");
     const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
-    const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.iv, authTag: keys.authTag });
+    const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
 
     const exitClientOrderId = binance.genClientOrderId("aalgo-exit");
     const exitSide = pos.side === "BUY" ? "SELL" : "BUY";

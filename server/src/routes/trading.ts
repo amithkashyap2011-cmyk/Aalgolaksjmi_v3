@@ -1362,9 +1362,54 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
             symbol: trade.symbol, side: exitSide, type: "MARKET", quantity: formattedQty, clientOrderId: exitClientOrderId, reduceOnly: true,
           });
         } else {
-          result = await binance.placeOrder(apiKey, apiSecret, {
-            symbol: trade.symbol, side: exitSide, type: "MARKET", quantity: formattedQty, clientOrderId: exitClientOrderId,
-          }) as any;
+          try {
+            result = await binance.placeOrder(apiKey, apiSecret, {
+              symbol: trade.symbol, side: exitSide, type: "MARKET", quantity: formattedQty, clientOrderId: exitClientOrderId,
+            }) as any;
+          } catch (spotErr: any) {
+            const isConvertEligible = (spotErr.message && (spotErr.message.includes("-2010") || spotErr.message.includes("NOTIONAL"))) || ((trade as any).notes && (trade as any).notes.includes("Binance Convert"));
+            if (isConvertEligible) {
+              const baseAsset = trade.symbol.replace(/USDT$/, "");
+              const fromAsset = exitSide === "SELL" ? baseAsset : "USDT";
+              const toAsset = exitSide === "SELL" ? "USDT" : baseAsset;
+              const fromAmount = exitSide === "SELL" ? trade.quantity.toString() : (trade.quantity * trade.entryPrice).toFixed(4);
+              const ts = Date.now();
+              const q = `fromAsset=${fromAsset}&toAsset=${toAsset}&fromAmount=${fromAmount}&timestamp=${ts}`;
+              const crypto = await import("crypto");
+              const sig = crypto.createHmac("sha256", apiSecret).update(q).digest("hex");
+              const quoteRes = await fetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
+                method: "POST",
+                headers: { "X-MBX-APIKEY": apiKey }
+              });
+              const quoteData: any = await quoteRes.json();
+              if (quoteData?.quoteId) {
+                const tsA = Date.now();
+                const qA = `quoteId=${quoteData.quoteId}&timestamp=${tsA}`;
+                const sigA = crypto.createHmac("sha256", apiSecret).update(qA).digest("hex");
+                const acceptRes = await fetch(`https://api.binance.com/sapi/v1/convert/acceptQuote?${qA}&signature=${sigA}`, {
+                  method: "POST",
+                  headers: { "X-MBX-APIKEY": apiKey }
+                });
+                const acceptData: any = await acceptRes.json();
+                if (acceptData?.orderId || acceptData?.orderStatus === "SUCCESS") {
+                  const execPrice = exitSide === "SELL"
+                    ? parseFloat(quoteData.toAmount) / parseFloat(quoteData.fromAmount)
+                    : parseFloat(quoteData.fromAmount) / parseFloat(quoteData.toAmount);
+                  result = {
+                    avgPrice: execPrice.toString(),
+                    executedQty: trade.quantity.toString(),
+                    orderId: acceptData.orderId
+                  };
+                } else {
+                  throw new Error(`Binance Convert exit failed: ${acceptData.msg || JSON.stringify(acceptData)}`);
+                }
+              } else {
+                throw new Error(`Binance Convert quote failed: ${quoteData.msg || JSON.stringify(quoteData)}`);
+              }
+            } else {
+              throw spotErr;
+            }
+          }
         }
         
         exitPrice = result.avgPrice
