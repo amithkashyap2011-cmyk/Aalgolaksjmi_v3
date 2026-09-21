@@ -39,6 +39,8 @@ interface IndianFundsState {
   todayUnrealizedPnlINR?: number;
   todayChargesINR?: number;
   winRate: number;
+  closedTradesCount?: number;
+  openTradesCount?: number;
   autoTradeEnabled: boolean;
   autoPilotMode?: string;
 }
@@ -102,7 +104,10 @@ export default function TopBar({ onMenuClick }: Props) {
     if (!isIndian) return;
     const fetchIndian = async () => {
       try {
-        const res = await fetch("/api/indian-market/funds");
+        const query = new URLSearchParams();
+        if (userId) query.set("userId", userId);
+        if (mode) query.set("mode", mode);
+        const res = await fetch(`/api/indian-market/funds?${query.toString()}`);
         const json = await res.json();
         if (json.success) setIndianFunds(json);
       } catch {}
@@ -110,10 +115,12 @@ export default function TopBar({ onMenuClick }: Props) {
     fetchIndian();
     const t = setInterval(fetchIndian, 6000);
     return () => clearInterval(t);
-  }, [isIndian]);
+  }, [isIndian, userId, mode]);
 
   const inrRate = summary.inrRate || 85.0;
   const activeMode = MODES.find((m) => m.value === mode) ?? MODES[0];
+  const indianWinRate = indianFunds?.winRate ?? domains.indianStock.realizedWinRate ?? domains.indianStock.winRate ?? 0;
+  const indianTradesCount = indianFunds?.closedTradesCount ?? domains.indianStock.closedTrades ?? 0;
 
   const handleSwitchMarket = (target: "INDIA" | "CRYPTO" | "GLOBAL") => {
     setActiveMarket(target);
@@ -465,7 +472,7 @@ export default function TopBar({ onMenuClick }: Props) {
 
       {/* Metrics Bar */}
       {isIndian ? (
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 12, padding: "0 6px", flexShrink: 0 }} className="hidden xl:flex">
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 10, padding: "0 6px", flexShrink: 0 }} className="hidden lg:flex">
           <Metric
             label="Equity"
             value={formatInrWithUsd(indianFunds?.accountEquityINR ?? indianFunds?.totalEquityINR ?? 0, inrRate, true)}
@@ -489,6 +496,12 @@ export default function TopBar({ onMenuClick }: Props) {
             value={`${(indianFunds?.todayNetPnlINR ?? indianFunds?.todayPnlINR ?? 0) >= 0 ? "+" : ""}${formatInrWithUsd(indianFunds?.todayNetPnlINR ?? indianFunds?.todayPnlINR ?? 0, inrRate, true)}`}
             color={(indianFunds?.todayNetPnlINR ?? indianFunds?.todayPnlINR ?? 0) >= 0 ? "#10b981" : "#ef4444"}
             title="Today's Net Realized + Unrealized P&L in ₹ INR and $ USD"
+          />
+          <Metric
+            label="Win Rate"
+            value={`${indianWinRate % 1 === 0 ? indianWinRate.toFixed(0) : indianWinRate.toFixed(1)}%`}
+            color={indianWinRate >= 50 ? "#10b981" : indianWinRate > 0 ? "#f59e0b" : "#94a3b8"}
+            title={`Indian Derivatives Realized Win Rate: ${indianWinRate.toFixed(1)}% (${indianTradesCount} settled trade${indianTradesCount === 1 ? "" : "s"})`}
           />
           <Metric
             label="Auto-Pilot"
