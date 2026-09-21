@@ -121,19 +121,21 @@ function createInitialPrediction(
   livePrice?: number,
 ): UpcomingTradePrediction {
   const price = livePrice && livePrice > 0 ? livePrice : 0;
+  const isIndianSym = isIndian || DEFAULT_INDIAN_SYMBOLS.includes(symbol) || !symbol.endsWith("USDT");
+  const isDeriv = symbol.includes("CE") || symbol.includes("PE") || symbol.includes("FUT") || symbol.startsWith("NIFTY") || symbol.startsWith("BANKNIFTY");
   return {
     symbol,
-    exchange: isIndian ? "NSE (EQUITY)" : `BINANCE ${accountType === "BOTH" ? "FUTURES" : accountType}`,
-    domain: isIndian ? "INDIAN" : "CRYPTO",
+    exchange: isIndianSym ? (isDeriv ? "NSE F&O" : "NSE (EQUITY)") : `BINANCE ${accountType === "BOTH" ? "FUTURES" : accountType}`,
+    domain: isIndianSym ? "INDIAN" : "CRYPTO",
     direction: "HOLD",
     confidence: 0,
     entryPrice: price,
     targetTp: price,
     stopLoss: price,
-    estimatedLeverage: isIndian || accountType === "SPOT" ? 1 : 5,
-    allocatedMargin: isIndian ? 25000 : 2500,
+    estimatedLeverage: isIndianSym || accountType === "SPOT" ? 1 : 5,
+    allocatedMargin: isIndianSym ? 25000 : 2500,
     modelsVoting: 0,
-    totalModels: isIndian ? 4 : 8,
+    totalModels: isIndianSym ? 4 : 8,
     countdownSec: COUNTDOWN_TOTAL,
     regime: "Evaluating...",
     reasons: ["Evaluating live neural consensus from quant engine..."],
@@ -256,9 +258,12 @@ async function fetchRealIndianPrediction(
     ? stock.reasons
     : [`AI Scan Strategy: ${stock.strategy || "MOMENTUM_BREAKOUT"}`, `Market Regime: ${stock.regime || "NORMAL"}`];
 
+  const isDeriv = stock.symbol.includes("CE") || stock.symbol.includes("PE") || stock.symbol.includes("FUT") || stock.category === "NIFTY50" || stock.category === "BANKNIFTY" || stock.symbol.startsWith("NIFTY") || stock.symbol.startsWith("BANKNIFTY");
+  const exchText = isDeriv ? `${stock.exchange || "NSE"} F&O` : `${stock.exchange || "NSE"} (${stock.category || "EQUITY"})`;
+
   const prediction: UpcomingTradePrediction = {
     symbol: stock.symbol,
-    exchange: `${stock.exchange || "NSE"} (${stock.category || "EQUITY"})`,
+    exchange: exchText,
     domain: "INDIAN",
     direction,
     confidence,
@@ -476,6 +481,7 @@ export default function AIFooterTradeBar() {
 
   const loadPrediction = useCallback(async (sym: string, forceRefresh = false) => {
     const now = Date.now();
+    const isTargetIndian = isIndianRoute || DEFAULT_INDIAN_SYMBOLS.includes(sym) || !sym.endsWith("USDT");
     const cached = predictionCache.current.get(sym);
     if (!forceRefresh && cached && now - cached.time < 20000) {
       applyPrediction(cached.pred);
@@ -485,7 +491,7 @@ export default function AIFooterTradeBar() {
     setIsLoadingPrediction(true);
     try {
       const liveP = getLivePrice(sym);
-      if (isIndianRoute) {
+      if (isTargetIndian) {
         const { prediction: indianPred, stocks } = await fetchRealIndianPrediction(sym, indianStocksRef.current);
         if (stocks.length > 0) {
           indianStocksRef.current = stocks;
@@ -503,7 +509,7 @@ export default function AIFooterTradeBar() {
     } finally {
       setIsLoadingPrediction(false);
     }
-  }, [isIndianRoute, accountType, getLivePrice, applyPrediction]);
+  }, [isIndianRoute, activeMarket, accountType, getLivePrice, applyPrediction]);
 
   // Initial and on-change fetch
   useEffect(() => {
@@ -571,14 +577,36 @@ export default function AIFooterTradeBar() {
   }, [isExpanded]);
 
   /* Derived */
-  const isIndianAsset = prediction.domain === "INDIAN" || prediction.exchange.includes("NSE") || prediction.exchange.includes("BSE");
+  const isIndianAsset =
+    isIndianRoute ||
+    prediction.domain === "INDIAN" ||
+    (Boolean(prediction.exchange) && (prediction.exchange.includes("NSE") || prediction.exchange.includes("BSE"))) ||
+    DEFAULT_INDIAN_SYMBOLS.includes(activeSymbol) ||
+    activeSymbol.includes("CE") ||
+    activeSymbol.includes("PE") ||
+    !activeSymbol.endsWith("USDT");
+
   const indianStatus = isIndianAsset ? checkIsIndianMarketOpen() : null;
   const mktClosed = !!(indianStatus && !indianStatus.isOpen && !indianStatus.isPreMarket);
   const cur = isIndianAsset ? "₹" : "$";
   const rrRatio = getRR(prediction);
   const resolvedAT = isIndianAsset ? "SPOT" : accountType === "FUTURES" ? "FUTURES" : "SPOT";
-  const exchLabel = accountType === "BOTH" ? `BINANCE ${blinkPhase}` : prediction.exchange;
-  const exchColor = accountType === "BOTH" ? (blinkPhase === "SPOT" ? SPOT_COLOR : FUTURES_COLOR) : undefined;
+  const isDeriv = activeSymbol.includes("CE") || activeSymbol.includes("PE") || activeSymbol.includes("FUT") || activeSymbol.startsWith("NIFTY") || activeSymbol.startsWith("BANKNIFTY");
+
+  const exchLabel = isIndianAsset
+    ? (prediction.domain === "INDIAN" && prediction.exchange && !prediction.exchange.includes("BINANCE")
+        ? prediction.exchange
+        : isDeriv ? "NSE F&O" : "NSE (EQUITY)")
+    : accountType === "BOTH"
+      ? `BINANCE ${blinkPhase}`
+      : prediction.exchange;
+
+  const exchColor = isIndianAsset
+    ? "#ea580c"
+    : accountType === "BOTH"
+      ? (blinkPhase === "SPOT" ? SPOT_COLOR : FUTURES_COLOR)
+      : undefined;
+
   const progressPct = ((COUNTDOWN_TOTAL - countdown) / COUNTDOWN_TOTAL) * 100;
   const dc = dirColor(prediction.direction);
   const mc = modeColor(mode);
@@ -596,7 +624,26 @@ export default function AIFooterTradeBar() {
       const qty = parseFloat((margin / ep).toFixed(5));
       const side: "BUY" | "SELL" = prediction.direction === "SHORT" ? "SELL" : "BUY";
 
-      await api.placeOrder({ symbol: prediction.symbol, side, quantity: qty, mode, sl: prediction.stopLoss, tp: prediction.targetTp, leverage: lev, accountType: resolvedAT });
+      if (isIndianAsset) {
+        const res = await fetch("/api/indian-market/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol: prediction.symbol,
+            transactionType: side,
+            quantity: Math.max(1, Math.round(qty)),
+            productType: isDeriv ? "MIS" : "CNC",
+            orderType: "MARKET",
+            mode,
+            stopLoss: prediction.stopLoss,
+            target: prediction.targetTp,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok || json.error) throw new Error(json.error || "Indian market order placement failed");
+      } else {
+        await api.placeOrder({ symbol: prediction.symbol, side, quantity: qty, mode, sl: prediction.stopLoss, tp: prediction.targetTp, leverage: lev, accountType: resolvedAT });
+      }
 
       setExecSuccess(true);
       setSymbol(prediction.symbol);
@@ -719,7 +766,7 @@ export default function AIFooterTradeBar() {
                     {mode === "LIVE" ? "🔴" : "🟢"} {mode}
                   </Badge>
                   <span
-                    className={accountType === "BOTH" ? "aqea-blink" : undefined}
+                    className={(!isIndianAsset && accountType === "BOTH") ? "aqea-blink" : undefined}
                     style={{ fontSize: φ.fs.xxs, fontWeight: 800, padding: "1px 6px", borderRadius: φ.r.xs, background: exchColor ? `${exchColor}18` : "var(--ds-surface-2,#f1f5f9)", color: exchColor || "var(--ds-text,#334155)", border: `1px solid ${exchColor ? `${exchColor}55` : "var(--ds-border,#cbd5e1)"}`, fontFamily: "monospace", transition: "all .4s" }}>
                     {exchLabel}
                   </span>
