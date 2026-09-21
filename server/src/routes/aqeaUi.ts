@@ -10,7 +10,7 @@ import { computeAccountBalance } from "./wallet.js";
 import { CurrencyService } from "../services/currencyService.js";
 import mongoose from "mongoose";
 import { Settings } from "../models/Settings.js";
-import { authGuard, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, DEMO_USER_ID, type AuthRequest } from "../middleware/auth.js";
 import * as registry from "../services/modelRegistry.js";
 
 // V5 Services
@@ -44,12 +44,12 @@ export function clearDashboardCache() {
   headerCache = null;
 }
 
-function getSafeObjectId(userId: string): mongoose.Types.ObjectId {
-  if (mongoose.Types.ObjectId.isValid(userId)) {
+function getSafeObjectId(userId?: string): mongoose.Types.ObjectId {
+  if (userId && mongoose.Types.ObjectId.isValid(userId) && userId !== "000000000000000000000000" && userId !== "guest-user" && userId !== "mock-user-001") {
     return new mongoose.Types.ObjectId(userId);
   }
-  // Fallback to a static valid 24-character hex ObjectId for guests/mock users
-  return new mongoose.Types.ObjectId("000000000000000000000000");
+  // Fallback to demo user ID so unauthenticated/guest sessions display active demo data
+  return new mongoose.Types.ObjectId(DEMO_USER_ID);
 }
 
 /**
@@ -578,11 +578,23 @@ router.get("/trades", async (req, res) => {
     }
 
     const trades = await query;
+    const openTrades = (trades || []).filter((t: any) => t.status === "OPEN");
+    if (openTrades.length > 0) {
+      try {
+        await enrichOpenTrades(openTrades);
+      } catch {
+        // Continue with baseline PnL if live mark enrichment has transient error
+      }
+    }
+
     const sanitized = (trades || []).map((t: any) => ({
       _id: t._id,
       symbol: t.symbol,
       side: t.side,
       pnl: t.pnl,
+      unrealisedPnl: t.unrealisedPnl != null ? t.unrealisedPnl : t.pnl,
+      unrealisedPnlPct: t.unrealisedPnlPct != null ? t.unrealisedPnlPct : null,
+      markPrice: t.markPrice != null ? t.markPrice : null,
       grossPnl: t.grossPnl,
       netPnl: t.netPnl,
       status: t.status,

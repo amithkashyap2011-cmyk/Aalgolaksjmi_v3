@@ -113,6 +113,23 @@ module.exports = {
       error_file: './logs/soak-monitor-error.log',
       out_file: './logs/soak-monitor-out.log',
       merge_logs: true
+    },
+    {
+      // Sleep Mode Guardian (scripts/sleep_mode_agent.mjs)
+      // 1. Asserts macOS caffeinate keep-alive assertion to prevent system/display sleep
+      // 2. Continuous multi-tier health watchdog & automated recovery
+      // 3. Overnight autonomous trading supervisor and telemetry recorder
+      name: 'aqea-sleep-guardian',
+      script: 'scripts/sleep_mode_agent.mjs',
+      cwd: '.',
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      restart_delay: 5000,
+      max_memory_restart: '256M',
+      error_file: './logs/sleep-mode-error.log',
+      out_file: './logs/sleep-mode-out.log',
+      merge_logs: true
     }
   ]
 };

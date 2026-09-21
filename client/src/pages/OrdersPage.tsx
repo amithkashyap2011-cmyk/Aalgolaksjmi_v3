@@ -82,6 +82,8 @@ function TabBtn({ active, color, onClick, children }: { active: boolean; color: 
   );
 }
 
+const DEMO_USER_ID = "6a39c0e7a5e2995ed257ca68";
+
 export default function OrdersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { userId, activeMarket, setActiveMarket } = useAppStore();
@@ -101,8 +103,9 @@ export default function OrdersPage() {
     if (activeMarket === "INDIA" || activeMarket === "CRYPTO") setMarketState(activeMarket);
   }, [activeMarket]);
 
-  const tab: Tab = (searchParams.get("tab")?.toUpperCase() as Tab) || "OPEN";
+  const tab: Tab = (searchParams.get("tab")?.toUpperCase() as Tab) || "HOLDINGS";
   const [openOrdersCount, setOpenOrdersCount] = useState(0);
+  const [holdingsCount, setHoldingsCount]     = useState(0);
 
   const setMarket = (m: Market) => {
     setMarketState(m);
@@ -130,7 +133,7 @@ export default function OrdersPage() {
   const [confirm, setConfirm]       = useState<{ action: "archive-all" | "clear" } | null>(null);
   const [actionMsg, setActionMsg]   = useState<string | null>(null);
 
-  const activeUserId = userId || "000000000000000000000000";
+  const activeUserId = (userId && userId !== "000000000000000000000000" && userId !== "mock-user-001") ? userId : DEMO_USER_ID;
 
   // userId/market settle across a few renders on mount (auth resolving,
   // the top-bar market switcher, etc.), each re-triggering the effect
@@ -165,16 +168,22 @@ export default function OrdersPage() {
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userId, showArchived, tab, market]);
 
-  /* Open-orders count for the tab label — kept live regardless of which tab is active */
+  /* Open-orders and holdings count for the tab labels — kept live regardless of which tab is active */
   useEffect(() => {
     let cancelled = false;
     fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=PENDING`, { signal: AbortSignal.timeout(15000) })
       .then((r) => r.json())
       .then((d) => { if (!cancelled) setOpenOrdersCount(Array.isArray(d) ? d.length : 0); })
       .catch(() => { if (!cancelled) setOpenOrdersCount(0); });
+
+    fetch(`/aqea-ui/positions?userId=${encodeURIComponent(activeUserId)}&market=${market}`, { signal: AbortSignal.timeout(15000) })
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setHoldingsCount(Array.isArray(d) ? d.length : 0); })
+      .catch(() => { if (!cancelled) setHoldingsCount(0); });
+
     return () => { cancelled = true; };
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [market, userId]);
+  }, [market, activeUserId]);
 
   /* One row per fill: an entry fill for every order, plus an exit fill once it's closed */
   const fills = useMemo(() => {
@@ -323,10 +332,10 @@ export default function OrdersPage() {
 
       {/* Binance-style underline tabs */}
       <div style={{ display:"flex", gap:24, borderBottom:`1px solid ${BORD}` }}>
+        <TabBtn active={tab === "HOLDINGS"} color={marketColor} onClick={() => setTab("HOLDINGS")}>Holdings{holdingsCount > 0 ? ` (${holdingsCount})` : ""}</TabBtn>
         <TabBtn active={tab === "OPEN"}     color={marketColor} onClick={() => setTab("OPEN")}>Open Orders({openOrdersCount})</TabBtn>
         <TabBtn active={tab === "HISTORY"}  color={marketColor} onClick={() => setTab("HISTORY")}>Order History</TabBtn>
         <TabBtn active={tab === "TRADES"}   color={marketColor} onClick={() => setTab("TRADES")}>Trade History</TabBtn>
-        <TabBtn active={tab === "HOLDINGS"} color={marketColor} onClick={() => setTab("HOLDINGS")}>Holdings</TabBtn>
       </div>
 
       {actionMsg && (
@@ -351,7 +360,32 @@ export default function OrdersPage() {
           </div>
         ) : tab === "OPEN" ? (
           rows.length === 0 ? (
-            <EmptyState title={emptyCopy.title} sub={emptyCopy.sub} />
+            <EmptyState
+              title={emptyCopy.title}
+              sub={emptyCopy.sub}
+              action={
+                holdingsCount > 0 ? (
+                  <button
+                    onClick={() => setTab("HOLDINGS")}
+                    style={{
+                      background: marketColor,
+                      color: "#fff",
+                      border: "none",
+                      padding: "8px 16px",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    View Active Holdings ({holdingsCount}) →
+                  </button>
+                ) : null
+              }
+            />
           ) : (
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
@@ -482,7 +516,7 @@ export default function OrdersPage() {
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr style={{ borderBottom:`1px solid ${BORD}` }}>
-                    {["","Symbol","Side","Realized PnL","Status","Exit Reason","Time",""].map((h, i) => (
+                    {["","Symbol","Side","Qty","Entry","Exit/Mark","PnL","Status","Exit Reason","Time",""].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontSize:9, fontWeight:700, color:"var(--ds-text-faint)", textTransform:"uppercase", letterSpacing:"0.08em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -491,8 +525,10 @@ export default function OrdersPage() {
                   {rows.map((o, i) => {
                     const id  = o._id || String(i);
                     const pnl = o.pnl ?? 0;
+                    const livePnl = o.unrealisedPnl ?? pnl;
                     const isOpenRow = expanded === id;
                     const isArchived = !!o.archived;
+                    const isOpen = o.status === "OPEN";
                     return (
                       <Fragment key={id}>
                         <tr
@@ -517,8 +553,32 @@ export default function OrdersPage() {
                             </span>
                           </td>
 
-                          <td style={{ padding:"10px 12px", color: pnl >= 0 ? G : R, fontFamily:"monospace", fontWeight:700 }}>
-                            {o.status === "OPEN" ? "—" : `${pnl >= 0 ? "+" : ""}${formatCurrency(pnl, { mode: currencyMode, inrRate })}`}
+                          <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
+                            {o.quantity ?? o.qty ?? "—"}
+                          </td>
+
+                          <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
+                            {o.entryPrice ? `$${parseFloat(o.entryPrice).toFixed(2)}` : "—"}
+                          </td>
+
+                          <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
+                            {isOpen
+                              ? (o.markPrice ? `$${parseFloat(o.markPrice).toFixed(2)}` : "—")
+                              : (o.exitPrice ? `$${parseFloat(o.exitPrice).toFixed(2)}` : "—")}
+                          </td>
+
+                          <td style={{ padding:"10px 12px", color: (isOpen ? livePnl : pnl) >= 0 ? G : R, fontFamily:"monospace", fontWeight:700 }}>
+                            {isOpen ? (
+                              <>
+                                {livePnl >= 0 ? "+" : ""}{formatCurrency(livePnl, { mode: currencyMode, inrRate })}
+                                <span style={{ fontSize:9, opacity:0.7, marginLeft:4, fontWeight:600 }}>(Live)</span>
+                              </>
+                            ) : (
+                              <>
+                                {pnl >= 0 ? "+" : ""}{formatCurrency(pnl, { mode: currencyMode, inrRate })}
+                                <span style={{ fontSize:9, opacity:0.7, marginLeft:4, fontWeight:600 }}>(Realized)</span>
+                              </>
+                            )}
                           </td>
 
                           <td style={{ padding:"10px 12px" }}>
@@ -528,7 +588,11 @@ export default function OrdersPage() {
                           </td>
 
                           <td style={{ padding:"10px 12px", color:"var(--ds-text-faint)", fontSize:11 }}>
-                            {o.meta?.closeReason ?? o.meta?.exitReason ?? o.exitReason ?? "—"}
+                            {isOpen ? (
+                              <span style={{ fontStyle:"italic", color:"var(--ds-text-faint)" }}>Active (Holding)</span>
+                            ) : (
+                              o.meta?.closeReason ?? o.meta?.exitReason ?? o.exitReason ?? "COMPLETED"
+                            )}
                           </td>
 
                           <td style={{ padding:"10px 12px", color:"var(--ds-text-faint)", fontSize:11 }}>
@@ -555,7 +619,7 @@ export default function OrdersPage() {
 
                         {isOpenRow && (
                           <tr key={`${id}-exp`} style={{ borderBottom:`1px solid var(--ds-border)` }}>
-                            <td colSpan={8} style={{ padding:0 }}>
+                            <td colSpan={11} style={{ padding:0 }}>
                               <div style={{ padding:"12px 16px 16px 28px", borderLeft:"2px solid #3b82f6" }}>
                                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(100%, 260px), 1fr))", gap:16 }} className="grid-collapse-sm">
                                   <div>
@@ -607,12 +671,13 @@ export default function OrdersPage() {
   );
 }
 
-function EmptyState({ title, sub }: { title: string; sub: string }) {
+function EmptyState({ title, sub, action }: { title: string; sub: string; action?: React.ReactNode }) {
   return (
     <div style={{ padding:64, textAlign:"center" }}>
       <ClipboardList size={32} style={{ color:"var(--ds-text-faint)", margin:"0 auto 12px", display:"block" }} />
       <div style={{ fontSize:14, color:"var(--ds-text-faint)", fontWeight:600 }}>{title}</div>
-      <div style={{ fontSize:11, color:"var(--ds-text-faint)", marginTop:4 }}>{sub}</div>
+      <div style={{ fontSize:11, color:"var(--ds-text-faint)", marginTop:4, maxWidth:440, margin:"4px auto 0" }}>{sub}</div>
+      {action && <div style={{ marginTop: 14 }}>{action}</div>}
     </div>
   );
 }

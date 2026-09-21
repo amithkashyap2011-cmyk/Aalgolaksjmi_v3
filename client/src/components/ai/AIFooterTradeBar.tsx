@@ -8,7 +8,7 @@
  * Icon sizes              : 13 · 16 · 21px
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import * as api from "../../lib/api";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
@@ -392,9 +392,11 @@ export default function AIFooterTradeBar() {
   const [indianSymbols, setIndianSymbols] = useState<string[]>(DEFAULT_INDIAN_SYMBOLS);
   const indianStocksRef = useRef<any[]>([]);
 
-  const candidateSymbols = isIndianRoute
-    ? indianSymbols
-    : Array.from(new Set([...(allowedSymbols?.length ? allowedSymbols : []), ...DEFAULT_CRYPTO_SYMBOLS]));
+  const candidateSymbols = useMemo(() => {
+    return isIndianRoute
+      ? indianSymbols
+      : Array.from(new Set([...(allowedSymbols?.length ? allowedSymbols : []), ...DEFAULT_CRYPTO_SYMBOLS]));
+  }, [isIndianRoute, indianSymbols, allowedSymbols]);
 
   /* BOTH-mode blink */
   const [blinkPhase, setBlinkPhase] = useState<"SPOT" | "FUTURES">("SPOT");
@@ -427,12 +429,15 @@ export default function AIFooterTradeBar() {
         setActiveSymbol(candidateSymbols[0] || "BTCUSDT");
       }
     }
-  }, [isIndianRoute]); // eslint-disable-line
+  }, [isIndianRoute, candidateSymbols]); // eslint-disable-line
 
-  // Sync when user explicitly changes selectedSymbol elsewhere in the app
+  // Sync only when user explicitly changes selectedSymbol elsewhere in the app (not on every re-render)
+  const prevSelectedSymbolRef = useRef(selectedSymbol);
   useEffect(() => {
-    if (selectedSymbol && candidateSymbols.includes(selectedSymbol)) {
+    if (selectedSymbol && selectedSymbol !== prevSelectedSymbolRef.current && candidateSymbols.includes(selectedSymbol)) {
+      prevSelectedSymbolRef.current = selectedSymbol;
       setActiveSymbol(selectedSymbol);
+      setCountdown(COUNTDOWN_TOTAL);
     }
   }, [selectedSymbol, candidateSymbols]);
 
@@ -523,18 +528,20 @@ export default function AIFooterTradeBar() {
   }, [fetchedPrice, activeSymbol]);
 
   const rotateToNext = useCallback(() => {
-    const idx = candidateSymbols.indexOf(activeSymbol);
-    const nextSym = idx >= 0 ? candidateSymbols[(idx + 1) % candidateSymbols.length] : candidateSymbols[0];
-    setActiveSymbol(nextSym);
+    setActiveSymbol((curr) => {
+      const idx = candidateSymbols.indexOf(curr);
+      return idx >= 0 ? candidateSymbols[(idx + 1) % candidateSymbols.length] : candidateSymbols[0];
+    });
     setCountdown(COUNTDOWN_TOTAL);
-  }, [candidateSymbols, activeSymbol]);
+  }, [candidateSymbols]);
 
   const rotateToPrev = useCallback(() => {
-    const idx = candidateSymbols.indexOf(activeSymbol);
-    const prevSym = idx > 0 ? candidateSymbols[idx - 1] : candidateSymbols[candidateSymbols.length - 1];
-    setActiveSymbol(prevSym);
+    setActiveSymbol((curr) => {
+      const idx = candidateSymbols.indexOf(curr);
+      return idx > 0 ? candidateSymbols[idx - 1] : candidateSymbols[candidateSymbols.length - 1];
+    });
     setCountdown(COUNTDOWN_TOTAL);
-  }, [candidateSymbols, activeSymbol]);
+  }, [candidateSymbols]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -631,8 +638,8 @@ export default function AIFooterTradeBar() {
         .aqea-ring { animation: aqea-ring 1.1s ease-out infinite; border-radius:50%; }
 
         @keyframes aqea-bar-in {
-          from { transform: scaleY(0); opacity:0; }
-          to   { transform: scaleY(1); opacity:1; }
+          from { transform: translateX(-50%) scaleY(0); opacity:0; }
+          to   { transform: translateX(-50%) scaleY(1); opacity:1; }
         }
         .aqea-popup {
           animation: aqea-bar-in .22s cubic-bezier(.4,0,.2,1) both;

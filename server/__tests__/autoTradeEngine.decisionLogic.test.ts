@@ -128,13 +128,26 @@ describe.each([
     if (result.ok) expect(result.leverage).toBe(10);
   });
 
-  test("blocks when AI confidence is below 68%", () => {
+  test("blocks when AI confidence is below 68% by default", () => {
     const input = baseInput({ aqeaDecision: { ...baseInput().aqeaDecision, confidence: 60 } as any });
     const result = evaluate(input);
     expect(result.ok).toBe(false);
     if (!result.ok && !result.silent) {
       expect(result.reason).toContain("AI conviction below minimum threshold");
     }
+  });
+
+  test("permits aggressive AI confidence when minConvictionThreshold is explicitly configured lower (e.g. 40%)", () => {
+    const input = baseInput({
+      aqeaDecision: {
+        ...baseInput().aqeaDecision,
+        confidence: 59,
+        decisionPath: { ...baseInput().aqeaDecision.decisionPath, regime: "RANGING" }
+      } as any,
+      minConvictionThreshold: 0.40,
+    });
+    const result = evaluate(input);
+    expect(result.ok).toBe(true);
   });
 
   test("blocks counter-trend trades during opposing regime when confidence < 75%", () => {

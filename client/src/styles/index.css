@@ -85,6 +85,32 @@ body {
     @apply rounded-xl shadow-md p-4;
   }
 
+  /* Golden Ratio Layout Splits (61.8% / 38.2%) */
+  .golden-split {
+    display: flex;
+    flex-direction: column;
+    gap: 1.063rem; /* phi-4 spacing */
+    width: 100%;
+  }
+
+  @media (min-width: 1024px) {
+    .golden-split {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 1.688rem; /* phi-5 spacing */
+    }
+    .golden-major {
+      width: 61.8%;
+      flex: 0 0 61.8%;
+      min-width: 0;
+    }
+    .golden-minor {
+      width: 38.2%;
+      flex: 0 0 38.2%;
+      min-width: 0;
+    }
+  }
+
   /* Status Colors (Refined) */
   .dot-live    { @apply w-2 h-2 rounded-full bg-trade-green inline-block; animation: pulse-emerald 2s infinite; }
   .dot-paper   { @apply w-2 h-2 rounded-full bg-trade-gold inline-block; }

@@ -1087,7 +1087,8 @@ export async function handleLong(
   const openPositions = paper.getOpenPositions(userId, mode).filter(p => p.accountType === accountType);
   const sameDirectionCount = openPositions.filter(p => p.side === "BUY").length;
   const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
-  const evaluation = evaluateLongEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent });
+  const minConvictionThreshold = settings.autoTradeThreshold ? settings.autoTradeThreshold / 100 : 0.68;
+  const evaluation = evaluateLongEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, minConvictionThreshold });
   if (!evaluation.ok) {
     if (decisionId) {
       const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";
@@ -1343,7 +1344,8 @@ export async function handleShort(
   const openPositions = paper.getOpenPositions(userId, mode).filter(p => p.accountType === accountType);
   const sameDirectionCount = openPositions.filter(p => p.side === "SELL").length;
   const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
-  const evaluation = evaluateShortEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent });
+  const minConvictionThreshold = settings.shortScoreThreshold ? (100 - settings.shortScoreThreshold) / 100 : 0.68;
+  const evaluation = evaluateShortEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, minConvictionThreshold });
   if (!evaluation.ok) {
     if (decisionId) {
       const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";

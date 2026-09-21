@@ -27,6 +27,7 @@ export interface EntryEvaluationInput {
   symbol: string;
   sameDirectionCount?: number;
   maxConcurrent?: number;
+  minConvictionThreshold?: number;
 }
 
 export type EntryEvaluationResult =
@@ -40,7 +41,7 @@ export type EntryEvaluationResult =
  * itself for confirmation this is where it now delegates.
  */
 export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationResult {
-  const { existing, aqeaDecision, riskProfile, symbol, maxConcurrent = 10 } = input;
+  const { existing, aqeaDecision, riskProfile, symbol, maxConcurrent = 10, minConvictionThreshold = 0.68 } = input;
 
   if (existing) {
     return { ok: false, silent: false, reason: `Existing active position for ${symbol}` };
@@ -56,8 +57,8 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
 
   const rawConf = aqeaDecision.confidence ?? 0;
   const confNormalized = rawConf > 1 ? rawConf / 100 : rawConf;
-  if (confNormalized < 0.68) {
-    return { ok: false, silent: false, reason: `AI conviction below minimum threshold (Score: ${Math.round(confNormalized * 100)}% < 68%)` };
+  if (confNormalized < minConvictionThreshold) {
+    return { ok: false, silent: false, reason: `AI conviction below minimum threshold (Score: ${Math.round(confNormalized * 100)}% < ${Math.round(minConvictionThreshold * 100)}%)` };
   }
 
   const regime = aqeaDecision.decisionPath?.regime || "";
@@ -103,7 +104,7 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
  * section (same structure, SELL-side wording only).
  */
 export function evaluateShortEntry(input: EntryEvaluationInput): EntryEvaluationResult {
-  const { existing, aqeaDecision, riskProfile, symbol, maxConcurrent = 10 } = input;
+  const { existing, aqeaDecision, riskProfile, symbol, maxConcurrent = 10, minConvictionThreshold = 0.68 } = input;
 
   if (existing) {
     return { ok: false, silent: false, reason: `Existing active position for ${symbol}` };
@@ -119,8 +120,8 @@ export function evaluateShortEntry(input: EntryEvaluationInput): EntryEvaluation
 
   const rawConf = aqeaDecision.confidence ?? 0;
   const confNormalized = rawConf > 1 ? rawConf / 100 : rawConf;
-  if (confNormalized < 0.68) {
-    return { ok: false, silent: false, reason: `AI conviction below minimum threshold (Score: ${Math.round(confNormalized * 100)}% < 68%)` };
+  if (confNormalized < minConvictionThreshold) {
+    return { ok: false, silent: false, reason: `AI conviction below minimum threshold (Score: ${Math.round(confNormalized * 100)}% < ${Math.round(minConvictionThreshold * 100)}%)` };
   }
 
   const regime = aqeaDecision.decisionPath?.regime || "";

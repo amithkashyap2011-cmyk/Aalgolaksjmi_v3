@@ -361,15 +361,19 @@ export default function TopBar({ onMenuClick }: Props) {
         title="View 13 Out-of-Sample (OOS) Criteria & Live Promotion Progress"
         style={{
           display: "flex", alignItems: "center", gap: 5,
-          padding: "3px 8px", borderRadius: 6,
+          padding: "3px 9px", borderRadius: 6,
           border: "1px solid rgba(56, 189, 248, 0.35)",
-          background: "rgba(56, 189, 248, 0.1)",
+          background: "rgba(56, 189, 248, 0.12)",
           color: "#38bdf8", fontSize: 10, fontWeight: 800,
-          cursor: "pointer", letterSpacing: "0.03em"
+          cursor: "pointer", letterSpacing: "0.03em",
+          flexShrink: 0,
+          whiteSpace: "nowrap",
+          height: 24,
+          transition: "all 0.15s ease",
         }}
       >
-        <ShieldAlert size={12} />
-        <span>OOS Gates</span>
+        <ShieldAlert size={12} style={{ flexShrink: 0 }} />
+        <span style={{ whiteSpace: "nowrap" }}>OOS Gates</span>
       </button>
 
       {/* Market-Specific Account Mode Selector / Broker Tag */}
