@@ -207,8 +207,8 @@ router.get("/dashboard", async (req, res) => {
         computeAccountBalance(userId, "LIVE", "FUTURES", inrRate).catch(() => null),
         computeAccountBalance(userId, "LIVE", "SPOT", inrRate).catch(() => null),
       ]);
-      cryptoFuturesBalance = futLive?.usdt ?? 0;
-      cryptoSpotBalance = spotLive?.usdt ?? 0;
+      cryptoFuturesBalance = futLive?.totalBalance ?? futLive?.usdt ?? 0;
+      cryptoSpotBalance = spotLive?.totalBalance ?? spotLive?.usdt ?? 0;
     } else {
       cryptoFuturesBalance = paper.getWallet(userId, "PAPER", "FUTURES").get("USDT") ?? 0;
       cryptoSpotBalance = paper.getWallet(userId, "PAPER", "SPOT").get("USDT") ?? 0;

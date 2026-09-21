@@ -85,13 +85,17 @@ async function getCachedWalletAggregates(userId: string, mode: string, accountTy
         ? { $or: [{ accountType: "FUTURES" }, { accountType: { $exists: false } }, { accountType: null }] }
         : { accountType };
 
+      const capitalSourceMatch = mode === "LIVE"
+        ? { capitalSource: { $ne: "PAPER_INITIALIZATION" } }
+        : {};
+
       const [depGroups, wdGroups, tradesPnl] = await Promise.all([
         WalletTransaction.aggregate([
-          { $match: { userId: userObjId, type: { $in: ["DEPOSIT", "P2P_BUY"] }, status: "COMPLETED", ...accountTypeMatch } },
+          { $match: { userId: userObjId, type: { $in: ["DEPOSIT", "P2P_BUY"] }, status: "COMPLETED", ...accountTypeMatch, ...capitalSourceMatch } },
           { $group: { _id: "$currency", total: { $sum: "$amount" } } },
         ]),
         WalletTransaction.aggregate([
-          { $match: { userId: userObjId, type: { $in: ["WITHDRAW", "WITHDRAW_CRYPTO", "P2P_SELL"] }, status: "COMPLETED", ...accountTypeMatch } },
+          { $match: { userId: userObjId, type: { $in: ["WITHDRAW", "WITHDRAW_CRYPTO", "P2P_SELL"] }, status: "COMPLETED", ...accountTypeMatch, ...capitalSourceMatch } },
           { $group: { _id: "$currency", total: { $sum: "$amount" } } },
         ]),
         Trade.aggregate([

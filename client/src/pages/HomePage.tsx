@@ -34,7 +34,7 @@ interface HomePageProps {
 export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { userId, selectedSymbol, livePrices, setSymbol, addAlert, accountType, wallet } = useAppStore();
+  const { userId, selectedSymbol, livePrices, setSymbol, addAlert, accountType, wallet, mode } = useAppStore();
   const { currencyMode, fetchDashboard } = useDashboardStore();
   const summary = useDashboardStore((s) => s.summary) ?? INITIAL_SUMMARY;
   const domains = useDashboardStore((s) => s.domains);
@@ -150,12 +150,12 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     }
   };
 
-  useEffect(() => { refresh(); }, [userId, symbol, terminalTab]);
+  useEffect(() => { refresh(); }, [userId, symbol, terminalTab, mode]);
   useEffect(() => {
     if (!userId) return;
     const t = setInterval(() => refresh(true), 15000);
     return () => clearInterval(t);
-  }, [userId, symbol, terminalTab]);
+  }, [userId, symbol, terminalTab, mode]);
 
   // ── Paper wallet top-up helper ──────────────────────────────────────
   const handleTopUpWallet = async (acctType: "SPOT" | "FUTURES", amount = 1000) => {
@@ -594,8 +594,19 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
           <div>
-            <div style={{ fontSize: 10, fontWeight: 700, color: terminalTab === 'futures' ? "#fbbf24" : "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>
-              {terminalTab === 'futures' ? '⚡ BINANCE USD-M FUTURES EQUITY' : terminalTab === 'spot' ? '🛒 CRYPTO SPOT PORTFOLIO EQUITY' : 'TOTAL CRYPTO PORTFOLIO EQUITY'}
+            <div style={{ fontSize: 10, fontWeight: 700, color: terminalTab === 'futures' ? "#fbbf24" : "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+              <span>{terminalTab === 'futures' ? '⚡ BINANCE USD-M FUTURES EQUITY' : terminalTab === 'spot' ? '🛒 CRYPTO SPOT PORTFOLIO EQUITY' : 'TOTAL CRYPTO PORTFOLIO EQUITY'}</span>
+              <span style={{
+                fontSize: 9,
+                fontWeight: 900,
+                padding: "2px 7px",
+                borderRadius: 4,
+                background: mode === "LIVE" ? "rgba(220, 38, 38, 0.2)" : "rgba(59, 130, 246, 0.2)",
+                color: mode === "LIVE" ? "#f87171" : "#60a5fa",
+                border: `1px solid ${mode === "LIVE" ? "rgba(220, 38, 38, 0.4)" : "rgba(59, 130, 246, 0.4)"}`
+              }}>
+                {mode === "LIVE" ? "● LIVE BINANCE" : "○ PAPER SIMULATOR"}
+              </span>
             </div>
             <div style={{ fontSize: 32, fontWeight: 900, color: "#f8fafc", fontFamily: "monospace", letterSpacing: "-0.02em", lineHeight: 1.1 }}>
               {showValues ? formatEquity(terminalEquity) : "••••••••"}
