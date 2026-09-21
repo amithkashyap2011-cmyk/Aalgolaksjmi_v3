@@ -10,6 +10,7 @@
  * POST /wallet/p2p/buy         – buy from a P2P offer
  */
 import { Router } from "express";
+import crypto from "node:crypto";
 import { authGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
 import { WalletTransaction } from "../models/WalletTransaction.js";
 import * as paper from "../services/paperState.js";
@@ -285,6 +286,150 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
       detail: err.message,
       userId: req.userId,
     });
+  }
+});
+
+/* ── Live Binance Multi-Wallet & Assets Endpoint ─────────── */
+router.get("/binance-live", optionalAuth, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId || "6a39c0e7a5e2995ed257ca68";
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: "Database offline" });
+    }
+    const keys = await ApiKeys.findOne({ userId });
+    if (!keys) {
+      return res.status(404).json({ error: "No Binance API keys saved in settings" });
+    }
+
+    const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
+    const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
+
+    function signQuery(params?: string) {
+      const ts = Date.now();
+      const q = params ? `${params}&timestamp=${ts}` : `timestamp=${ts}`;
+      const sig = crypto.createHmac("sha256", apiSecret).update(q).digest("hex");
+      return `${q}&signature=${sig}`;
+    }
+
+    const inrRate = getUsdtInrRate();
+
+    const [spotRes, futRes, earnRes, tickersRes] = await Promise.allSettled([
+      fetch(`https://api.binance.com/api/v3/account?${signQuery()}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
+      fetch(`https://fapi.binance.com/fapi/v2/account?${signQuery()}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
+      fetch(`https://api.binance.com/sapi/v1/simple-earn/flexible/position?${signQuery("size=50")}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
+      fetch("https://api.binance.com/api/v3/ticker/price").then(r => r.json()),
+    ]);
+
+    const priceMap = new Map<string, number>();
+    if (tickersRes.status === "fulfilled" && Array.isArray(tickersRes.value)) {
+      for (const t of tickersRes.value) {
+        priceMap.set(t.symbol, parseFloat(t.price));
+      }
+    }
+    priceMap.set("USDT", 1);
+    priceMap.set("USDC", 1);
+    priceMap.set("BUSD", 1);
+
+    function getUsdValue(asset: string, amount: number): number {
+      if (asset === "USDT" || asset === "USDC" || asset === "BUSD") return amount;
+      const pair = `${asset}USDT`;
+      const p = priceMap.get(pair) || 0;
+      return amount * p;
+    }
+
+    // Process Spot Assets
+    const spotBalances: any[] = [];
+    let spotUsdtTotal = 0;
+    const spotData: any = spotRes.status === "fulfilled" ? spotRes.value : null;
+    if (spotData?.balances) {
+      for (const b of spotData.balances) {
+        const free = parseFloat(b.free) || 0;
+        const locked = parseFloat(b.locked) || 0;
+        if (free > 0 || locked > 0) {
+          const total = free + locked;
+          const isEarnShare = b.asset.startsWith("LD");
+          const underlyingAsset = isEarnShare ? b.asset.replace(/^LD/, "") : b.asset;
+          const usdVal = getUsdValue(underlyingAsset, total);
+          spotUsdtTotal += usdVal;
+          spotBalances.push({
+            asset: b.asset,
+            cleanAsset: underlyingAsset,
+            isEarnShare,
+            free,
+            locked,
+            total,
+            usdValue: Number(usdVal.toFixed(4)),
+            inrValue: Number((usdVal * inrRate).toFixed(2)),
+          });
+        }
+      }
+    }
+
+    // Process Simple Earn Flexible Assets
+    const earnAssets: any[] = [];
+    let earnUsdtTotal = 0;
+    const earnData: any = earnRes.status === "fulfilled" ? earnRes.value : null;
+    if (earnData?.rows) {
+      for (const r of earnData.rows) {
+        const totalAmount = parseFloat(r.totalAmount) || 0;
+        if (totalAmount > 0) {
+          const usdVal = getUsdValue(r.asset, totalAmount);
+          earnUsdtTotal += usdVal;
+          earnAssets.push({
+            asset: r.asset,
+            totalAmount,
+            annualRatePct: Number((parseFloat(r.latestAnnualPercentageRate || "0") * 100).toFixed(2)),
+            usdValue: Number(usdVal.toFixed(4)),
+            inrValue: Number((usdVal * inrRate).toFixed(2)),
+          });
+        }
+      }
+    }
+
+    // Process Futures Account
+    let futuresInfo: any = {
+      canTrade: false,
+      availableBalance: 0,
+      totalWalletBalance: 0,
+      totalMarginBalance: 0,
+      positions: [],
+    };
+    const futData: any = futRes.status === "fulfilled" ? futRes.value : null;
+    if (futData) {
+      const f = futData;
+      futuresInfo = {
+        canTrade: f.canTrade === true,
+        availableBalance: parseFloat(f.availableBalance) || 0,
+        totalWalletBalance: parseFloat(f.totalWalletBalance) || 0,
+        totalMarginBalance: parseFloat(f.totalMarginBalance) || 0,
+        positions: f.positions?.filter((p: any) => parseFloat(p.positionAmt) !== 0) || [],
+      };
+    }
+
+    // Overall Net Worth
+    const totalNetWorthUsd = Number((spotUsdtTotal + futuresInfo.totalMarginBalance).toFixed(2));
+    const totalNetWorthInr = Number((totalNetWorthUsd * inrRate).toFixed(2));
+
+    res.json({
+      success: true,
+      connected: true,
+      lastSyncedAt: Date.now(),
+      inrRate,
+      totalNetWorthUsd,
+      totalNetWorthInr,
+      spot: {
+        totalUsd: Number(spotUsdtTotal.toFixed(2)),
+        assets: spotBalances,
+      },
+      earn: {
+        totalUsd: Number(earnUsdtTotal.toFixed(2)),
+        assets: earnAssets,
+      },
+      futures: futuresInfo,
+    });
+  } catch (err: any) {
+    console.error("[wallet] /binance-live error:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

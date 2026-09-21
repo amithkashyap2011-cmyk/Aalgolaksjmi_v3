@@ -321,6 +321,47 @@ export async function getWalletSummary(mode: string) {
   return request<WalletSummaryResponse>(`/wallet/summary?mode=${mode}&sid=${(window as any)._aalgo_session || "unknown"}`);
 }
 
+export async function getBinanceLiveWallet() {
+  return request<{
+    success: boolean;
+    connected: boolean;
+    lastSyncedAt: number;
+    inrRate: number;
+    totalNetWorthUsd: number;
+    totalNetWorthInr: number;
+    spot: {
+      totalUsd: number;
+      assets: Array<{
+        asset: string;
+        cleanAsset: string;
+        isEarnShare: boolean;
+        free: number;
+        locked: number;
+        total: number;
+        usdValue: number;
+        inrValue: number;
+      }>;
+    };
+    earn: {
+      totalUsd: number;
+      assets: Array<{
+        asset: string;
+        totalAmount: number;
+        annualRatePct: number;
+        usdValue: number;
+        inrValue: number;
+      }>;
+    };
+    futures: {
+      canTrade: boolean;
+      availableBalance: number;
+      totalWalletBalance: number;
+      totalMarginBalance: number;
+      positions: any[];
+    };
+  }>("/wallet/binance-live");
+}
+
 export async function getWalletTransactions(limit = 50, skip = 0) {
   return request<{ transactions: any[]; total: number }>(
     `/wallet/transactions?limit=${limit}&skip=${skip}`,
