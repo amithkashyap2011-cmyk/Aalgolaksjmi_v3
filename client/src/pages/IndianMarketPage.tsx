@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   Landmark, Activity, TrendingUp, TrendingDown, RefreshCw,
@@ -270,6 +270,7 @@ export default function IndianMarketPage() {
   const [positions, setPositions] = useState<PositionItem[]>([]);
   const [closedTrades, setClosedTrades] = useState<ClosedTradeItem[]>([]);
   const [positionSubTab, setPositionSubTab] = useState<"OPEN" | "CLOSED">("OPEN");
+  const hasAutoSwitched = useRef(false);
   const [historyTimeframe, setHistoryTimeframe] = useState<"daily" | "weekly" | "monthly" | "all">("all");
   const [tradeGroups, setTradeGroups] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
@@ -295,6 +296,9 @@ export default function IndianMarketPage() {
   // Fetch market and strategy state with tiered polling
   const fetchData = useCallback(async (isFullRefresh = false) => {
     try {
+      let openCount = 0;
+      let closedCount = 0;
+
       const activeTasks: Promise<any>[] = [
         // 0. Account Margin & Funds
         safeFetch("/api/indian-market/funds?userId=guest-user").then((json) => {
@@ -321,7 +325,11 @@ export default function IndianMarketPage() {
 
         // 5. Positions (real-time single source of truth)
         safeFetch("/api/indian-market/positions").then((json) => {
-          if (json?.success) setPositions(json.positions || []);
+          if (json?.success) {
+            const p = json.positions || [];
+            setPositions(p);
+            openCount = p.length;
+          }
         }),
       ];
 
@@ -338,7 +346,11 @@ export default function IndianMarketPage() {
           }),
           // 5b. Closed Trade History
           safeFetch(`/api/indian-market/history?timeframe=${historyTimeframe}`).then((json) => {
-            if (json?.success) setClosedTrades(json.history || []);
+            if (json?.success) {
+              const h = json.history || [];
+              setClosedTrades(h);
+              closedCount = h.length;
+            }
           }),
           // 5c. Trade Groups
           safeFetch("/api/indian-market/trade-groups").then((json) => {
@@ -365,6 +377,14 @@ export default function IndianMarketPage() {
       }
 
       await Promise.allSettled(activeTasks);
+
+      // Smart default: on initial load, if there are no open positions but settled trades exist, show the closed ledger
+      if (!hasAutoSwitched.current && isFullRefresh) {
+        if (openCount === 0 && closedCount > 0) {
+          hasAutoSwitched.current = true;
+          setPositionSubTab("CLOSED");
+        }
+      }
     } catch (err: any) {
       console.warn("Failed fetching Indian Market state:", err);
     }
@@ -1679,10 +1699,40 @@ export default function IndianMarketPage() {
           {positionSubTab === "OPEN" && (
             <div>
               {positions.length === 0 ? (
-                <div style={{ padding: 40, textAlign: "center", color: "#64748b" }}>
-                  <Layers size={36} style={{ margin: "0 auto 12px", opacity: 0.5 }} />
-                  <div>No open Indian derivatives positions.</div>
-                  <div style={{ fontSize: 12, marginTop: 4 }}>Execute a strategy or turn on Auto-Trade.</div>
+                <div style={{ padding: "48px 20px", textAlign: "center", color: "#94a3b8" }}>
+                  <div style={{ width: 46, height: 46, borderRadius: "50%", background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.25)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+                    <CheckCircle2 size={24} color="#10b981" />
+                  </div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>No Open Derivatives Positions</div>
+                  <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 6, maxWidth: 480, margin: "6px auto 0", lineHeight: 1.5 }}>
+                    {closedTrades.length > 0
+                      ? `All positions from today have reached Target TP or Stop-Loss and exited. ${closedTrades.length} trades settled with profit safely banked in cash.`
+                      : "Execute a strategy from the Strategy Deck or turn on Auto-Trade to enter positions."}
+                  </div>
+                  {closedTrades.length > 0 && (
+                    <div style={{ marginTop: 18 }}>
+                      <button
+                        onClick={() => setPositionSubTab("CLOSED")}
+                        style={{
+                          background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                          color: "#fff",
+                          border: "none",
+                          padding: "9px 20px",
+                          borderRadius: 8,
+                          fontSize: 13,
+                          fontWeight: 800,
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          boxShadow: "0 4px 12px rgba(37,99,235,0.3)",
+                        }}
+                      >
+                        <History size={14} />
+                        View Closed Order History ({closedTrades.length} Trades Settled) →
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

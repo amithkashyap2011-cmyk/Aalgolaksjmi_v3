@@ -143,7 +143,12 @@ export class IntradaySquareOffService {
         { $set: { exitPrice, pnl: realizedPnl, netPnl: realizedPnl } },
       );
 
-      await IndianRiskManager.recordTradeOutcome(userIdStr, realizedPnl);
+      await IndianRiskManager.recordTradeOutcome(userIdStr, realizedPnl, realizedPnl, {
+        symbol: trade.symbol,
+        underlying: trade.underlying,
+        strike: trade.strike,
+        instrument: trade.instrumentType,
+      });
       paper.removePosition(userIdStr, trade.symbol, trade.mode as any, accType);
 
       log(`[INTRADAY_AUTO_CLOSE] Squared off ${userIdStr}:${trade.symbol} qty=${qty} exit=₹${exitPrice} pnl=₹${realizedPnl}`);

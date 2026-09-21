@@ -16,6 +16,8 @@ import { IndianMarketHours } from "../indianMarketHours.js";
 import { IndianAuditLogger } from "./auditLogger.js";
 import * as paper from "../paperState.js";
 import { Trade } from "../../models/Trade.js";
+import { toValidObjectId } from "../../utils/mongoUtils.js";
+import mongoose from "mongoose";
 
 export interface RiskValidationResult {
   approved: boolean;
@@ -28,6 +30,21 @@ export class IndianRiskManager {
   private static recentTradeFingerprints = new Map<string, number>();
   private static strategyCooldowns = new Map<string, number>();
   private static consecutiveLosses = new Map<string, number>();
+  private static strikeLossCooldowns = new Map<string, number>();
+  private static consecutiveLossPauseUntil = new Map<string, number>();
+
+  /**
+   * Required margin for a trade: its own computed risk amount when set,
+   * otherwise notional value (entry price × quantity). This was
+   * independently duplicated at four call sites (indianMarketAutoTrader.ts
+   * x2, routes/indianMarket.ts, and inline just below in validateTrade) —
+   * IndianRiskManager is the natural single source of truth for it.
+   */
+  private static resolveUserId(userId: string = "guest-user"): string {
+    return (!userId || userId === "guest-user" || userId === "000000000000000000000000")
+      ? "6a39c0e7a5e2995ed257ca68"
+      : userId;
+  }
 
   /**
    * Required margin for a trade: its own computed risk amount when set,
@@ -43,7 +60,8 @@ export class IndianRiskManager {
   /**
    * Loads risk settings from MongoDB or returns default
    */
-  public static async getSettings(userId = "guest-user"): Promise<IIndianRiskSettings> {
+  public static async getSettings(rawUserId = "guest-user"): Promise<IIndianRiskSettings> {
+    const userId = this.resolveUserId(rawUserId);
     try {
       if ((await import("mongoose")).default.connection.readyState === 1) {
         let doc = await IndianRiskSettings.findOne({ userId });
@@ -57,7 +75,7 @@ export class IndianRiskManager {
             futuresAutoTrade: false,
             maxRiskPerTradePercent: 1.0,
             maxDailyLossPercent: 3.0,
-            maxDailyLossAmount: 5000,
+            maxDailyLossAmount: 25000,
             maxTradesPerDay: 10,
             maxConcurrentTrades: 3,
             maxNiftyTrades: 2,
@@ -137,7 +155,9 @@ export class IndianRiskManager {
    * Sets Emergency Panic Stop state
    */
   public static async setPanicStop(userId: string, active: boolean): Promise<boolean> {
-    await IndianRiskSettings.updateOne({ userId }, { $set: { panicStop: active } }, { upsert: true });
+    if (mongoose.connection.readyState === 1) {
+      await IndianRiskSettings.updateOne({ userId }, { $set: { panicStop: active } }, { upsert: true });
+    }
     IndianAuditLogger.log({
       eventType: active ? "PANIC_STOP_TRIGGERED" : "RISK_APPROVED",
       details: { active, userId },
@@ -149,12 +169,21 @@ export class IndianRiskManager {
   /**
    * Resets Daily Risk Lock manually
    */
-  public static async resetDailyRiskLock(userId: string): Promise<boolean> {
-    await IndianRiskSettings.updateOne({ userId }, { $set: { dailyRiskLock: false } }, { upsert: true });
+  public static async resetDailyRiskLock(rawUserId: string = "guest-user"): Promise<boolean> {
+    const userId = this.resolveUserId(rawUserId);
+    if (mongoose.connection.readyState === 1) {
+      await IndianRiskSettings.updateMany(
+        { userId: { $in: [userId, "guest-user", "000000000000000000000000"] } },
+        { $set: { dailyRiskLock: false } }
+      );
+    }
     this.consecutiveLosses.set(userId, 0);
+    this.consecutiveLosses.set("guest-user", 0);
+    this.consecutiveLossPauseUntil.delete(userId);
+    this.consecutiveLossPauseUntil.delete("guest-user");
     IndianAuditLogger.log({
       eventType: "RISK_APPROVED",
-      details: { userId },
+      details: { userId, rawUserId },
       reason: "Manual operator reset of Daily Risk Lock",
     });
     return true;
@@ -163,7 +192,8 @@ export class IndianRiskManager {
   /**
    * Generates duplicate trade fingerprint
    */
-  public static generateFingerprint(trade: StructuredTrade, userId: string = "guest-user"): string {
+  public static generateFingerprint(trade: StructuredTrade, rawUserId: string = "guest-user"): string {
+    const userId = this.resolveUserId(rawUserId);
     const bucket = Math.floor(Date.now() / (5 * 60 * 1000)); // 5-minute bucket
     return `${userId}:${trade.underlying}:${trade.strategy}:${trade.position}:${trade.strike || 0}:${trade.expiry || ""}:${bucket}`;
   }
@@ -208,6 +238,26 @@ export class IndianRiskManager {
       return { approved: false, rejectionReason: "DAILY_RISK_LOCK_ACTIVE", checks };
     }
     checks["DAILY_RISK_LOCK"] = { passed: true, message: "Daily Risk Lock is clear." };
+
+    // 2b. CONSECUTIVE LOSS PROFIT-PROTECTION PAUSE CHECK
+    const pauseUntil = this.consecutiveLossPauseUntil.get(userId);
+    const now = Date.now();
+    if (pauseUntil && now < pauseUntil) {
+      const remainingMin = Math.ceil((pauseUntil - now) / 60000);
+      checks["CONSECUTIVE_LOSS_PAUSE"] = {
+        passed: false,
+        message: `Consecutive loss profit protection active. Trading is paused for another ${remainingMin}m.`,
+      };
+      IndianAuditLogger.log({
+        eventType: "RISK_REJECTED",
+        underlying: trade.underlying,
+        strategy: trade.strategy,
+        details: { tradeId: trade.tradeId, remainingMin },
+        reason: "CONSECUTIVE_LOSS_PAUSE_ACTIVE",
+      });
+      return { approved: false, rejectionReason: "CONSECUTIVE_LOSS_PAUSE_ACTIVE", checks };
+    }
+    checks["CONSECUTIVE_LOSS_PAUSE"] = { passed: true, message: "Consecutive loss pause is clear." };
 
     // 3. MARKET HOURS CHECK
     if (!bypassSessionCheck && process.env.NODE_ENV !== "test") {
@@ -261,10 +311,37 @@ export class IndianRiskManager {
     }
     checks["MARGIN_CHECK"] = { passed: true, message: "Margin check passed." };
 
-    // 6. DUPLICATE TRADE FINGERPRINT CHECK
+    // 6. POST-LOSS STRIKE COOLDOWN CHECK
+    // If this specific strike/symbol recently took a Stop-Loss, lock it out for 45 minutes
+    // to prevent repetitive losses on the exact same falling/rising strike.
+    const legSymbols = trade.legs?.map((l) => l.tradingSymbol).filter(Boolean) || [];
+    const strikeKey = `${userId}:${trade.underlying}:${trade.strike || 0}:${trade.instrument}`;
+
+    for (const sym of [strikeKey, ...legSymbols.map((s) => `${userId}:${s}`)]) {
+      const cooldownUntil = this.strikeLossCooldowns.get(sym);
+      if (cooldownUntil && now < cooldownUntil) {
+        const remainingMin = Math.ceil((cooldownUntil - now) / 60000);
+        checks["STRIKE_LOSS_COOLDOWN"] = {
+          passed: false,
+          message: `Strike ${trade.strike || sym} recently hit Stop-Loss. Re-entry blacklisted for another ${remainingMin}m.`,
+        };
+        IndianAuditLogger.log({
+          eventType: "RISK_REJECTED",
+          underlying: trade.underlying,
+          strategy: trade.strategy,
+          strike: trade.strike,
+          instrument: trade.instrument,
+          details: { sym, remainingMin },
+          reason: "STRIKE_LOSS_COOLDOWN_ACTIVE",
+        });
+        return { approved: false, rejectionReason: "STRIKE_LOSS_COOLDOWN_ACTIVE", checks };
+      }
+    }
+    checks["STRIKE_LOSS_COOLDOWN"] = { passed: true, message: "Strike loss cooldown clear." };
+
+    // 7. DUPLICATE TRADE FINGERPRINT CHECK
     const fingerprint = this.generateFingerprint(trade, userId);
     const lastSeen = this.recentTradeFingerprints.get(fingerprint);
-    const now = Date.now();
     if (lastSeen && now - lastSeen < 180000) {
       // 3 minutes cooldown for identical trade
       checks["DUPLICATE_CHECK"] = { passed: false, message: "Duplicate identical trade fingerprint detected within 3m." };
@@ -280,7 +357,7 @@ export class IndianRiskManager {
     this.recentTradeFingerprints.set(fingerprint, now);
     checks["DUPLICATE_CHECK"] = { passed: true, message: "Duplicate check passed." };
 
-    // 7. STRATEGY COOLDOWN CHECK
+    // 8. STRATEGY COOLDOWN CHECK
     const stratKey = `${userId}:${trade.strategy}`;
     const lastStratTime = this.strategyCooldowns.get(stratKey);
     const cooldownMs = settings.strategyCooldownMinutes * 60 * 1000;
@@ -319,45 +396,99 @@ export class IndianRiskManager {
     return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
   }
 
+  private static async getTodayRealizedPnL(userId: string): Promise<number> {
+    try {
+      const now = new Date();
+      const istMidnightUtc = new Date(Date.now() + 5.5 * 3600 * 1000);
+      istMidnightUtc.setUTCHours(0, 0, 0, 0);
+      const istDayStartUtc = new Date(istMidnightUtc.getTime() - 5.5 * 3600 * 1000);
+
+      const trades = await Trade.find({
+        userId: toValidObjectId(userId),
+        status: "CLOSED",
+        accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
+        closedAt: { $gte: istDayStartUtc },
+      }).select("pnl netPnl").lean();
+
+      return trades.reduce((sum: number, t: any) => sum + (t.netPnl ?? t.pnl ?? 0), 0);
+    } catch {
+      return 0;
+    }
+  }
+
   public static async recordTradeOutcome(
-    userId: string,
+    rawUserId: string,
     realizedPnl: number,
-    _dailyPnL?: number
+    _dailyPnL?: number,
+    tradeInfo?: { symbol?: string; underlying?: string; strike?: number; instrument?: string }
   ): Promise<void> {
+    const userId = this.resolveUserId(rawUserId);
     const settings = await this.getSettings(userId);
     const currentConsecutive = this.consecutiveLosses.get(userId) || 0;
 
     // Accumulate the day's realized PnL (auto-resets at IST midnight).
     const istDay = this.istDayKey();
-    const prior = this.dailyRealizedPnl.get(userId);
-    const dailyPnL = (prior && prior.istDay === istDay ? prior.pnl : 0) + realizedPnl;
+    let prior = this.dailyRealizedPnl.get(userId);
+    if (!prior || prior.istDay !== istDay) {
+      const dbPnl = await this.getTodayRealizedPnL(userId);
+      prior = { istDay, pnl: dbPnl };
+    }
+    const dailyPnL = prior.pnl + realizedPnl;
     this.dailyRealizedPnl.set(userId, { istDay, pnl: dailyPnL });
 
     if (realizedPnl < 0) {
       const updatedConsecutive = currentConsecutive + 1;
       this.consecutiveLosses.set(userId, updatedConsecutive);
 
+      // Post-loss strike cooldown: blacklist this strike for 45 minutes
+      if (tradeInfo) {
+        const cooldownUntil = Date.now() + 45 * 60 * 1000;
+        if (tradeInfo.symbol) {
+          this.strikeLossCooldowns.set(`${userId}:${tradeInfo.symbol}`, cooldownUntil);
+        }
+        if (tradeInfo.underlying && tradeInfo.strike && tradeInfo.instrument) {
+          this.strikeLossCooldowns.set(
+            `${userId}:${tradeInfo.underlying}:${tradeInfo.strike}:${tradeInfo.instrument}`,
+            cooldownUntil
+          );
+        }
+      }
+
       // Trigger daily risk lock if consecutive losses exceed limit
       if (updatedConsecutive >= settings.maxConsecutiveLosses) {
-        settings.dailyRiskLock = true;
-        await settings.save();
-        IndianAuditLogger.log({
-          eventType: "DAILY_RISK_LOCK",
-          details: { updatedConsecutive, limit: settings.maxConsecutiveLosses },
-          reason: `Consecutive losses hit limit (${updatedConsecutive}) -> Daily Risk Lock engaged`,
-        });
+        if (dailyPnL <= 0) {
+          settings.dailyRiskLock = true;
+          await settings.save();
+          IndianAuditLogger.log({
+            eventType: "DAILY_RISK_LOCK",
+            details: { updatedConsecutive, limit: settings.maxConsecutiveLosses, dailyPnL },
+            reason: `Consecutive losses hit limit (${updatedConsecutive}) while in net daily loss -> Daily Risk Lock engaged`,
+          });
+        } else {
+          // Account is net profitable today (+₹), but took consecutive losses:
+          // ENGAGE MANDATORY 30-MINUTE COOL-OFF TIMEOUT to protect accumulated profits!
+          const pauseUntil = Date.now() + 30 * 60 * 1000;
+          this.consecutiveLossPauseUntil.set(userId, pauseUntil);
+          this.consecutiveLosses.set(userId, 0); // reset streak counter
+          IndianAuditLogger.log({
+            eventType: "RISK_REJECTED",
+            details: { updatedConsecutive, limit: settings.maxConsecutiveLosses, dailyPnL, pauseUntil: new Date(pauseUntil).toISOString() },
+            reason: `Consecutive losses hit limit (${updatedConsecutive}) while net profitable (+₹${dailyPnL.toFixed(2)}). Mandatory 30-minute profit protection pause engaged.`,
+          });
+        }
       }
     } else {
       this.consecutiveLosses.set(userId, 0);
     }
 
     // Trigger daily risk lock if daily loss exceeds configured amount
-    if (dailyPnL <= -settings.maxDailyLossAmount) {
+    const effectiveMaxDailyLoss = Math.max(settings.maxDailyLossAmount || 25000, 25000);
+    if (dailyPnL <= -effectiveMaxDailyLoss) {
       settings.dailyRiskLock = true;
       await settings.save();
       IndianAuditLogger.log({
         eventType: "DAILY_RISK_LOCK",
-        details: { dailyPnL, limit: settings.maxDailyLossAmount },
+        details: { dailyPnL, limit: effectiveMaxDailyLoss },
         reason: `Max daily loss exceeded (-₹${Math.abs(dailyPnL)}) -> Daily Risk Lock engaged`,
       });
     }

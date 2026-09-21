@@ -458,7 +458,12 @@ export class AutoPilotStateMachine {
         return balance;
       });
 
-      await IndianRiskManager.recordTradeOutcome(userIdStr, filledRealizedPnl, filledRealizedPnl);
+      await IndianRiskManager.recordTradeOutcome(userIdStr, filledRealizedPnl, filledRealizedPnl, {
+        symbol: tradeDoc.symbol,
+        underlying: tradeDoc.underlying,
+        strike: tradeDoc.strike,
+        instrument: tradeDoc.instrumentType || (tradeDoc as any).instrument,
+      });
 
       await DistributedCoordinator.completeOrderIntent(idempotencyKey, orderRes.orderId || "FILLED", {
         exitPrice: actualExitPrice,

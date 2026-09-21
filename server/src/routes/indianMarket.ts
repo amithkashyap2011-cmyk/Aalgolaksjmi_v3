@@ -40,6 +40,13 @@ import { requirePermission } from "../middleware/rbac.js";
 const router = express.Router();
 router.use(optionalAuth);
 
+export function resolveIndianUserId(rawUserId?: string): string {
+  if (!rawUserId || rawUserId === "guest-user" || rawUserId === "undefined" || rawUserId === "000000000000000000000000") {
+    return "6a39c0e7a5e2995ed257ca68";
+  }
+  return rawUserId;
+}
+
 /**
  * GET /api/indian-market/session
  * Real-time authoritative Indian market exchange status (holiday, weekend, open/closed)
@@ -58,7 +65,7 @@ router.get("/session", (_req, res) => {
  */
 router.get("/scan", async (req, res) => {
   try {
-    const userId = (req.query.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.query.userId as string);
     const session = IndianMarketService.getMarketSession();
 
     // Only simulate live micro-ticks when the market is strictly OPEN.
@@ -199,7 +206,7 @@ router.get("/strategy-router", (req, res) => {
  */
 router.get(["/risk-settings", "/risk-status"], async (req, res) => {
   try {
-    const userId = (req.query.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.query.userId as string);
     const settings = await IndianRiskManager.getSettings(userId);
     if (IndianMarketAutoTrader.isEnabled()) {
       settings.autoTrade = true;
@@ -215,11 +222,15 @@ router.get(["/risk-settings", "/risk-status"], async (req, res) => {
  */
 router.post("/risk-settings", requirePermission("CHANGE_RISK_LIMIT"), async (req, res) => {
   try {
-    const userId = (req.body.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.body.userId as string);
     if (req.body.autoTrade !== undefined) {
       IndianMarketAutoTrader.setAutoTradingEnabled(Boolean(req.body.autoTrade));
     }
     const settings = await IndianRiskManager.updateSettings(userId, req.body);
+    // Also sync to guest-user alias doc
+    if (userId !== "guest-user") {
+      await IndianRiskManager.updateSettings("guest-user", req.body).catch(() => {});
+    }
     res.json({ success: true, settings });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -231,7 +242,7 @@ router.post("/risk-settings", requirePermission("CHANGE_RISK_LIMIT"), async (req
  */
 router.post("/panic-stop", requirePermission("EMERGENCY_STOP"), async (req, res) => {
   try {
-    const userId = (req.body.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.body.userId as string);
     const { active } = req.body;
     const isPanic = await IndianRiskManager.setPanicStop(userId, Boolean(active));
     res.json({ success: true, panicStop: isPanic });
@@ -245,7 +256,7 @@ router.post("/panic-stop", requirePermission("EMERGENCY_STOP"), async (req, res)
  */
 router.post("/daily-risk-lock/reset", requirePermission("CHANGE_RISK_LIMIT"), async (req, res) => {
   try {
-    const userId = (req.body.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.body.userId as string);
     await IndianRiskManager.resetDailyRiskLock(userId);
     res.json({ success: true, message: "Daily Risk Lock reset successfully." });
   } catch (err: any) {
@@ -305,7 +316,7 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
       });
     }
     const strategyId = sId || strategy;
-    const userId = (req.body.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.body.userId as string);
     const strat = StrategyEngine.getStrategy(strategyId as StrategyId);
 
     if (!strat) {
@@ -609,7 +620,7 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
         message: "Access denied: Cannot place trades on behalf of another user account.",
       });
     }
-    const userId = authUserId || reqUserId || "guest-user";
+    const userId = resolveIndianUserId(authUserId || reqUserId);
 
     // 🛡️ Guard 2b: Panic stop. /execute-strategy and the autonomous
     // auto-trader both run every order through IndianRiskManager.validateTrade
@@ -897,7 +908,7 @@ router.post("/close-position", requirePermission("CANCEL_ORDER"), async (req: Au
       });
     }
 
-    const userId = authUserId || reqUserId || trade.userId?.toString() || "guest-user";
+    const userId = resolveIndianUserId(authUserId || reqUserId || trade.userId?.toString());
 
     const exitPrice = resolveLivePriceForIndianTrade(trade);
     const spec = AuthoritativeLedger.resolveInstrumentSpec(trade.symbol);
@@ -1034,7 +1045,7 @@ router.get("/history", async (req, res) => {
  */
 router.post("/auto-execute", requirePermission("CREATE_ORDER"), async (req, res) => {
   try {
-    const userId = (req.body.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.body.userId as string);
     const mode = (req.body.mode as "PAPER" | "LIVE") || "PAPER";
     const productType = (req.body.productType as "MIS" | "CNC") || "MIS";
     const overrideSymbol = req.body.symbol;
@@ -1052,10 +1063,13 @@ router.post("/auto-execute", requirePermission("CREATE_ORDER"), async (req, res)
 router.post("/toggle-auto-trade", requirePermission("ENABLE_AUTONOMOUS"), async (req, res) => {
   try {
     const { enabled } = req.body;
-    const userId = (req.body.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.body.userId as string);
     const isBool = Boolean(enabled);
     const currentState = IndianMarketAutoTrader.setAutoTradingEnabled(isBool);
     await IndianRiskManager.updateSettings(userId, { autoTrade: isBool } as any);
+    if (userId !== "guest-user") {
+      await IndianRiskManager.updateSettings("guest-user", { autoTrade: isBool } as any).catch(() => {});
+    }
     res.json({
       success: true,
       enabled: currentState,
@@ -1074,7 +1088,7 @@ let fundsCache: { timestamp: number; key: string; data: any } = { timestamp: 0, 
 router.get("/funds", async (req, res) => {
   try {
     const rawUserId = (req.query.userId as string) || (req as any).userId;
-    const userId = (!rawUserId || rawUserId === "guest-user") ? "6a39c0e7a5e2995ed257ca68" : rawUserId;
+    const userId = resolveIndianUserId(rawUserId);
     const mode = (req.query.mode as "PAPER" | "LIVE") || "PAPER";
     const cacheKey = `${userId}:${mode}`;
 
@@ -1179,7 +1193,7 @@ router.get("/funds", async (req, res) => {
  */
 router.get(["/account/reconciliation", "/reconciliation"], async (req, res) => {
   try {
-    const userId = (req.query.userId as string) || "guest-user";
+    const userId = resolveIndianUserId(req.query.userId as string);
     const mode = (req.query.mode as "PAPER" | "LIVE") || "PAPER";
 
     const wallet = paper.getWallet(userId, mode, "INDIAN_NSE" as any);
@@ -1271,7 +1285,7 @@ router.post("/funds/deposit", requirePermission("CREATE_ORDER"), async (req, res
     // the WalletTransaction audit below is skipped because "guest-user" is not
     // a valid ObjectId). Remapping keeps the deposit and the display in sync.
     const rawUserId = (req.body.userId as string) || "guest-user";
-    const userId = (!rawUserId || rawUserId === "guest-user") ? "6a39c0e7a5e2995ed257ca68" : rawUserId;
+    const userId = resolveIndianUserId(rawUserId);
     const mode = (req.body.mode as "PAPER" | "LIVE") || "PAPER";
     const amount = Number(req.body.amount);
     if (isNaN(amount) || amount <= 0) {

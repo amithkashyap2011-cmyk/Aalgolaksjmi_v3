@@ -95,6 +95,13 @@ export class IndianMarketService {
       optionChain,
       regime: regimeAnalysis.regime,
       timestamp: new Date(),
+      indicators: {
+        rsi14: marketData.rsi14,
+        adx14: marketData.adx14,
+        open: marketData.open,
+        high: marketData.high,
+        low: marketData.low,
+      },
     };
 
     // 1. Evaluate quantitative derivative strategies

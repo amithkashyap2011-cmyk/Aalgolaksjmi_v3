@@ -345,6 +345,14 @@ export interface MarketEvaluationContext {
   optionChain?: OptionChainData;
   regime: MarketRegime;
   timestamp: Date;
+  indicators?: {
+    rsi14?: number;
+    adx14?: number;
+    open?: number;
+    high?: number;
+    low?: number;
+    vwap?: number;
+  };
 }
 
 export interface RiskSettings {

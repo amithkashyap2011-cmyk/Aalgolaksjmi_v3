@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, Fragment } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../store/useAppStore';
 import { useDashboardStore } from '../store/useDashboardStore';
-import { formatCurrency, withInr } from '../lib/currency';
+import { formatCurrency, formatInrWithUsd, withInr } from '../lib/currency';
 import {
   ClipboardList, ChevronDown, ChevronRight, RefreshCw,
   Archive, Trash2, ArchiveRestore, Eye, EyeOff, AlertTriangle, X, XCircle,
@@ -71,9 +71,12 @@ function TabBtn({ active, color, onClick, children }: { active: boolean; color: 
     <button
       onClick={onClick}
       style={{
-        position: "relative", background: "none", border: "none", cursor: "pointer",
-        padding: "10px 2px 12px", fontSize: 14, fontWeight: active ? 800 : 600,
-        color: active ? "var(--ds-text)" : "var(--ds-text-faint)",
+        padding: "10px 0", background: "none", border: "none",
+        fontSize: 12, fontWeight: active ? 800 : 600,
+        color: active ? color : "var(--ds-text-muted)",
+        cursor: "pointer", position: "relative",
+        borderBottom: active ? `2px solid ${color}` : "2px solid transparent",
+        marginBottom: -1,
       }}
     >
       {children}
@@ -103,9 +106,29 @@ export default function OrdersPage() {
     if (activeMarket === "INDIA" || activeMarket === "CRYPTO") setMarketState(activeMarket);
   }, [activeMarket]);
 
-  const tab: Tab = (searchParams.get("tab")?.toUpperCase() as Tab) || "HOLDINGS";
   const [openOrdersCount, setOpenOrdersCount] = useState(0);
   const [holdingsCount, setHoldingsCount]     = useState(0);
+  const [historyCount, setHistoryCount]       = useState(0);
+
+  const tabParam = searchParams.get("tab")?.toUpperCase() as Tab | null;
+  const tab: Tab = tabParam || (holdingsCount === 0 && historyCount > 0 ? "HISTORY" : "HOLDINGS");
+
+  const isIndianItem = (item?: any) => market === "INDIA" || item?.accountType?.startsWith("INDIAN_") || item?.market === "INDIA";
+
+  const formatPrice = (price: any, item?: any) => {
+    if (price == null || isNaN(Number(price))) return "—";
+    const num = parseFloat(price);
+    return isIndianItem(item)
+      ? `₹${num.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : `$${num.toFixed(2)}`;
+  };
+
+  const formatItemPnl = (val: number, item?: any) => {
+    if (isIndianItem(item)) {
+      return formatInrWithUsd(val, inrRate);
+    }
+    return formatCurrency(val, { mode: currencyMode, inrRate });
+  };
 
   const setMarket = (m: Market) => {
     setMarketState(m);
@@ -168,20 +191,26 @@ export default function OrdersPage() {
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userId, showArchived, tab, market]);
 
-  /* Open-orders and holdings count for the tab labels — kept live regardless of which tab is active */
-  useEffect(() => {
-    let cancelled = false;
+  const refreshCounts = () => {
     fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=PENDING`, { signal: AbortSignal.timeout(15000) })
       .then((r) => r.json())
-      .then((d) => { if (!cancelled) setOpenOrdersCount(Array.isArray(d) ? d.length : 0); })
-      .catch(() => { if (!cancelled) setOpenOrdersCount(0); });
+      .then((d) => setOpenOrdersCount(Array.isArray(d) ? d.length : 0))
+      .catch(() => setOpenOrdersCount(0));
 
     fetch(`/aqea-ui/positions?userId=${encodeURIComponent(activeUserId)}&market=${market}`, { signal: AbortSignal.timeout(15000) })
       .then((r) => r.json())
-      .then((d) => { if (!cancelled) setHoldingsCount(Array.isArray(d) ? d.length : 0); })
-      .catch(() => { if (!cancelled) setHoldingsCount(0); });
+      .then((d) => setHoldingsCount(Array.isArray(d) ? d.length : 0))
+      .catch(() => setHoldingsCount(0));
 
-    return () => { cancelled = true; };
+    fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=ALL`, { signal: AbortSignal.timeout(15000) })
+      .then((r) => r.json())
+      .then((d) => setHistoryCount(Array.isArray(d) ? d.length : 0))
+      .catch(() => setHistoryCount(0));
+  };
+
+  /* Open-orders, holdings, and order history count for the tab labels — kept live regardless of which tab is active */
+  useEffect(() => {
+    refreshCounts();
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [market, activeUserId]);
 
@@ -192,13 +221,13 @@ export default function OrdersPage() {
       const entrySide = isLongSide(o.side) ? "BUY" : "SELL";
       out.push({
         id: `${o._id}-entry`, orderId: o._id, symbol: o.symbol, type: "ENTRY",
-        side: entrySide, price: o.entryPrice, qty: o.quantity, time: o.openedAt, accountType: o.accountType,
+        side: entrySide, price: o.entryPrice, qty: o.quantity, time: o.openedAt, accountType: o.accountType, market: o.market,
       });
       if (o.exitPrice != null && o.closedAt) {
         out.push({
           id: `${o._id}-exit`, orderId: o._id, symbol: o.symbol, type: "EXIT",
           side: entrySide === "BUY" ? "SELL" : "BUY", price: o.exitPrice, qty: o.quantity, time: o.closedAt,
-          pnl: o.pnl, accountType: o.accountType,
+          pnl: o.pnl, accountType: o.accountType, market: o.market,
         });
       }
     }
@@ -213,6 +242,7 @@ export default function OrdersPage() {
       await archiveTrade(id, !currentlyArchived);
       flash(currentlyArchived ? "Trade restored from archive" : "Trade archived");
       await load();
+      refreshCounts();
     } catch { flash("Action failed — is the server running?"); }
     finally { setArchivingId(null); }
   };
@@ -223,6 +253,7 @@ export default function OrdersPage() {
       const res = await archiveAllTrades(activeUserId);
       flash(`${res?.count || 0} trades archived`);
       await load();
+      refreshCounts();
     } catch { flash("Archive failed"); }
   };
 
@@ -232,6 +263,7 @@ export default function OrdersPage() {
       const res = await clearArchivedTrades(activeUserId);
       flash(`${res?.deleted || 0} archived trades permanently deleted`);
       await load();
+      refreshCounts();
     } catch { flash("Clear failed"); }
   };
 
@@ -251,6 +283,7 @@ export default function OrdersPage() {
       }
       flash("Position closed");
       await load();
+      refreshCounts();
     } catch { flash("Close failed — is the server running?"); }
     finally { setClosingId(null); }
   };
@@ -332,10 +365,10 @@ export default function OrdersPage() {
 
       {/* Binance-style underline tabs */}
       <div style={{ display:"flex", gap:24, borderBottom:`1px solid ${BORD}` }}>
-        <TabBtn active={tab === "HOLDINGS"} color={marketColor} onClick={() => setTab("HOLDINGS")}>Holdings{holdingsCount > 0 ? ` (${holdingsCount})` : ""}</TabBtn>
-        <TabBtn active={tab === "OPEN"}     color={marketColor} onClick={() => setTab("OPEN")}>Open Orders({openOrdersCount})</TabBtn>
-        <TabBtn active={tab === "HISTORY"}  color={marketColor} onClick={() => setTab("HISTORY")}>Order History</TabBtn>
-        <TabBtn active={tab === "TRADES"}   color={marketColor} onClick={() => setTab("TRADES")}>Trade History</TabBtn>
+        <TabBtn active={tab === "HOLDINGS"} color={marketColor} onClick={() => setTab("HOLDINGS")}>Holdings{holdingsCount > 0 ? ` (${holdingsCount})` : " (0)"}</TabBtn>
+        <TabBtn active={tab === "OPEN"}     color={marketColor} onClick={() => setTab("OPEN")}>Open Orders ({openOrdersCount})</TabBtn>
+        <TabBtn active={tab === "HISTORY"}  color={marketColor} onClick={() => setTab("HISTORY")}>Order History ({historyCount})</TabBtn>
+        <TabBtn active={tab === "TRADES"}   color={marketColor} onClick={() => setTab("TRADES")}>Trade History ({tab === "TRADES" ? fills.length : (historyCount > 0 ? historyCount * 2 : 0)})</TabBtn>
       </div>
 
       {actionMsg && (
@@ -383,6 +416,25 @@ export default function OrdersPage() {
                   >
                     View Active Holdings ({holdingsCount}) →
                   </button>
+                ) : historyCount > 0 ? (
+                  <button
+                    onClick={() => setTab("HISTORY")}
+                    style={{
+                      background: marketColor,
+                      color: "#fff",
+                      border: "none",
+                      padding: "8px 16px",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    View Order History ({historyCount} settled trades) →
+                  </button>
                 ) : null
               }
             />
@@ -408,7 +460,7 @@ export default function OrdersPage() {
                           </span>
                         </td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.quantity ?? o.qty ?? "—"}</td>
-                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.entryPrice ? `$${parseFloat(o.entryPrice).toFixed(2)}` : "—"}</td>
+                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(o.entryPrice, o)}</td>
                         <td style={{ padding:"10px 12px" }}>
                           <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:4, background:`${statusColor(o.status)}18`, color: statusColor(o.status), textTransform:"uppercase" }}>{o.status}</span>
                         </td>
@@ -422,7 +474,32 @@ export default function OrdersPage() {
           )
         ) : tab === "HOLDINGS" ? (
           rows.length === 0 ? (
-            <EmptyState title={emptyCopy.title} sub={emptyCopy.sub} />
+            <EmptyState
+              title={emptyCopy.title}
+              sub={emptyCopy.sub}
+              action={
+                historyCount > 0 ? (
+                  <button
+                    onClick={() => setTab("HISTORY")}
+                    style={{
+                      background: marketColor,
+                      color: "#fff",
+                      border: "none",
+                      padding: "8px 16px",
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    View Order History ({historyCount} settled trades) →
+                  </button>
+                ) : null
+              }
+            />
           ) : (
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
@@ -446,10 +523,10 @@ export default function OrdersPage() {
                           </span>
                         </td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.quantity ?? o.qty ?? "—"}</td>
-                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.entryPrice ? `$${parseFloat(o.entryPrice).toFixed(2)}` : "—"}</td>
-                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.markPrice ? `$${parseFloat(o.markPrice).toFixed(2)}` : "—"}</td>
+                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(o.entryPrice, o)}</td>
+                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(o.markPrice, o)}</td>
                         <td style={{ padding:"10px 12px", color: pnl >= 0 ? G : R, fontFamily:"monospace", fontWeight:700 }}>
-                          {pnl >= 0 ? "+" : ""}{formatCurrency(pnl, { mode: currencyMode, inrRate })}
+                          {pnl >= 0 ? "+" : ""}{formatItemPnl(pnl, o)}
                           {o.unrealisedPnlPct != null && <span style={{ opacity:0.7, marginLeft:4 }}>({o.unrealisedPnlPct >= 0 ? "+" : ""}{Number(o.unrealisedPnlPct).toFixed(2)}%)</span>}
                         </td>
                         <td style={{ padding:"10px 12px", color:"var(--ds-text-faint)", fontSize:11 }}>{o.openedAt ? new Date(o.openedAt).toLocaleString() : "—"}</td>
@@ -496,10 +573,10 @@ export default function OrdersPage() {
                           {isLongSide(f.side) ? "BUY" : "SELL"}
                         </span>
                       </td>
-                      <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{f.price ? `$${parseFloat(f.price).toFixed(2)}` : "—"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(f.price, f)}</td>
                       <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{f.qty ?? "—"}</td>
                       <td style={{ padding:"10px 12px", color: f.pnl == null ? "var(--ds-text-faint)" : f.pnl >= 0 ? G : R, fontFamily:"monospace", fontWeight:700 }}>
-                        {f.pnl == null ? "—" : `${f.pnl >= 0 ? "+" : ""}${formatCurrency(f.pnl, { mode: currencyMode, inrRate })}`}
+                        {f.pnl == null ? "—" : `${f.pnl >= 0 ? "+" : ""}${formatItemPnl(f.pnl, f)}`}
                       </td>
                       <td style={{ padding:"10px 12px", color:"var(--ds-text-faint)", fontSize:11 }}>{f.time ? new Date(f.time).toLocaleString() : "—"}</td>
                     </tr>
@@ -558,24 +635,24 @@ export default function OrdersPage() {
                           </td>
 
                           <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
-                            {o.entryPrice ? `$${parseFloat(o.entryPrice).toFixed(2)}` : "—"}
+                            {formatPrice(o.entryPrice, o)}
                           </td>
 
                           <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
                             {isOpen
-                              ? (o.markPrice ? `$${parseFloat(o.markPrice).toFixed(2)}` : "—")
-                              : (o.exitPrice ? `$${parseFloat(o.exitPrice).toFixed(2)}` : "—")}
+                              ? formatPrice(o.markPrice, o)
+                              : formatPrice(o.exitPrice, o)}
                           </td>
 
                           <td style={{ padding:"10px 12px", color: (isOpen ? livePnl : pnl) >= 0 ? G : R, fontFamily:"monospace", fontWeight:700 }}>
                             {isOpen ? (
                               <>
-                                {livePnl >= 0 ? "+" : ""}{formatCurrency(livePnl, { mode: currencyMode, inrRate })}
+                                {livePnl >= 0 ? "+" : ""}{formatItemPnl(livePnl, o)}
                                 <span style={{ fontSize:9, opacity:0.7, marginLeft:4, fontWeight:600 }}>(Live)</span>
                               </>
                             ) : (
                               <>
-                                {pnl >= 0 ? "+" : ""}{formatCurrency(pnl, { mode: currencyMode, inrRate })}
+                                {pnl >= 0 ? "+" : ""}{formatItemPnl(pnl, o)}
                                 <span style={{ fontSize:9, opacity:0.7, marginLeft:4, fontWeight:600 }}>(Realized)</span>
                               </>
                             )}
@@ -628,8 +705,8 @@ export default function OrdersPage() {
                                     <Row label="Closed"    value={o.closedAt  ? new Date(o.closedAt).toLocaleString()  : "—"} />
                                     {o.archivedAt && <Row label="Archived" value={new Date(o.archivedAt).toLocaleString()} highlight={A} />}
                                     <Row label="Qty"       value={o.quantity  ?? o.qty ?? "—"} />
-                                    <Row label="Entry"     value={o.entryPrice ? `$${parseFloat(o.entryPrice).toFixed(2)}`  : "—"} />
-                                    <Row label="Exit"      value={o.exitPrice  ? `$${parseFloat(o.exitPrice).toFixed(2)}`   : "—"} />
+                                    <Row label="Entry"     value={formatPrice(o.entryPrice, o)} />
+                                    <Row label="Exit"      value={formatPrice(o.exitPrice, o)} />
                                     <Row label="Leverage"  value={o.leverage   ? `${o.leverage}x` : "—"} />
                                   </div>
                                   <div>
@@ -639,7 +716,7 @@ export default function OrdersPage() {
                                     <Row label="Strategy"   value={o.strategy ?? "AQEA"} />
                                     <Row label="Core Score" value={o.coreScore  ?? "—"} />
                                     <Row label="Final Score" value={o.finalScore ?? "—"} />
-                                    <Row label="Net PnL"    value={o.netPnl != null ? withInr(parseFloat(o.netPnl), inrRate, { mode: currencyMode }) : "—"} />
+                                    <Row label="Net PnL"    value={o.netPnl != null ? `${parseFloat(o.netPnl) >= 0 ? "+" : ""}${formatItemPnl(parseFloat(o.netPnl), o)}` : "—"} />
                                   </div>
                                 </div>
                               </div>

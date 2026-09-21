@@ -138,11 +138,15 @@ export class IndianMarketAutoTrader {
    * Automatically constructs, risk-validates, and executes the best trade
    */
   public static async autoExecuteBestTrade(
-    userId: string = "guest-user",
+    rawUserId: string = "guest-user",
     mode: "PAPER" | "LIVE" = "PAPER",
     productType: "MIS" | "CNC" = "MIS",
     overrideSymbol?: string
   ): Promise<any> {
+    const userId = (!rawUserId || rawUserId === "guest-user" || rawUserId === "000000000000000000000000")
+      ? "6a39c0e7a5e2995ed257ca68"
+      : rawUserId;
+
     // Was checked in the manual /execute route but not here — meaning an
     // emergency kill switch stopped a human clicking "buy" but not this
     // same function running unattended every 60s for every user with
@@ -171,6 +175,13 @@ export class IndianMarketAutoTrader {
       optionChain,
       regime: regimeAnalysis.regime,
       timestamp: new Date(),
+      indicators: {
+        rsi14: ticker.rsi14,
+        adx14: ticker.adx14,
+        open: ticker.open,
+        high: ticker.high,
+        low: ticker.low,
+      },
     };
 
     // 0. Sync the authoritative capital ledger from real data BEFORE any capital
@@ -472,12 +483,17 @@ export class IndianMarketAutoTrader {
       try {
         this.lastScanTime = new Date().toISOString();
 
-        const targetUsers = new Set<string>(["guest-user"]);
+        const targetUsers = new Set<string>(["6a39c0e7a5e2995ed257ca68"]);
         if (mongoose.connection.readyState === 1) {
           try {
             const allSettings = await IndianRiskSettings.find({ autoTrade: true }).lean();
             for (const s of allSettings) {
-              if (s.userId) targetUsers.add(s.userId);
+              if (s.userId) {
+                const uid = (s.userId === "guest-user" || s.userId === "000000000000000000000000")
+                  ? "6a39c0e7a5e2995ed257ca68"
+                  : s.userId;
+                targetUsers.add(uid);
+              }
             }
             // Project only _id — this runs every 10s and previously pulled every
             // field of every user document just to collect ids.

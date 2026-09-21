@@ -125,30 +125,120 @@ export class RSIReversalStrategy extends BaseStrategy {
   public readonly id: StrategyId = "RSI_REVERSAL";
   public readonly name = "RSI Overbought / Oversold Reversal";
   public readonly category: StrategyCategory = "MEAN_REVERSION";
-  public readonly description = "Enters long on RSI < 25 turning up and short on RSI > 75 turning down";
+  public readonly description = "Enters long on RSI < 30 turning up and short on RSI > 70 turning down, strictly filtered against falling knives";
   public readonly defaultTimeframe = "15m";
-  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY"];
+  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY", "TRENDING_BULL", "TRENDING_BEAR"];
 
-  public evaluateMarket(context: MarketEvaluationContext) {
+  public evaluateMarket(context: MarketEvaluationContext): {
+    eligible: boolean;
+    score: number;
+    direction: "BULLISH" | "BEARISH" | "NEUTRAL";
+    reasons: string[];
+  } {
+    const rsi = context.indicators?.rsi14 ?? 50;
+    const adx = context.indicators?.adx14 ?? 20;
+    const open = context.indicators?.open ?? context.spotPrice;
+    const spot = context.spotPrice;
+
+    // 1. FALLING KNIFE DETECTION:
+    // If market is crashing/trending down strongly, DO NOT BUY CALLS.
+    // Buying calls into an oversold market during a high-ADX selloff causes rapid stop-loss breaches.
+    const isStrongBearMomentum =
+      context.regime === "TRENDING_BEAR" || (adx > 28 && spot < open);
+
+    const isStrongBullMomentum =
+      context.regime === "TRENDING_BULL" || (adx > 28 && spot > open);
+
+    // Oversold condition (potential bullish bounce)
+    if (rsi < 30) {
+      if (isStrongBearMomentum) {
+        return {
+          eligible: false,
+          score: 35,
+          direction: "NEUTRAL",
+          reasons: [
+            `Falling knife blocked: RSI is oversold (${rsi.toFixed(1)}) but strong downward momentum is active (ADX: ${adx.toFixed(1)}). Call buying prohibited.`,
+          ],
+        };
+      }
+      // Valid oversold bounce in ranging or quiet market
+      const score = Math.min(92, Math.round(72 + (30 - rsi) * 0.8));
+      return {
+        eligible: score >= this.minimumConfidence,
+        score,
+        direction: "BULLISH",
+        reasons: [`RSI oversold mean-reversion bounce confirmed (${rsi.toFixed(1)} < 30) in range-bound structure`],
+      };
+    }
+
+    // Overbought condition (potential bearish rejection / PUT buy)
+    if (rsi > 70) {
+      if (isStrongBullMomentum) {
+        return {
+          eligible: false,
+          score: 35,
+          direction: "NEUTRAL",
+          reasons: [
+            `Strong rally detected: RSI is overbought (${rsi.toFixed(1)}) but upward momentum is strong (ADX: ${adx.toFixed(1)}). Put buying prohibited.`,
+          ],
+        };
+      }
+      // Valid overbought rejection in ranging or quiet market
+      const score = Math.min(92, Math.round(72 + (rsi - 70) * 0.8));
+      return {
+        eligible: score >= this.minimumConfidence,
+        score,
+        direction: "BEARISH",
+        reasons: [`RSI overbought mean-reversion rejection confirmed (${rsi.toFixed(1)} > 70) in range-bound structure`],
+      };
+    }
+
+    // Moderate / neutral RSI
     const isRanging = context.regime === "RANGING" || context.regime === "LOW_VOLATILITY";
-    const score = isRanging ? 78 : 50;
-    return { eligible: score >= this.minimumConfidence, score, reasons: ["RSI extreme boundary reversal pattern in ranging regime"] };
+    if (isRanging) {
+      if (rsi < 40 && !isStrongBearMomentum) {
+        return {
+          eligible: true,
+          score: 72,
+          direction: "BULLISH",
+          reasons: [`RSI lower boundary support bounce in range (${rsi.toFixed(1)})`],
+        };
+      } else if (rsi > 60 && !isStrongBullMomentum) {
+        return {
+          eligible: true,
+          score: 72,
+          direction: "BEARISH",
+          reasons: [`RSI upper boundary resistance rejection in range (${rsi.toFixed(1)})`],
+        };
+      }
+    }
+
+    return {
+      eligible: false,
+      score: 45,
+      direction: "NEUTRAL",
+      reasons: [`RSI is in neutral territory (${rsi.toFixed(1)}), no extreme mean-reversion trigger`],
+    };
   }
 
   public generateSignal(context: MarketEvaluationContext): SignalModel | null {
     const evalRes = this.evaluateMarket(context);
-    if (!evalRes.eligible) return null;
+    if (!evalRes.eligible || evalRes.direction === "NEUTRAL") return null;
+
+    const rsi = context.indicators?.rsi14 ?? (evalRes.direction === "BULLISH" ? 26 : 74);
+    const adx = context.indicators?.adx14 ?? 20;
+
     return {
       signalId: `SIG_RSIR_${Date.now()}`,
       timestamp: new Date().toISOString(),
       underlying: context.underlying,
-      direction: "BULLISH",
+      direction: evalRes.direction,
       confidence: evalRes.score,
       tradeScore: evalRes.score,
       strategy: this.id,
       timeframe: this.defaultTimeframe,
       entryReason: evalRes.reasons,
-      indicators: { rsi: 26 },
+      indicators: { rsi, adx },
       regime: context.regime,
     };
   }
@@ -165,23 +255,60 @@ export class VWAPReversionStrategy extends BaseStrategy {
   public readonly category: StrategyCategory = "MEAN_REVERSION";
   public readonly description = "Trades extended price stretch > 1.5% away from institutional VWAP back towards median";
   public readonly defaultTimeframe = "5m";
-  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY"];
+  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY", "TRENDING_BULL", "TRENDING_BEAR"];
 
-  public evaluateMarket(context: MarketEvaluationContext) {
-    return { eligible: true, score: 76, reasons: ["Price stretched > 1.5% from VWAP median in range regime"] };
+  public evaluateMarket(context: MarketEvaluationContext): {
+    eligible: boolean;
+    score: number;
+    direction: "BULLISH" | "BEARISH" | "NEUTRAL";
+    reasons: string[];
+  } {
+    const spot = context.spotPrice;
+    const open = context.indicators?.open ?? spot;
+    const adx = context.indicators?.adx14 ?? 20;
+
+    // In a strong downtrend (ADX > 28, spot < open), do NOT buy calls trying to reach VWAP above
+    if ((context.regime === "TRENDING_BEAR" || (adx > 28 && spot < open))) {
+      return {
+        eligible: false,
+        score: 30,
+        direction: "NEUTRAL",
+        reasons: ["VWAP reversion blocked: Strong bear trend in progress, price is drifting away from VWAP"],
+      };
+    }
+
+    // If stretched above open in range, mean-revert down
+    if (spot > open * 1.008 && context.regime !== "TRENDING_BULL") {
+      return {
+        eligible: true,
+        score: 75,
+        direction: "BEARISH",
+        reasons: ["Price stretched > 0.8% above intraday median in range, reverting towards VWAP"],
+      };
+    }
+
+    return {
+      eligible: true,
+      score: 74,
+      direction: "BULLISH",
+      reasons: ["Price stretched below VWAP in range regime, mean-reverting towards VWAP median"],
+    };
   }
 
   public generateSignal(context: MarketEvaluationContext): SignalModel | null {
+    const evalRes = this.evaluateMarket(context);
+    if (!evalRes.eligible || evalRes.direction === "NEUTRAL") return null;
+
     return {
       signalId: `SIG_VWAPR_${Date.now()}`,
       timestamp: new Date().toISOString(),
       underlying: context.underlying,
-      direction: "BULLISH",
-      confidence: 76,
-      tradeScore: 76,
+      direction: evalRes.direction,
+      confidence: evalRes.score,
+      tradeScore: evalRes.score,
       strategy: this.id,
       timeframe: this.defaultTimeframe,
-      entryReason: ["VWAP stretch reversion setup confirmed"],
+      entryReason: evalRes.reasons,
       indicators: {},
       regime: context.regime,
     };
@@ -199,23 +326,51 @@ export class BollingerReversionStrategy extends BaseStrategy {
   public readonly category: StrategyCategory = "MEAN_REVERSION";
   public readonly description = "Enters on rejection from outer 2.0-sigma Bollinger Band back towards 20 SMA midline";
   public readonly defaultTimeframe = "15m";
-  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY"];
+  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY", "TRENDING_BULL", "TRENDING_BEAR"];
 
-  public evaluateMarket(context: MarketEvaluationContext) {
-    return { eligible: true, score: 77, reasons: ["Rejection wick from 2.0-sigma outer Bollinger Band"] };
+  public evaluateMarket(context: MarketEvaluationContext): {
+    eligible: boolean;
+    score: number;
+    direction: "BULLISH" | "BEARISH" | "NEUTRAL";
+    reasons: string[];
+  } {
+    const spot = context.spotPrice;
+    const open = context.indicators?.open ?? spot;
+    const adx = context.indicators?.adx14 ?? 20;
+
+    // If bands are expanding downwards in high ADX bear momentum, band-walking is active -> do NOT buy calls
+    if (context.regime === "TRENDING_BEAR" || (adx > 28 && spot < open)) {
+      return {
+        eligible: false,
+        score: 30,
+        direction: "NEUTRAL",
+        reasons: ["Bollinger bounce blocked: Strong downward band-walking in progress (ADX > 28)"],
+      };
+    }
+
+    const isBearishRejection = spot > open * 1.006 && context.regime !== "TRENDING_BULL";
+    return {
+      eligible: true,
+      score: 76,
+      direction: isBearishRejection ? "BEARISH" : "BULLISH",
+      reasons: [isBearishRejection ? "Upper Bollinger Band pin-bar rejection" : "Lower Bollinger Band support bounce in range"],
+    };
   }
 
   public generateSignal(context: MarketEvaluationContext): SignalModel | null {
+    const evalRes = this.evaluateMarket(context);
+    if (!evalRes.eligible || evalRes.direction === "NEUTRAL") return null;
+
     return {
       signalId: `SIG_BBR_${Date.now()}`,
       timestamp: new Date().toISOString(),
       underlying: context.underlying,
-      direction: "BULLISH",
-      confidence: 77,
-      tradeScore: 77,
+      direction: evalRes.direction,
+      confidence: evalRes.score,
+      tradeScore: evalRes.score,
       strategy: this.id,
       timeframe: this.defaultTimeframe,
-      entryReason: ["Outer Bollinger Band touch & pin-bar rejection"],
+      entryReason: evalRes.reasons,
       indicators: {},
       regime: context.regime,
     };
@@ -233,23 +388,51 @@ export class SupportResistanceReversalStrategy extends BaseStrategy {
   public readonly category: StrategyCategory = "MEAN_REVERSION";
   public readonly description = "Trades sharp candlestick bounce / rejection off key institutional support / resistance levels";
   public readonly defaultTimeframe = "15m";
-  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY"];
+  public readonly allowedRegimes: MarketRegime[] = ["RANGING", "LOW_VOLATILITY", "TRENDING_BULL", "TRENDING_BEAR"];
 
-  public evaluateMarket(context: MarketEvaluationContext) {
-    return { eligible: true, score: 75, reasons: ["Tested horizontal support with high buyer absorption"] };
+  public evaluateMarket(context: MarketEvaluationContext): {
+    eligible: boolean;
+    score: number;
+    direction: "BULLISH" | "BEARISH" | "NEUTRAL";
+    reasons: string[];
+  } {
+    const spot = context.spotPrice;
+    const open = context.indicators?.open ?? spot;
+    const adx = context.indicators?.adx14 ?? 20;
+
+    // Breakdown through support: if strong bear trend, support is broken, not bouncing
+    if (context.regime === "TRENDING_BEAR" || (adx > 28 && spot < open)) {
+      return {
+        eligible: false,
+        score: 30,
+        direction: "NEUTRAL",
+        reasons: ["Support bounce blocked: Major support breakdown with high bear momentum"],
+      };
+    }
+
+    const isResistance = spot > open * 1.005;
+    return {
+      eligible: true,
+      score: 75,
+      direction: isResistance ? "BEARISH" : "BULLISH",
+      reasons: [isResistance ? "Resistance level ceiling rejection candle" : "Support level held with absorption candle"],
+    };
   }
 
   public generateSignal(context: MarketEvaluationContext): SignalModel | null {
+    const evalRes = this.evaluateMarket(context);
+    if (!evalRes.eligible || evalRes.direction === "NEUTRAL") return null;
+
     return {
       signalId: `SIG_SRR_${Date.now()}`,
       timestamp: new Date().toISOString(),
       underlying: context.underlying,
-      direction: "BULLISH",
-      confidence: 75,
-      tradeScore: 75,
+      direction: evalRes.direction,
+      confidence: evalRes.score,
+      tradeScore: evalRes.score,
       strategy: this.id,
       timeframe: this.defaultTimeframe,
-      entryReason: ["Support level held with absorption candle"],
+      entryReason: evalRes.reasons,
       indicators: {},
       regime: context.regime,
     };

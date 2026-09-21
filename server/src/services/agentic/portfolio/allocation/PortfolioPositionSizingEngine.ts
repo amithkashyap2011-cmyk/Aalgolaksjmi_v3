@@ -97,9 +97,12 @@ export class PortfolioPositionSizingEngine {
     }
 
     // 1. Quantize strictly to integer lot size multiples (rounded down)
+    const oneLotCapital = roundTo2(lotSize * entryPrice);
+    const canCoverOneLot = oneLotCapital <= totalEquity * 0.50;
+
     let lots = Math.floor(rawQuantity / lotSize);
-    if (lots < 1 && rawQuantity >= lotSize * 0.5) {
-      // Allow 1 minimum lot if raw size was close
+    if (lots < 1 && canCoverOneLot) {
+      // Indivisible contract floor: allow 1 minimum lot if total equity can safely cover it
       lots = 1;
     }
 
@@ -110,19 +113,29 @@ export class PortfolioPositionSizingEngine {
     // 2. Enforce Max Capital Constraint
     if (capitalRequiredInr > maxCapitalLimit) {
       lots = Math.floor(maxCapitalLimit / (lotSize * entryPrice));
+      if (lots < 1 && canCoverOneLot) {
+        lots = 1;
+        cappedBy = "NONE";
+      } else {
+        cappedBy = "STRATEGY_CAP";
+      }
       quantity = lots * lotSize;
       capitalRequiredInr = roundTo2(quantity * entryPrice);
       riskAmountInr = roundTo2(quantity * slDistance);
-      cappedBy = "STRATEGY_CAP";
     }
 
     // 3. Enforce Max Risk Constraint
     if (riskAmountInr > maxRiskCapInr) {
       lots = Math.floor(maxRiskCapInr / (lotSize * slDistance));
+      if (lots < 1 && canCoverOneLot) {
+        lots = 1;
+        cappedBy = "NONE";
+      } else {
+        cappedBy = "RISK_BUDGET";
+      }
       quantity = lots * lotSize;
       capitalRequiredInr = roundTo2(quantity * entryPrice);
       riskAmountInr = roundTo2(quantity * slDistance);
-      cappedBy = "RISK_BUDGET";
     }
 
     // Final safety checks

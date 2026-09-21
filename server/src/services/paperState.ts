@@ -198,7 +198,10 @@ export function getWalletKeys() {
 }
 
 export function getWallet(userId: string, mode: string, accountType: string = "FUTURES"): Map<string, number> {
-  const k = walletKey(userId, mode, accountType);
+  const effectiveUserId = (accountType && accountType.startsWith("INDIAN_") && (!userId || userId === "guest-user"))
+    ? "6a39c0e7a5e2995ed257ca68"
+    : userId;
+  const k = walletKey(effectiveUserId, mode, accountType);
   let w = wallets.get(k);
   if (!w) {
     w = new Map([["USDT", 0], ["INR", 0]]);
@@ -219,11 +222,12 @@ export function getIndianWalletWithFallback(
   mode: string,
   accountType: string
 ): { wallet: Map<string, number>; accountType: string; availableMargin: number } {
-  let wallet = getWallet(userId, mode, accountType);
+  const effectiveUserId = (!userId || userId === "guest-user") ? "6a39c0e7a5e2995ed257ca68" : userId;
+  let wallet = getWallet(effectiveUserId, mode, accountType);
   let availableMargin = wallet.get("INR") || 0;
   let resolvedAccountType = accountType;
   if (availableMargin <= 0) {
-    const fallbackWallet = getWallet(userId, mode, "INDIAN_NSE");
+    const fallbackWallet = getWallet(effectiveUserId, mode, "INDIAN_NSE");
     if ((fallbackWallet.get("INR") || 0) > 0) {
       wallet = fallbackWallet;
       resolvedAccountType = "INDIAN_NSE";
