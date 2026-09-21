@@ -431,6 +431,52 @@ describe("Production Accounting & Auto-Pilot Reconciliation Test Suite", () => {
       expect(mockBroker.orderPlacedCount).toBe(0);
       AutoPilotStateMachine.setMode("AUTO");
     });
+
+    test("Dynamic multi-tier trailing stop ratchets SL to breakeven at +16% and locks profit at +28% and +40%", async () => {
+      AutoPilotStateMachine.setMode("AUTO");
+      const mockBroker = new MockBrokerAdapter();
+
+      const tradeDoc: any = {
+        _id: "trade_trail_test",
+        symbol: "NIFTY26SEP24500CE",
+        side: "BUY",
+        quantity: 150,
+        origQty: 150,
+        entryPrice: 100.00,
+        tp: 150.00,
+        sl: 72.00,
+        status: "OPEN",
+        mode: "PAPER",
+        meta: {},
+        save: async () => {},
+      };
+
+      // 1. Initial tick at entry price
+      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 100.00, timestamp: Date.now() }, mockBroker);
+      expect(tradeDoc.sl).toBe(72.00);
+
+      // 2. Tick reaches +17% (117) -> Should shift SL to Breakeven (+0.50 buffer)
+      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 117.00, timestamp: Date.now() }, mockBroker);
+      expect(tradeDoc.sl).toBe(100.50);
+      expect(tradeDoc.meta.trailingStage).toBe("BREAKEVEN_SHIFT");
+
+      // 3. Tick reaches +30% (130) -> Should shift SL to +15% profit lock (115.00)
+      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 130.00, timestamp: Date.now() }, mockBroker);
+      expect(tradeDoc.sl).toBe(115.00);
+      expect(tradeDoc.meta.trailingStage).toBe("PROFIT_LOCK_15PCT");
+
+      // 4. Tick reaches +42% (142) -> Should shift SL to +25% profit lock (125.00)
+      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 142.00, timestamp: Date.now() }, mockBroker);
+      expect(tradeDoc.sl).toBe(125.00);
+      expect(tradeDoc.meta.trailingStage).toBe("PROFIT_LOCK_25PCT");
+
+      // 5. Price pulls back from 142 down to 124 (below trailed SL of 125) -> Triggers exit with profit!
+      const exitRes = await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 124.00, timestamp: Date.now() }, mockBroker);
+      expect(exitRes.triggered).toBe(true);
+      expect(exitRes.reason).toContain("TRAILING_STOP");
+      expect(exitRes.reason).toContain("PROFIT_LOCK_25PCT");
+      expect(mockBroker.orderPlacedCount).toBe(1);
+    });
   });
 
   // ─── 5. ACCOUNTING LEDGER INVARIANTS (Section 23) ─────────────────

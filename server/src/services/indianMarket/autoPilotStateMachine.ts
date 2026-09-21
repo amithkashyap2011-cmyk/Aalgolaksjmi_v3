@@ -183,19 +183,111 @@ export class AutoPilotStateMachine {
 
     const currentLtp = roundTo2(tick.ltp);
     const isLong = tradeDoc.side === "BUY";
-    const sl = Number(tradeDoc.sl || tradeDoc.stopLoss || 0);
+    const entryPrice = Number(tradeDoc.entryPrice || 0);
+    let sl = Number(tradeDoc.sl || tradeDoc.stopLoss || 0);
     const tp = Number(tradeDoc.tp || tradeDoc.target || 0);
+
+    // ── Dynamic Breakeven & Multi-Tier Trailing Stop-Loss ──────────────────────
+    if (entryPrice > 0 && sl > 0) {
+      if (!tradeDoc.meta) tradeDoc.meta = {};
+      const highestLtp = Math.max(tradeDoc.meta.highestLtp || entryPrice, currentLtp);
+      const lowestLtp = Math.min(tradeDoc.meta.lowestLtp || entryPrice, currentLtp);
+      tradeDoc.meta.highestLtp = highestLtp;
+      tradeDoc.meta.lowestLtp = lowestLtp;
+
+      if (isLong) {
+        const peakGainPct = ((highestLtp - entryPrice) / entryPrice) * 100;
+        let candidateSl = sl;
+        let trailStage = tradeDoc.meta.trailingStage || "NONE";
+
+        // Tier 3: Peak gain >= +40% -> Lock in +25% profit
+        if (peakGainPct >= 40) {
+          const lockPrice = roundTo2(entryPrice * 1.25);
+          if (lockPrice > candidateSl) {
+            candidateSl = lockPrice;
+            trailStage = "PROFIT_LOCK_25PCT";
+          }
+        }
+        // Tier 2: Peak gain >= +28% -> Lock in +15% profit
+        else if (peakGainPct >= 28) {
+          const lockPrice = roundTo2(entryPrice * 1.15);
+          if (lockPrice > candidateSl) {
+            candidateSl = lockPrice;
+            trailStage = "PROFIT_LOCK_15PCT";
+          }
+        }
+        // Tier 1: Peak gain >= +16% -> Shift to Breakeven (+₹0.50 buffer for charges)
+        else if (peakGainPct >= 16) {
+          const bePrice = roundTo2(entryPrice + 0.50);
+          if (bePrice > candidateSl) {
+            candidateSl = bePrice;
+            trailStage = "BREAKEVEN_SHIFT";
+          }
+        }
+
+        if (candidateSl > sl) {
+          tradeDoc.sl = candidateSl;
+          tradeDoc.stopLoss = candidateSl;
+          tradeDoc.meta.trailingStage = trailStage;
+          sl = candidateSl;
+          try {
+            if (typeof tradeDoc.save === "function") await tradeDoc.save();
+          } catch {}
+        }
+      } else {
+        // Short position dynamic trailing
+        const peakDropPct = ((entryPrice - lowestLtp) / entryPrice) * 100;
+        let candidateSl = sl;
+        let trailStage = tradeDoc.meta.trailingStage || "NONE";
+
+        if (peakDropPct >= 40) {
+          const lockPrice = roundTo2(entryPrice * 0.75);
+          if (lockPrice < candidateSl) {
+            candidateSl = lockPrice;
+            trailStage = "PROFIT_LOCK_25PCT";
+          }
+        } else if (peakDropPct >= 28) {
+          const lockPrice = roundTo2(entryPrice * 0.85);
+          if (lockPrice < candidateSl) {
+            candidateSl = lockPrice;
+            trailStage = "PROFIT_LOCK_15PCT";
+          }
+        } else if (peakDropPct >= 16) {
+          const bePrice = roundTo2(entryPrice - 0.50);
+          if (bePrice < candidateSl) {
+            candidateSl = bePrice;
+            trailStage = "BREAKEVEN_SHIFT";
+          }
+        }
+
+        if (candidateSl < sl) {
+          tradeDoc.sl = candidateSl;
+          tradeDoc.stopLoss = candidateSl;
+          tradeDoc.meta.trailingStage = trailStage;
+          sl = candidateSl;
+          try {
+            if (typeof tradeDoc.save === "function") await tradeDoc.save();
+          } catch {}
+        }
+      }
+    }
 
     let triggerReason: string | null = null;
     let triggerType: "TARGET" | "STOP" | null = null;
 
-    // Check Stop-Loss
+    // Check Stop-Loss (including dynamic trailing / breakeven SL)
     if (sl > 0) {
       if (isLong && currentLtp <= sl) {
-        triggerReason = `STOP_LOSS_TRIGGERED (LTP ₹${currentLtp.toFixed(2)} <= SL ₹${sl.toFixed(2)})`;
+        const isTrailing = tradeDoc.meta?.trailingStage && tradeDoc.meta.trailingStage !== "NONE";
+        triggerReason = isTrailing
+          ? `STOP_LOSS_TRIGGERED (TRAILING_STOP: LTP ₹${currentLtp.toFixed(2)} <= Trailed SL ₹${sl.toFixed(2)} [${tradeDoc.meta.trailingStage}])`
+          : `STOP_LOSS_TRIGGERED (LTP ₹${currentLtp.toFixed(2)} <= SL ₹${sl.toFixed(2)})`;
         triggerType = "STOP";
       } else if (!isLong && currentLtp >= sl) {
-        triggerReason = `STOP_LOSS_TRIGGERED (LTP ₹${currentLtp.toFixed(2)} >= SL ₹${sl.toFixed(2)})`;
+        const isTrailing = tradeDoc.meta?.trailingStage && tradeDoc.meta.trailingStage !== "NONE";
+        triggerReason = isTrailing
+          ? `STOP_LOSS_TRIGGERED (TRAILING_STOP: LTP ₹${currentLtp.toFixed(2)} >= Trailed SL ₹${sl.toFixed(2)} [${tradeDoc.meta.trailingStage}])`
+          : `STOP_LOSS_TRIGGERED (LTP ₹${currentLtp.toFixed(2)} >= SL ₹${sl.toFixed(2)})`;
         triggerType = "STOP";
       }
     }

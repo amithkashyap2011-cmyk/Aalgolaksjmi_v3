@@ -41,8 +41,8 @@ function buildMeanRevOptionTrade(
   const optionPremium = OptionChainService.calculateTheoreticalPrice(context.spotPrice, strikeInfo.strike, dteYears, 0.15, isCall);
   const greeks = OptionChainService.calculateBlackScholesGreeks(context.spotPrice, strikeInfo.strike, dteYears, 0.15, isCall);
 
-  const stopLoss = Number((optionPremium * 0.75).toFixed(2)); // 25% SL
-  const target = Number((optionPremium * 1.50).toFixed(2)); // 50% TP (1:2 RR)
+  const stopLoss = Number((optionPremium * 0.72).toFixed(2)); // 28% initial SL (with dynamic BE shift at +16%)
+  const target = Number((optionPremium * 1.45).toFixed(2)); // 45% TP (high-probability fill)
   const lossPerUnit = optionPremium - stopLoss;
 
   const calculatedQty = Math.floor((accountCapital * (riskPercent / 100)) / (lossPerUnit * instrument.lotSize)) * instrument.lotSize;
@@ -196,19 +196,19 @@ export class RSIReversalStrategy extends BaseStrategy {
     // Moderate / neutral RSI
     const isRanging = context.regime === "RANGING" || context.regime === "LOW_VOLATILITY";
     if (isRanging) {
-      if (rsi < 40 && !isStrongBearMomentum) {
+      if (rsi < 35 && !isStrongBearMomentum) {
         return {
           eligible: true,
-          score: 72,
+          score: 75,
           direction: "BULLISH",
-          reasons: [`RSI lower boundary support bounce in range (${rsi.toFixed(1)})`],
+          reasons: [`RSI oversold support bounce in range (${rsi.toFixed(1)} < 35)`],
         };
-      } else if (rsi > 60 && !isStrongBullMomentum) {
+      } else if (rsi > 65 && !isStrongBullMomentum) {
         return {
           eligible: true,
-          score: 72,
+          score: 75,
           direction: "BEARISH",
-          reasons: [`RSI upper boundary resistance rejection in range (${rsi.toFixed(1)})`],
+          reasons: [`RSI overbought resistance rejection in range (${rsi.toFixed(1)} > 65)`],
         };
       }
     }
