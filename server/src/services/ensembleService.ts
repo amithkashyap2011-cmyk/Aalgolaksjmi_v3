@@ -418,8 +418,9 @@ export function getDynamicMoEWeights(
   return normalized;
 }
 
-// ── In-Memory Cache for Ensemble Reports (4-second TTL for instant UI responsiveness) ──
+// ── In-Memory Cache for Ensemble Reports (10-second TTL + In-Flight Deduplication) ──
 const ensembleReportCache = new Map<string, { report: EnsembleReport; expiresAt: number }>();
+const inFlightReports = new Map<string, Promise<EnsembleReport>>();
 
 export async function buildEnsembleReport(symbol: string, interval = "5m", limit = 200, userId?: string | null): Promise<EnsembleReport> {
   const normalizedSymbol = symbol.toUpperCase();
@@ -428,6 +429,31 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
   if (cached && cached.expiresAt > Date.now()) {
     return cached.report;
   }
+
+  const existing = inFlightReports.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+
+  const computePromise = (async () => {
+    try {
+      return await executeBuildEnsembleReport(normalizedSymbol, interval, limit, userId, cacheKey);
+    } finally {
+      inFlightReports.delete(cacheKey);
+    }
+  })();
+
+  inFlightReports.set(cacheKey, computePromise);
+  return computePromise;
+}
+
+async function executeBuildEnsembleReport(
+  normalizedSymbol: string,
+  interval: string,
+  limit: number,
+  userId: string | null | undefined,
+  cacheKey: string
+): Promise<EnsembleReport> {
 
   // 1. Fetch Market Data in Parallel
   const [klines, fundingRate, openInterest, book, orderFlowRes] = await Promise.all([
@@ -712,8 +738,8 @@ export async function buildEnsembleReport(symbol: string, interval = "5m", limit
     selfLearning: selfLearningSummary,
   };
 
-  // Cache for 4 seconds
-  ensembleReportCache.set(cacheKey, { report: reportResult, expiresAt: Date.now() + 4000 });
+  // Cache for 10 seconds for instant UI responsiveness and to prevent model thrashing
+  ensembleReportCache.set(cacheKey, { report: reportResult, expiresAt: Date.now() + 10000 });
   return reportResult;
 }
 

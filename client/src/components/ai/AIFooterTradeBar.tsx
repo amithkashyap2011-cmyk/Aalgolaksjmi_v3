@@ -147,7 +147,7 @@ async function fetchRealCryptoPrediction(
   accountType: "SPOT" | "FUTURES" | "BOTH",
   livePrice?: number,
 ): Promise<UpcomingTradePrediction> {
-  const report = await api.getEnsembleReport(symbol, "5m", 100);
+  const report = await api.getEnsembleReport(symbol, "5m", 200);
   const direction: "LONG" | "SHORT" | "HOLD" =
     report.signal === "LONG" ? "LONG" : report.signal === "SHORT" ? "SHORT" : "HOLD";
 

@@ -194,7 +194,7 @@ export async function getKlines(symbol: string, interval = "1h", limit = 100) {
 }
 
 export async function getEnsembleReport(symbol: string, interval = "5m", limit = 200) {
-  return request<any>(`/trading/ensemble-report?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+  return request<any>(`/trading/ensemble-report?symbol=${symbol}&interval=${interval}&limit=${limit}`, {}, 30000);
 }
 
 export async function getTradeHistory(mode: string, limit = 50, skip = 0, status?: "OPEN" | "CLOSED") {
@@ -420,7 +420,7 @@ export async function getCurrentAnimalWeights() {
 }
 
 export async function getMarketCheck(symbol = "BTCUSDT", interval = "5m", limit = 200) {
-  return request<any>(`/trading/market-check?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+  return request<any>(`/trading/market-check?symbol=${symbol}&interval=${interval}&limit=${limit}`, {}, 30000);
 }
 
 export async function pauseTrading() {

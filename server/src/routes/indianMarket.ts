@@ -61,6 +61,63 @@ router.get("/session", (_req, res) => {
 });
 
 /**
+ * GET /api/indian-market/ticks
+ * Real-time Indian market ticker pulse for MarketRibbon
+ */
+router.get("/ticks", (_req, res) => {
+  try {
+    const session = IndianMarketService.getMarketSession();
+    if (session.isOpen) {
+      const now = Date.now();
+      SUPPORTED_INDIAN_SYMBOLS.forEach((sym, idx) => {
+        const item = MOCK_LIVE_INDIAN_TIKERS[sym];
+        if (item) {
+          const wave = Math.sin(now / 15000 + idx * 1.3);
+          const deltaPct = wave * 0.0012;
+          const newLtp = Number((item.ltp * (1 + deltaPct)).toFixed(2));
+          item.ltp = newLtp;
+          if (newLtp > item.high) item.high = newLtp;
+          if (newLtp < item.low) item.low = newLtp;
+          item.rsi14 = Number(Math.max(35, Math.min(75, 52 + Math.sin(now / 20000 + idx) * 18)).toFixed(1));
+          item.adx14 = Number(Math.max(15, Math.min(50, 28 + Math.cos(now / 25000 + idx) * 12)).toFixed(1));
+        }
+      });
+    }
+
+    const ticks = SUPPORTED_INDIAN_SYMBOLS.map((sym) => {
+      const item = MOCK_LIVE_INDIAN_TIKERS[sym] || {
+        ltp: 1000,
+        open: 1000,
+        high: 1000,
+        low: 1000,
+        volume: 0,
+        rsi14: 50,
+        adx14: 20,
+      };
+      const cfg = INDIAN_SYMBOLS[sym];
+      const change = item.ltp - item.open;
+      const changePct = item.open > 0 ? Number(((change / item.open) * 100).toFixed(2)) : 0;
+      const decision: "LONG" | "SHORT" | "HOLD" =
+        item.rsi14 > 58 ? "LONG" : item.rsi14 < 42 ? "SHORT" : "HOLD";
+      const score = Math.min(95, Math.round(50 + Math.abs(item.rsi14 - 50) * 1.2 + (item.adx14 || 20) * 0.5));
+
+      return {
+        symbol: sym === "NIFTY50" ? "NIFTY 50" : sym,
+        name: cfg?.name || sym,
+        price: item.ltp,
+        changePct,
+        decision,
+        score,
+      };
+    });
+
+    res.json({ success: true, ticks });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/indian-market/scan
  */
 router.get("/scan", async (req, res) => {

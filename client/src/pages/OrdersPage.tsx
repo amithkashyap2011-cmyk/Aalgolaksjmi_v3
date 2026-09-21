@@ -176,7 +176,7 @@ export default function OrdersPage() {
         tab === "OPEN"     ? `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=100&market=${market}&status=PENDING` :
         tab === "HOLDINGS" ? `/aqea-ui/positions?userId=${encodeURIComponent(activeUserId)}&market=${market}` :
                               `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=100&market=${market}&status=ALL${showArchived ? "&archived=true" : ""}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(25000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (seq !== loadSeq.current) return; // a newer load() has since started; drop this stale result
@@ -192,17 +192,17 @@ export default function OrdersPage() {
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userId, showArchived, tab, market]);
 
   const refreshCounts = () => {
-    fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=PENDING`, { signal: AbortSignal.timeout(15000) })
+    fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=PENDING`, { signal: AbortSignal.timeout(25000) })
       .then((r) => r.json())
       .then((d) => setOpenOrdersCount(Array.isArray(d) ? d.length : 0))
       .catch(() => setOpenOrdersCount(0));
 
-    fetch(`/aqea-ui/positions?userId=${encodeURIComponent(activeUserId)}&market=${market}`, { signal: AbortSignal.timeout(15000) })
+    fetch(`/aqea-ui/positions?userId=${encodeURIComponent(activeUserId)}&market=${market}`, { signal: AbortSignal.timeout(25000) })
       .then((r) => r.json())
       .then((d) => setHoldingsCount(Array.isArray(d) ? d.length : 0))
       .catch(() => setHoldingsCount(0));
 
-    fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=ALL`, { signal: AbortSignal.timeout(15000) })
+    fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=ALL`, { signal: AbortSignal.timeout(25000) })
       .then((r) => r.json())
       .then((d) => setHistoryCount(Array.isArray(d) ? d.length : 0))
       .catch(() => setHistoryCount(0));
