@@ -13,6 +13,7 @@ import {
 } from "./strategyTypes.js";
 import { IndianRiskSettings, IIndianRiskSettings } from "../../models/IndianRiskSettings.js";
 import { IndianMarketHours } from "../indianMarketHours.js";
+import { ExchangeCalendar } from "./exchangeCalendar.js";
 import { IndianAuditLogger } from "./auditLogger.js";
 import * as paper from "../paperState.js";
 import { Trade } from "../../models/Trade.js";
@@ -268,6 +269,32 @@ export class IndianRiskManager {
       }
     }
     checks["MARKET_HOURS"] = { passed: true, message: "Market session is active." };
+
+    // 3b. INTRADAY MIS CUTOFF CHECK (15:10 IST)
+    // Prevents fresh MIS entries in the final 20 minutes before market close,
+    // avoiding collision with the mandatory 15:15 IST auto-square-off window.
+    if (!bypassSessionCheck && process.env.NODE_ENV !== "test") {
+      const isMIS = trade.productType === "MIS" || !trade.productType;
+      if (isMIS) {
+        const ist = ExchangeCalendar.toIST();
+        const currentMinutes = ist.getHours() * 60 + ist.getMinutes();
+        if (currentMinutes >= (15 * 60 + 10)) {
+          checks["INTRADAY_CUTOFF"] = {
+            passed: false,
+            message: "MIS intraday order placement is closed after 15:10 IST to protect against auto square-off.",
+          };
+          IndianAuditLogger.log({
+            eventType: "RISK_REJECTED",
+            underlying: trade.underlying,
+            strategy: trade.strategy,
+            details: { tradeId: trade.tradeId, currentMinutes },
+            reason: "INTRADAY_MIS_CUTOFF_ACTIVE",
+          });
+          return { approved: false, rejectionReason: "INTRADAY_MIS_CUTOFF_ACTIVE", checks };
+        }
+      }
+    }
+    checks["INTRADAY_CUTOFF"] = { passed: true, message: "Intraday entry window is open." };
 
     // 4. AUTO-TRADE PERMISSION CHECK (for automated execution)
     const isNifty = trade.underlying.includes("NIFTY") && !trade.underlying.includes("BANK");

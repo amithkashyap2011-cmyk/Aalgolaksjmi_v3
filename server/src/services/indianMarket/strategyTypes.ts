@@ -299,6 +299,9 @@ export interface StructuredTrade {
   expiry?: string;
   quantity: number;
   lotSize: number;
+  productType?: "MIS" | "CNC" | "NRML";
+  accountType?: string;
+  timeInForce?: "DAY" | "IOC" | "GTC";
   entryType: EntryType;
   entryPrice: number;
   averageEntryPrice: number;

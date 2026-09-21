@@ -24,6 +24,7 @@ import { IndianRiskManager } from "./indianMarket/riskManager.js";
 import { OptionChainService } from "./indianMarket/optionChainService.js";
 import { InstrumentMaster } from "./indianMarket/instrumentMaster.js";
 import { ExpiryResolver } from "./indianMarket/expiryResolver.js";
+import { ExchangeCalendar } from "./indianMarket/exchangeCalendar.js";
 import { PaperExecutionAdapter, LiveBrokerExecutionAdapter, BrokerAdapter } from "./indianMarket/brokerAdapter.js";
 import { IndianAuditLogger } from "./indianMarket/auditLogger.js";
 import { StructuredTrade, UnderlyingSymbol } from "./indianMarket/strategyTypes.js";
@@ -515,6 +516,13 @@ export class IndianMarketAutoTrader {
         for (const uid of targetUsers) {
           try {
             if (!session.isOpen && process.env.NODE_ENV !== "test") {
+              continue;
+            }
+
+            // Indian MIS Cutoff: No fresh intraday MIS orders placed after 15:10 IST
+            const ist = ExchangeCalendar.toIST();
+            const currentMinutes = ist.getHours() * 60 + ist.getMinutes();
+            if (currentMinutes >= (15 * 60 + 10) && process.env.NODE_ENV !== "test") {
               continue;
             }
 
