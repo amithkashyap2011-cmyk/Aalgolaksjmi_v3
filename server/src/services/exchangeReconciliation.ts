@@ -106,7 +106,7 @@ export async function reconcileUserLive(userId: string): Promise<ReconciliationS
     summary.errors.push(`Failed to check position mode: ${err.message}`);
   }
 
-  const localOpenTrades = await Trade.find({ userId: toValidObjectId(userId), mode: "LIVE", status: "OPEN" }).lean();
+  const localOpenTrades = await Trade.find({ userId: toValidObjectId(userId), mode: "LIVE", accountType: "FUTURES", status: "OPEN" }).lean();
   summary.localOpenTrades = localOpenTrades.length;
 
   const exchangeBySymbol = new Map(exchangePositions.map(p => [p.symbol, p]));
@@ -153,7 +153,7 @@ export async function reconcileUserLive(userId: string): Promise<ReconciliationS
     const qty = Math.abs(parseFloat(pos.positionAmt));
     if (qty < 1e-9 || localSymbolsSeen.has(pos.symbol)) continue;
 
-    const alreadyPlaceholder = await Trade.findOne({ userId: toValidObjectId(userId), mode: "LIVE", symbol: pos.symbol, status: "OPEN" }).lean();
+    const alreadyPlaceholder = await Trade.findOne({ userId: toValidObjectId(userId), mode: "LIVE", accountType: "FUTURES", symbol: pos.symbol, status: "OPEN" }).lean();
     if (alreadyPlaceholder) continue; // already reconciled on a prior run — idempotent
 
     summary.orphanedExchangePositions++;
