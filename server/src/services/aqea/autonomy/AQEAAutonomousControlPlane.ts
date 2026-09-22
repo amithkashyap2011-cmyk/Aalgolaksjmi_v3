@@ -475,7 +475,8 @@ export class AQEAAutonomousControlPlane {
       {
         symbol: input.symbol,
         marketDomain: input.marketDomain,
-        accountType: input.accountType
+        accountType: input.accountType,
+        decisionId
       }
     );
 
@@ -508,7 +509,10 @@ export class AQEAAutonomousControlPlane {
     const conformalPassed = uncertaintyScore < 0.85;
     const bayesianConviction = Math.max(pBuy, pSell) * (1.0 - uncertaintyScore * 0.3);
     const bayesianGatePassed = bayesianConviction >= 0.60;
-    const evGatePassed = netEV > 0 && lcbEV > 0;
+    // Fusion is the calibrated no-trade authority.  The control plane may add
+    // stricter LCB/risk gates, but it must never reopen a Fusion rejection.
+    const fusionApproved = fusionResult.direction !== "HOLD" && fusionResult.evPassesGate;
+    const evGatePassed = fusionApproved && netEV > 0 && lcbEV > 0;
 
     // ── Step 13: Layer 3 Immutable Risk Engine Checks ──
     let riskApproved = true;
@@ -538,6 +542,9 @@ export class AQEAAutonomousControlPlane {
     } else if (!bayesianGatePassed) {
       riskApproved = false;
       riskRejectionReason = `INSUFFICIENT_BAYESIAN_CONVICTION (${bayesianConviction.toFixed(3)} < 0.60)`;
+    } else if (!fusionApproved) {
+      riskApproved = false;
+      riskRejectionReason = `FUSION_NO_TRADE_GATE: ${fusionResult.decisionReason}`;
     } else if (!evGatePassed) {
       riskApproved = false;
       riskRejectionReason = `NEGATIVE_OR_ZERO_LCB_NET_EV (NetEV: ${netEV.toFixed(4)}, LCB: ${lcbEV.toFixed(4)})`;
@@ -548,10 +555,10 @@ export class AQEAAutonomousControlPlane {
     let direction: "LONG" | "SHORT" | "HOLD" = "HOLD";
 
     if (riskApproved && evGatePassed) {
-      if (pBuy > pSell && pBuy > pHold && pBuy >= 0.55) {
+      if (fusionResult.direction === "LONG") {
         action = "BUY";
         direction = "LONG";
-      } else if (pSell > pBuy && pSell > pHold && pSell >= 0.55) {
+      } else if (fusionResult.direction === "SHORT") {
         action = "SELL";
         direction = "SHORT";
       } else {
@@ -667,6 +674,7 @@ export class AQEAAutonomousControlPlane {
         regime,
         featureVersion: 2,
         dataSource: input.mode === "LIVE" ? "LIVE" : "PAPER",
+        dataProvenance: input.mode === "LIVE" ? "LIVE_RUNTIME" : "PAPER_RUNTIME",
         isForward: true,
         isUntouched: true,
         buyProbability: decision.probabilities.P_BUY,
@@ -686,7 +694,7 @@ export class AQEAAutonomousControlPlane {
         marketImpact: costBreakdown.marketImpactPercent,
         netEV: decision.netEV,
         uncertainty: decision.uncertaintyScore,
-        modelBreakdowns: {}
+        modelBreakdowns: fusionResult.decisionRecord?.modelBreakdowns || {}
       });
     } catch (err: any) {
       console.warn(`[AQEAAutonomousControlPlane] Telemetry record error: ${err.message}`);

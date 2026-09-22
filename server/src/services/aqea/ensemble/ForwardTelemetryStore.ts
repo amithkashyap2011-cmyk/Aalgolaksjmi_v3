@@ -1630,8 +1630,10 @@ export class ForwardTelemetryStore {
     const startTimestamp = forwardRecords.length > 0 ? forwardRecords[0].timestamp : Date.now();
     const endTimestamp = forwardRecords.length > 0 ? forwardRecords[forwardRecords.length - 1].timestamp : Date.now();
 
+    const containsLive = forwardRecords.some(r => r.dataSource === "LIVE");
+    const containsPaper = forwardRecords.some(r => r.dataSource === "PAPER");
     return {
-      dataSource: forwardRecords.length > 0 ? "PAPER" : "FORWARD_OOS",
+      dataSource: containsLive ? "LIVE" : (containsPaper ? "PAPER" : "FORWARD_OOS"),
       sampleCount: forwardRecords.length,
       startTimestamp,
       endTimestamp,

@@ -135,6 +135,12 @@ export interface ModelDecisionSnapshot {
   participating: boolean;
   status: string;
   inferenceMode: string;
+  isProxy?: boolean;
+  isFallback?: boolean;
+  modelRequested?: string;
+  modelActuallyUsed?: string;
+  modelVersion?: string;
+  inferenceSource?: string;
 }
 
 export interface EnsembleDecisionRecord {
@@ -610,7 +616,7 @@ export class UnifiedEnsembleFusion {
     nlpSentiment: { score: number; confidence: number; classification: string },
     regime: AnyRegime,
     evParams: EVGateParams,
-    contextMeta?: { symbol?: string; marketDomain?: "CRYPTO" | "INDIAN"; accountType?: string }
+    contextMeta?: { symbol?: string; marketDomain?: "CRYPTO" | "INDIAN"; accountType?: string; decisionId?: string }
   ): EnsembleFusionResult {
     const fusionStart = Date.now();
     const modelWeights: ModelWeightBreakdown[] = [];
@@ -646,7 +652,13 @@ export class UnifiedEnsembleFusion {
         effectiveWeight: 0,
         participating: isEligible,
         status: pred.status,
-        inferenceMode: pred.inferenceMode
+        inferenceMode: pred.inferenceMode,
+        isProxy: pred.inferenceMode === "PROXY" || pred.isTrained === false,
+        isFallback: pred.inferenceMode === "UNAVAILABLE",
+        modelRequested: pred.modelName,
+        modelActuallyUsed: pred.modelName,
+        modelVersion: pred.modelVersion,
+        inferenceSource: pred.inferenceMode === "REAL_MODEL" ? "REMOTE_MODEL" : pred.inferenceMode
       };
     }
 
@@ -900,7 +912,7 @@ export class UnifiedEnsembleFusion {
 
     // Step 18: Build persistent decision record (for Forward Tracking & Attribution)
     const decisionRecord: EnsembleDecisionRecord = {
-      decisionId: `ENS_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+      decisionId: contextMeta?.decisionId || `ENS_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
       timestamp: Date.now(),
       symbol: contextMeta?.symbol || "MARKET",
       marketDomain,
