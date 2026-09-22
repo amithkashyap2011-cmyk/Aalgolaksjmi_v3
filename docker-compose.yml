@@ -12,7 +12,10 @@ services:
       # unused PostgreSQL database.
       - MONGO_URI=mongodb://mongo:27017/aalgolakshmi
       - REDIS_URL=redis://redis:6379
-      - NODE_ENV=production
+      # This stack exposes HTTP directly for local use. Production must set
+      # NODE_ENV=production and provide TLS or a trusted TLS proxy explicitly.
+      - NODE_ENV=${NODE_ENV:-development}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
     depends_on:
       - mongo
       - redis

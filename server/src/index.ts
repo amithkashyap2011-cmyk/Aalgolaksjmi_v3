@@ -78,6 +78,20 @@ import { setIO } from "./services/socketService.js";
 import { UITelemetryService } from "./services/uiTelemetry.js";
 import { startManualSLTPMonitor, stopManualSLTPMonitor } from "./services/manualSLTPMonitor.js";
 
+// A detached process supervisor can close stdout/stderr while the server is
+// still flushing a log line. Stream errors are emitted asynchronously, so a
+// try/catch around console.error cannot prevent an EPIPE from reaching the
+// uncaught-exception handler and triggering a restart loop.
+const ignoreBrokenLogPipe = (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE") {
+    return;
+  }
+  // Preserve the normal fail-fast behaviour for unexpected stream failures.
+  process.nextTick(() => { throw error; });
+};
+process.stdout.on("error", ignoreBrokenLogPipe);
+process.stderr.on("error", ignoreBrokenLogPipe);
+
 // 🛡️ CRITICAL: Process-level Error Handlers
 process.on("uncaughtException", (err) => {
   const msg = `[FATAL_UNCAUGHT_EXCEPTION] ${new Date().toISOString()}: ${err.stack || err}\n`;
@@ -114,7 +128,7 @@ process.on("unhandledRejection", (reason, promise) => {
   try { console.error(msg); } catch {}
 });
 
-import { validateTransportSecurityOnStartup, transportSecurityMiddleware } from "./middleware/transportSecurity.js";
+import { getTransportConfig, validateTransportSecurityOnStartup, transportSecurityMiddleware } from "./middleware/transportSecurity.js";
 import {
   authRateLimiter,
   orderPlacementLimiter,
@@ -128,6 +142,12 @@ import {
 validateTransportSecurityOnStartup();
 
 const app = express();
+
+// Express must trust the configured TLS terminator before req.secure can
+// reflect X-Forwarded-Proto. Never trust forwarded headers by default.
+if (getTransportConfig().trustProxy) {
+  app.set("trust proxy", 1);
+}
 
 app.use(transportSecurityMiddleware);
 app.use(brokerAndInternalEventGuard);
