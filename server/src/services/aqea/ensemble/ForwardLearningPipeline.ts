@@ -93,6 +93,20 @@ export interface ForwardLearningPipelineReport {
   summary: string;
 }
 
+// Production candidates only. Benchmark and proxy experts continue to be
+// observed in dedicated shadow paths, but are not default inputs to live
+// weight updates or promotion evaluation.
+export const DEFAULT_FORWARD_LEARNING_CANDIDATES = [
+  "MAMBA_RESEARCH_V1",
+  "AARYAN_MOMENTUM",
+  "AAYUSH_MEAN_REVERSION",
+  "SMC_INSTITUTIONAL",
+  "ORDER_FLOW_CVD",
+  "GAYATRI_24_SIGNAL",
+  "OHMKARA_528HZ",
+  "FINANCIAL_NLP"
+] as const;
+
 // ═══════════════════════════════════════════════════════════════════
 //  Pipeline Orchestrator
 // ═══════════════════════════════════════════════════════════════════
@@ -105,18 +119,7 @@ export class ForwardLearningPipeline {
    * Fail-closed: halts at Stage 2 if N < 100 persistent OOS observations.
    */
   public static async executeCycle(
-    candidateModels: string[] = [
-      "MAMBA_RESEARCH_V1",
-      "CNN_1D_V1_BENCHMARK",
-      "BILSTM_V1_BENCHMARK",
-      "AARYAN_MOMENTUM",
-      "AAYUSH_MEAN_REVERSION",
-      "SMC_INSTITUTIONAL",
-      "ORDER_FLOW_CVD",
-      "GAYATRI_24_SIGNAL",
-      "OHMKARA_528HZ",
-      "FINANCIAL_NLP"
-    ]
+    candidateModels: string[] = [...DEFAULT_FORWARD_LEARNING_CANDIDATES]
   ): Promise<ForwardLearningPipelineReport> {
     const timestamp = Date.now();
 

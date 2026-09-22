@@ -40,6 +40,7 @@ import { DynamicCostModel, CalculatedFriction } from "../ensemble/DynamicCostMod
 import { StatisticalTests, BootstrapCI } from "../ensemble/StatisticalTests.js";
 import { ChampionChallengerEngine } from "../governance/ChampionChallengerEngine.js";
 import { ModelExpertPrediction, ProbabilityDistribution } from "../ai/IModelExpert.js";
+import { ModernModelRegistry } from "../ai/ModernModelRegistry.js";
 import { AQEAAuthoritativeDecision, IAQEAAuthoritativeDecision } from "../../../models/AQEAAuthoritativeDecision.js";
 import { ModelAuthoritySnapshot } from "../../../models/ModelAuthoritySnapshot.js";
 import { AQEA_CONFIG } from "../config.js";
@@ -150,6 +151,16 @@ export interface TradeExecutionAuthorization {
 
 export class AQEAAutonomousControlPlane {
   private static cachedSubsetSearch: Map<string, { result: SubsetSearchResult; timestamp: number }> = new Map();
+
+  private static toAuthorityModelId(modelName: string): string {
+    const aliases: Record<string, string> = {
+      MAMBA_RESEARCH_V1: "MAMBA",
+      CNN_1D_V1_BENCHMARK: "CNN_1D",
+      CNN_1D_V1: "CNN_1D",
+      BILSTM_V1_BENCHMARK: "BILSTM"
+    };
+    return aliases[modelName] || modelName;
+  }
   private static readonly SUBSET_CACHE_TTL_MS = 60_000; // 1 minute cache for fast tick execution
 
   /**
@@ -359,90 +370,23 @@ export class AQEAAutonomousControlPlane {
     ];
 
     // ── Step 5: Gather Deep Learning Predictions ──
-    const dlPredictions: ModelExpertPrediction[] = input.dlPredictions || [
-      {
-        modelName: "MAMBA",
-        modelVersion: "v1.0",
-        architecture: "MAMBA_SSM",
-        inferenceMode: "REAL_MODEL",
-        direction: "LONG",
-        confidence: 0.78,
-        probability: 0.75,
-        probabilities: { LONG: 0.75, SHORT: 0.15, HOLD: 0.10 },
-        uncertainty: 0.20,
-        predictionInterval: [0.005, 0.025],
-        expectedMovePercent: 0.015,
-        latencyMs: 3.2,
-        status: "PRODUCTION",
-        regimeCompatibility: 0.95,
-        featureVersion: 2,
-        isTrained: true,
-        timestamp
-      },
-      {
-        modelName: "TRANSFORMER_MICRO",
-        modelVersion: "v1.0",
-        architecture: "TRANSFORMER_ATTN",
-        inferenceMode: "REAL_MODEL",
-        direction: "LONG",
-        confidence: 0.74,
-        probability: 0.70,
-        probabilities: { LONG: 0.70, SHORT: 0.20, HOLD: 0.10 },
-        uncertainty: 0.22,
-        predictionInterval: [0.005, 0.025],
-        expectedMovePercent: 0.014,
-        latencyMs: 4.1,
-        status: "PRODUCTION",
-        regimeCompatibility: 0.90,
-        featureVersion: 2,
-        isTrained: true,
-        timestamp
-      },
-      {
-        modelName: "CNN_1D",
-        modelVersion: "v1.0",
-        architecture: "DILATED_CNN",
-        inferenceMode: "REAL_MODEL",
-        direction: "LONG",
-        confidence: 0.68,
-        probability: 0.65,
-        probabilities: { LONG: 0.65, SHORT: 0.25, HOLD: 0.10 },
-        uncertainty: 0.25,
-        predictionInterval: [0.004, 0.020],
-        expectedMovePercent: 0.012,
-        latencyMs: 2.5,
-        status: "PRODUCTION",
-        regimeCompatibility: 0.85,
-        featureVersion: 2,
-        isTrained: true,
-        timestamp
-      },
-      {
-        modelName: "XGBOOST",
-        modelVersion: "v1.0",
-        architecture: "GBDT_TREES",
-        inferenceMode: "REAL_MODEL",
-        direction: "LONG",
-        confidence: 0.72,
-        probability: 0.70,
-        probabilities: { LONG: 0.70, SHORT: 0.20, HOLD: 0.10 },
-        uncertainty: 0.21,
-        predictionInterval: [0.005, 0.022],
-        expectedMovePercent: 0.013,
-        latencyMs: 1.8,
-        status: "PRODUCTION",
-        regimeCompatibility: 0.90,
-        featureVersion: 2,
-        isTrained: true,
-        timestamp
-      }
-    ];
+    // Never synthesize directional predictions. An unavailable runtime must
+    // reduce evidence (or produce NO_TRADE), not silently become a confident
+    // fabricated ensemble member.
+    const dlPredictions: ModelExpertPrediction[] = input.dlPredictions ??
+      await ModernModelRegistry.evaluateAll(features, regime);
 
     // ── Step 6: Query Model Authority Registry (Layer 1 & Layer 2) ──
     const allModels = ModelAuthorityRegistry.getAllModels();
     const directionalVoters = ModelAuthorityRegistry.getDirectionalVoters();
+    const runtimeAuthorityIds = new Set([
+      ...dlPredictions.map(p => this.toAuthorityModelId(p.modelName)),
+      ...quantSignals.map(q => q.strategyId)
+    ]);
     const activeVoters = directionalVoters.filter(
-      m => m.adminAllowed && (m.status === "ACTIVE" || m.status === "DOWNWEIGHTED")
+      m => m.adminAllowed &&
+        (m.status === "ACTIVE" || m.status === "DOWNWEIGHTED") &&
+        runtimeAuthorityIds.has(m.modelId)
     );
 
     const excludedModels: Record<string, string> = {};
@@ -457,6 +401,8 @@ export class AQEAAutonomousControlPlane {
         excludedModels[m.modelId] = `Temporarily disabled by AI control: ${m.reason}`;
       } else if (m.status === "SHADOW") {
         excludedModels[m.modelId] = `Shadow model evaluating without order authority (${m.sampleCount}/100 OOS)`;
+      } else if (!runtimeAuthorityIds.has(m.modelId)) {
+        excludedModels[m.modelId] = "No current runtime prediction; excluded from directional authority";
       }
     }
 
