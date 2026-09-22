@@ -232,6 +232,13 @@ export class ForwardLearningPipeline {
     // Apply Bias Penalty: w_i* = w_i * (1 - BiasPenalty_i)
     const weightUpdates = BiasControlEngine.applyBiasAwareWeightCorrection(rawWeights, biasAudit.modelPenalties);
 
+    // Stage 10 is an operational update, not merely a report field.  Persist
+    // the reconstructed forward evidence and its approved weight before the
+    // promotion policy reads the scorecard and before the next fusion cycle.
+    for (const m of candidateModels) {
+      ModelScorecardRegistry.syncForwardEvidence(m, scorecards[m], loos[m], weightUpdates[m]);
+    }
+
     // ── STAGE 11: ONLY THEN CONSIDER RETRAINING ──
     const retrainingCandidates: { modelName: string; justified: boolean; reasons: string[] }[] = [];
     for (const m of candidateModels) {

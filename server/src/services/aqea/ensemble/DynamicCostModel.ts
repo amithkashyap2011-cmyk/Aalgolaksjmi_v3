@@ -55,11 +55,21 @@ export class DynamicCostModel {
     const profile = params.marketDomain === "INDIAN" ? INDIAN_COST_PROFILE : CRYPTO_COST_PROFILE;
     const atrMultiplier = Math.max(0.5, Math.min(3.0, params.atrPercent / 1.5));
     const liquidityDiscount = params.isHighLiquidity ? 0.80 : 1.15;
+    // Keep the historic profile as the reference for an unspecified order,
+    // but scale impact sub-linearly when a real notional is available.  A
+    // linear curve would over-penalize larger orders and made the documented
+    // orderValueUsdOrInr input effectively dead code.
+    const orderValue = Number.isFinite(params.orderValueUsdOrInr) && (params.orderValueUsdOrInr as number) > 0
+      ? (params.orderValueUsdOrInr as number)
+      : 10_000;
+    const orderSizeMultiplier = Math.max(0.25, Math.min(5.0, Math.sqrt(orderValue / 10_000)));
 
     const feePercent = profile.baseFeePercent;
     const slippagePercent = Number((profile.baseSlippagePercent * atrMultiplier * liquidityDiscount).toFixed(4));
     const spreadPercent = Number((profile.baseSpreadPercent * atrMultiplier).toFixed(4));
-    const marketImpactPercent = Number((profile.marketImpactFactor * Math.sqrt(atrMultiplier)).toFixed(4));
+    const marketImpactPercent = Number((
+      profile.marketImpactFactor * Math.sqrt(atrMultiplier) * orderSizeMultiplier
+    ).toFixed(4));
 
     const totalFrictionPercent = Number((feePercent + slippagePercent + spreadPercent + marketImpactPercent).toFixed(4));
 

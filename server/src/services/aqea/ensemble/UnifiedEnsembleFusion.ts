@@ -342,11 +342,13 @@ export class ModelContributionEngine {
     const regMap = this.regimePerformanceMatrix.get(reg)!;
 
     for (const [mName, mSnap] of Object.entries(record.modelBreakdowns)) {
-      if (!mSnap.participating) continue;
+      const modelDirection = this.snapshotDirection(mSnap.direction);
+      if (!mSnap.participating || modelDirection === "HOLD") continue;
       const cur = regMap.get(mName) || { wins: 0, total: 0, sumPnL: 0 };
+      const modelReturn = this.counterfactualReturn(outcome, modelDirection);
       cur.total++;
-      if (outcome.outcome === "WIN") cur.wins++;
-      cur.sumPnL += outcome.realizedReturn;
+      if (modelReturn > 0) cur.wins++;
+      cur.sumPnL += modelReturn;
       regMap.set(mName, cur);
 
       // Update dedicated scorecard
@@ -380,7 +382,10 @@ export class ModelContributionEngine {
    */
   public static getModelMetrics(modelName: string): ModelContributionMetrics {
     const resolved = this.getResolvedHistory();
-    const modelTrades = resolved.filter(r => r.modelBreakdowns[modelName]?.participating);
+    const modelTrades = resolved.filter(r => {
+      const snapshot = r.modelBreakdowns[modelName];
+      return snapshot?.participating && this.snapshotDirection(snapshot.direction) !== "HOLD";
+    });
 
     if (modelTrades.length === 0) {
       return {
@@ -421,24 +426,27 @@ export class ModelContributionEngine {
 
     for (const tr of modelTrades) {
       const outcome = tr.realizedOutcome!;
-      const actual = outcome.outcome === "WIN" ? 1 : 0;
-      const prob = tr.modelBreakdowns[modelName].rawProbability;
-      const predProb = tr.direction === "LONG" ? prob.LONG : (tr.direction === "SHORT" ? prob.SHORT : prob.HOLD);
+      const snapshot = tr.modelBreakdowns[modelName];
+      const modelDirection = this.snapshotDirection(snapshot.direction);
+      const modelReturn = this.counterfactualReturn(outcome, modelDirection);
+      const actual = modelReturn > 0 ? 1 : 0;
+      const prob = snapshot.rawProbability;
+      const predProb = modelDirection === "LONG" ? prob.LONG : prob.SHORT;
 
       brierSum += Math.pow(predProb - actual, 2);
       const clampedP = Math.min(0.999, Math.max(0.001, predProb));
       logLossSum += -(actual * Math.log(clampedP) + (1 - actual) * Math.log(1 - clampedP));
 
-      returns.push(outcome.realizedReturn);
-      totalReturn += outcome.realizedReturn;
+      returns.push(modelReturn);
+      totalReturn += modelReturn;
       mfeSum += outcome.mfe || 0;
       maeSum += outcome.mae || 0;
 
-      if (outcome.outcome === "WIN") {
+      if (modelReturn > 0) {
         wins++;
-        grossProfit += Math.max(0, outcome.realizedReturn);
-      } else if (outcome.outcome === "LOSS") {
-        grossLoss += Math.abs(outcome.realizedReturn);
+        grossProfit += modelReturn;
+      } else if (modelReturn < 0) {
+        grossLoss += Math.abs(modelReturn);
       }
     }
 
@@ -534,9 +542,10 @@ export class ModelContributionEngine {
       const snap = tr.modelBreakdowns[modelName];
       if (!snap || !snap.participating) continue;
 
-      const predProb = tr.direction === "LONG" ? snap.rawProbability.LONG
-        : (tr.direction === "SHORT" ? snap.rawProbability.SHORT : snap.rawProbability.HOLD);
-      const actual = outcome.directionCorrect ? 1 : 0;
+      const modelDirection = this.snapshotDirection(snap.direction);
+      if (modelDirection === "HOLD") continue;
+      const predProb = modelDirection === "LONG" ? snap.rawProbability.LONG : snap.rawProbability.SHORT;
+      const actual = this.counterfactualReturn(outcome, modelDirection) > 0 ? 1 : 0;
       const binIdx = Math.min(NUM_BINS - 1, Math.floor(predProb * NUM_BINS));
 
       bins[binIdx].confidenceSum += predProb;
@@ -573,6 +582,20 @@ export class ModelContributionEngine {
       if (dd > maxDD) maxDD = dd;
     }
     return maxDD;
+  }
+
+  private static snapshotDirection(direction: string): "LONG" | "SHORT" | "HOLD" {
+    return direction === "LONG" || direction === "SHORT" ? direction : "HOLD";
+  }
+
+  private static counterfactualReturn(
+    outcome: EnsembleRealizedOutcome,
+    direction: "LONG" | "SHORT" | "HOLD"
+  ): number {
+    if (direction === "HOLD" || outcome.realizedDirection === "HOLD") return 0;
+    const realized = Number(outcome.realizedReturn);
+    if (!Number.isFinite(realized)) return 0;
+    return direction === outcome.realizedDirection ? realized : -realized;
   }
 }
 
@@ -807,12 +830,32 @@ export class UnifiedEnsembleFusion {
       spreadPercent: evParams.spreadPercent ?? friction.spreadPercent
     };
 
-    const { expectedValue, expectedGain, expectedLoss, fees, slippage, evPassesGate } = this.computeExpectedValue(
+    let { expectedValue, expectedGain, expectedLoss, fees, slippage, evPassesGate } = this.computeExpectedValue(
       direction, buyProbability, sellProbability, holdProbability, adjustedEVParams
     );
 
     // Step 14: Adaptive Trade Threshold
     const adaptiveThreshold = this.computeAdaptiveThreshold(regime, uncertainty, adjustedEVParams, totalWeight);
+
+    // A threshold that is only reported is not a gate.  Apply it here, after
+    // economically real EV is known, and turn marginal/high-uncertainty calls
+    // into explicit no-trades before any execution path can see them.
+    const noTradeReason = this.evaluateNoTradeGate(
+      direction,
+      direction === "LONG" ? buyProbability : (direction === "SHORT" ? sellProbability : holdProbability),
+      uncertainty,
+      expectedValue,
+      adaptiveThreshold,
+      adjustedEVParams,
+      regime
+    );
+    if (noTradeReason) {
+      direction = "HOLD";
+      // Preserve the candidate's EV in telemetry.  It explains *why* the
+      // trade was rejected and avoids representing a negative candidate as a
+      // neutral result; evPassesGate remains the execution authority.
+      evPassesGate = false;
+    }
 
     // Step 15: Trade Quality Score & Tier Classification
     const { tradeQualityScore, tradeQualityTier } = this.computeTradeQuality(
@@ -830,7 +873,7 @@ export class UnifiedEnsembleFusion {
       direction, buyProbability, sellProbability, holdProbability,
       modelAgreement, confidence, expectedValue, evPassesGate,
       tradeQualityScore, tradeQualityTier,
-      participatingModels.length, eligibleCount
+      participatingModels.length, eligibleCount, noTradeReason
     );
 
     const fusionLatencyMs = Math.max(0, Date.now() - fusionStart);
@@ -949,29 +992,39 @@ export class UnifiedEnsembleFusion {
   ): ModelWeightBreakdown {
     const baseWeight = DL_BASE_WEIGHT;
     const staticRegimeFit = Math.min(1.0, Math.max(0.0, pred.regimeCompatibility));
+    const forwardCard = ModelScorecardRegistry.getOrCreate(pred.modelName);
+    const forwardSamples = forwardCard.predictive.totalPredictions;
 
     // Dynamic regime & incremental value lookup with smooth Bayesian shrinkage
     const regStat = ModelContributionEngine.getRegimeModelScore(String(regime), pred.modelName);
     const contribution = ModelContributionEngine.getModelMetrics(pred.modelName);
 
     // Bayesian shrinkage towards neutral prior (1.0) based on observation count
-    const reliability = ModelContributionEngine.computeReliability(contribution.totalEvaluated, SHRINKAGE_PRIOR_STRENGTH_K);
-    const empiricalPerf = contribution.profitFactor > 0 ? Math.min(1.30, Math.max(0.50, contribution.profitFactor / 1.5)) : 1.0;
+    const rolling = ForwardTelemetryStore.getRollingModelPerformance(pred.modelName);
+    const performanceSamples = rolling.sampleCount > 0 ? rolling.sampleCount : (forwardSamples > 0 ? forwardSamples : contribution.totalEvaluated);
+    const performancePF = rolling.sampleCount >= 10 ? rolling.profitFactor : (forwardSamples > 0 ? forwardCard.trading.profitFactor : contribution.profitFactor);
+    const reliability = ModelContributionEngine.computeReliability(performanceSamples, SHRINKAGE_PRIOR_STRENGTH_K);
+    const empiricalPerf = performancePF > 0 ? Math.min(1.30, Math.max(0.50, performancePF / 1.5)) : 1.0;
     const recentPerformance = (reliability * empiricalPerf) + ((1 - reliability) * 1.0);
 
     const regimeFit = staticRegimeFit * regStat.regimeScore;
 
     const driftReport = ModelDriftMonitor.getReport(pred.modelName);
-    const calibrationQuality = driftReport.totalEvaluated > 0
+    const calibrationQuality = forwardSamples > 0
+      ? Math.min(1.0, Math.max(0.1, 1.0 - forwardCard.predictive.brierScore))
+      : driftReport.totalEvaluated > 0
       ? Math.min(1.0, Math.max(0.1, 1.0 - driftReport.brierScore)) : 1.0;
 
     const dataQuality = Math.min(1.0, Math.max(0.1, 1.0 - pred.uncertainty * 0.5));
     const availability = pred.latencyMs < 2000 ? 1.0 : (pred.latencyMs < 5000 ? 0.80 : 0.50);
-    const incrementalValue = contribution.incrementalValue;
+    const incrementalValue = forwardCard.incremental.sampleCount > 0
+      ? forwardCard.incremental.incrementalValueScore
+      : contribution.incrementalValue;
     const correlationPenalty = computeCorrelationPenalty(familyCount);
+    const forwardWeightMultiplier = this.forwardWeightMultiplier(forwardCard.currentLiveWeight, forwardCard.incremental.sampleCount, baseWeight);
 
     const rawWeight = baseWeight * regimeFit * calibrationQuality *
-      recentPerformance * dataQuality * availability * incrementalValue * correlationPenalty;
+      recentPerformance * dataQuality * availability * incrementalValue * correlationPenalty * forwardWeightMultiplier;
 
     return {
       modelName: pred.modelName, baseWeight, regimeFit: Number(regimeFit.toFixed(4)),
@@ -992,27 +1045,45 @@ export class UnifiedEnsembleFusion {
   ): ModelWeightBreakdown {
     const baseWeight = QUANT_BASE_WEIGHT;
     const staticRegimeFit = Math.min(1.0, Math.max(0.0, qs.regimeCompatibility));
+    const forwardCard = ModelScorecardRegistry.getOrCreate(qs.strategyId);
+    const forwardSamples = forwardCard.predictive.totalPredictions;
     const regStat = ModelContributionEngine.getRegimeModelScore(String(regime), qs.strategyId);
     const contribution = ModelContributionEngine.getModelMetrics(qs.strategyId);
 
-    const reliability = ModelContributionEngine.computeReliability(contribution.totalEvaluated, SHRINKAGE_PRIOR_STRENGTH_K);
-    const empiricalPerf = contribution.profitFactor > 0 ? Math.min(1.30, Math.max(0.50, contribution.profitFactor / 1.5)) : 1.0;
+    const rolling = ForwardTelemetryStore.getRollingModelPerformance(qs.strategyId);
+    const performanceSamples = rolling.sampleCount > 0 ? rolling.sampleCount : (forwardSamples > 0 ? forwardSamples : contribution.totalEvaluated);
+    const performancePF = rolling.sampleCount >= 10 ? rolling.profitFactor : (forwardSamples > 0 ? forwardCard.trading.profitFactor : contribution.profitFactor);
+    const reliability = ModelContributionEngine.computeReliability(performanceSamples, SHRINKAGE_PRIOR_STRENGTH_K);
+    const empiricalPerf = performancePF > 0 ? Math.min(1.30, Math.max(0.50, performancePF / 1.5)) : 1.0;
     const recentPerformance = (reliability * empiricalPerf) + ((1 - reliability) * 1.0);
 
     const regimeFit = staticRegimeFit * regStat.regimeScore;
     const correlationPenalty = computeCorrelationPenalty(familyCount);
-    const incrementalValue = contribution.incrementalValue;
+    const incrementalValue = forwardCard.incremental.sampleCount > 0
+      ? forwardCard.incremental.incrementalValueScore
+      : contribution.incrementalValue;
     const rawWeight = baseWeight * regimeFit * recentPerformance * incrementalValue * correlationPenalty;
+    const forwardWeightMultiplier = this.forwardWeightMultiplier(forwardCard.currentLiveWeight, forwardCard.incremental.sampleCount, baseWeight);
 
     return {
       modelName: qs.strategyId, baseWeight, regimeFit: Number(regimeFit.toFixed(4)),
       calibrationQuality: 1.0, recentPerformance: Number(recentPerformance.toFixed(4)),
       dataQuality: 1.0, availability: 1.0, incrementalValue: Number(incrementalValue.toFixed(4)),
       correlationPenalty: Number(correlationPenalty.toFixed(4)),
-      rawWeight: Number(rawWeight.toFixed(6)), effectiveWeight: Number(rawWeight.toFixed(6)),
+      rawWeight: Number((rawWeight * forwardWeightMultiplier).toFixed(6)), effectiveWeight: Number((rawWeight * forwardWeightMultiplier).toFixed(6)),
       normalizedWeight: 0, evidenceFamily: family,
       inferenceMode: "REAL_MODEL", status: qs.strategyId, eligible: true
     };
+  }
+
+  /**
+   * Forward-learned weights become authoritative only after the promotion
+   * sample threshold.  Until then zero is the registry's uninitialized value,
+   * not an instruction to silence a model.
+   */
+  private static forwardWeightMultiplier(liveWeight: number, sampleCount: number, baseWeight: number): number {
+    if (sampleCount < 100 || !Number.isFinite(liveWeight)) return 1.0;
+    return Math.min(2.5, Math.max(0, liveWeight / Math.max(baseWeight, 1e-6)));
   }
 
   private static applyFamilyCaps(weights: ModelWeightBreakdown[]): void {
@@ -1148,6 +1219,36 @@ export class UnifiedEnsembleFusion {
     return Number(Math.min(0.85, Math.max(0.52, threshold)).toFixed(4));
   }
 
+  private static evaluateNoTradeGate(
+    direction: "LONG" | "SHORT" | "HOLD",
+    directionalProbability: number,
+    uncertainty: number,
+    expectedValue: number,
+    threshold: number,
+    params: EVGateParams,
+    regime: AnyRegime
+  ): string | null {
+    if (direction === "HOLD") return "NO_DIRECTIONAL_EDGE";
+    const regimePenalty = this.getRegimeUncertaintyPenalty(regime);
+    const uncertaintyCeiling = Math.max(0.30, 0.62 - regimePenalty * 0.5);
+    if (uncertainty > uncertaintyCeiling) {
+      return `UNCERTAINTY_TOO_HIGH (${uncertainty.toFixed(3)} > ${uncertaintyCeiling.toFixed(3)})`;
+    }
+    const friction = (params.feePercent ?? 0.10) + (params.slippagePercent ?? 0.05) +
+      (params.marketImpactPercent ?? 0.02) + (params.spreadPercent ?? 0.03);
+    const minimumEV = Math.max(0.05, friction * 0.5 + regimePenalty * 0.10);
+    // A large, cost-adjusted edge is allowed to overcome a small threshold
+    // shortfall.  This prevents diverse-but-profitable evidence from being
+    // rejected solely because it is not unanimous.
+    if (directionalProbability < threshold && expectedValue < minimumEV + 0.25) {
+      return `PROBABILITY_BELOW_ADAPTIVE_THRESHOLD (${directionalProbability.toFixed(3)} < ${threshold.toFixed(3)})`;
+    }
+    if (expectedValue < minimumEV) {
+      return `EV_BELOW_REGIME_AWARE_MINIMUM (${expectedValue.toFixed(3)} < ${minimumEV.toFixed(3)})`;
+    }
+    return null;
+  }
+
   private static computeTradeQuality(
     calibratedProbability: number,
     agreement: number,
@@ -1237,7 +1338,7 @@ export class UnifiedEnsembleFusion {
     direction: string, buyProb: number, sellProb: number, holdProb: number,
     agreement: number, confidence: number, ev: number, evPasses: boolean,
     qualityScore: number, qualityTier: TradeQualityTier,
-    totalModels: number, eligibleModels: number
+    totalModels: number, eligibleModels: number, noTradeReason: string | null
   ): string {
     const parts: string[] = [];
     parts.push("ENSEMBLE_FUSION: " + direction);
@@ -1246,6 +1347,7 @@ export class UnifiedEnsembleFusion {
     parts.push("Confidence=" + (confidence * 100).toFixed(1) + "%");
     parts.push("Quality=" + qualityScore.toFixed(3) + " (" + qualityTier + ")");
     parts.push("EV=" + ev.toFixed(4) + "% (" + (evPasses ? "PASS" : "BLOCKED") + ")");
+    if (noTradeReason) parts.push("NO_TRADE_GATE=" + noTradeReason);
     parts.push("Models=" + eligibleModels + "/" + totalModels);
     return parts.join(" | ");
   }

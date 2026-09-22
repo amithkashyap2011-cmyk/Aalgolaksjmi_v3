@@ -18,6 +18,7 @@ import mongoose from "mongoose";
 import { EnsembleDecisionRecord, EnsembleRealizedOutcome, DataLeakageError } from "./UnifiedEnsembleFusion.js";
 import { AQEAForwardDecision, IModelDecisionBreakdown } from "../../../models/AQEAForwardDecision.js";
 import { AQEAForwardOutcome } from "../../../models/AQEAForwardOutcome.js";
+import { ModelScorecardRegistry } from "./ModelScorecard.js";
 
 export { DataLeakageError };
 
@@ -695,10 +696,21 @@ export class ForwardTelemetryStore {
     })}`);
     }
 
-    // Update regime × model stats
+    // Update regime × model stats with each MODEL'S own counterfactual return.
+    // A realized ensemble LONG must not reward a model that predicted SHORT.
     for (const [mName, mSnap] of Object.entries(record.modelBreakdowns)) {
       if (!mSnap.participating) continue;
-      this.updateRegimeStat(record.regime, mName, outcome);
+      const modelDirection = this.snapshotDirection(mSnap.direction);
+      if (modelDirection === "HOLD") continue;
+      this.updateRegimeStat(record.regime, mName, this.counterfactualReturn(record, modelDirection));
+    }
+
+    // Keep the live scorecards synchronized with the same forward evidence
+    // used by the reporting pipeline.  This is deliberately after the outcome
+    // is stored, so reconstruction cannot observe unresolved data.
+    for (const [mName, mSnap] of Object.entries(record.modelBreakdowns)) {
+      if (!mSnap.participating || this.snapshotDirection(mSnap.direction) === "HOLD") continue;
+      ModelScorecardRegistry.syncForwardEvidence(mName, this.reconstructModelScorecard(mName));
     }
 
     // Async durable MongoDB write (non-blocking)
@@ -711,7 +723,10 @@ export class ForwardTelemetryStore {
    * Reconstructs an OOS scorecard for a specific model strictly from persisted data.
    */
   public static reconstructModelScorecard(modelName: string): ModelOOSScorecard {
-    const resolved = this.getResolvedRecords().filter(r => r.modelBreakdowns[modelName]?.participating === true);
+    const resolved = this.getResolvedRecords().filter(r => {
+      const snap = r.modelBreakdowns[modelName];
+      return snap?.participating === true && this.snapshotDirection(snap.direction) !== "HOLD";
+    });
     const n = resolved.length;
 
     if (n === 0) {
@@ -749,8 +764,9 @@ export class ForwardTelemetryStore {
       const snap = r.modelBreakdowns[modelName];
       const out = r.outcome!;
 
-      const modelDir = snap.probLong > snap.probShort ? "LONG" : (snap.probShort > snap.probLong ? "SHORT" : "HOLD");
-      const isWin = out.outcomeResult === "WIN";
+      const modelDir = this.snapshotDirection(snap.direction);
+      const modelReturn = this.counterfactualReturn(r, modelDir);
+      const isWin = modelReturn > 0;
       const predProb = modelDir === "LONG" ? snap.probLong : (modelDir === "SHORT" ? snap.probShort : 0.5);
       const actualBinary = isWin ? 1 : 0;
 
@@ -772,7 +788,7 @@ export class ForwardTelemetryStore {
       logLossSum += -(actualBinary * Math.log(clampedP) + (1 - actualBinary) * Math.log(1 - clampedP));
 
       // Trading metrics
-      const ret = out.realizedReturn;
+      const ret = modelReturn;
       returns.push(ret);
       totalReturn += ret;
       if (ret > 0) grossProfit += ret;
@@ -902,12 +918,15 @@ export class ForwardTelemetryStore {
 
     for (const r of resolved) {
       if (!r.outcome) continue;
-      const actualBinary = r.outcome.outcomeResult === "WIN" ? 1 : 0;
-      const ret = r.outcome.realizedReturn;
+      const fullDirection = this.snapshotDirection(r.finalDecision || r.direction);
+      const ret = this.counterfactualReturn(r, fullDirection);
+      const actualBinary = ret > 0 ? 1 : 0;
 
       // Full ensemble metrics
       fullReturns.push(ret);
-      fullBrierSum += Math.pow(r.buyProbability - actualBinary, 2);
+      const fullProb = fullDirection === "LONG" ? r.buyProbability
+        : (fullDirection === "SHORT" ? r.sellProbability : r.holdProbability);
+      fullBrierSum += Math.pow(fullProb - actualBinary, 2);
       if (ret > 0) { fullWins++; fullGrossP += ret; }
       else fullGrossL += Math.abs(ret);
 
@@ -925,12 +944,15 @@ export class ForwardTelemetryStore {
       const looPShort = sumW > 0 ? wShort / sumW : 0.33;
       const looDir = looPLong > looPShort ? "LONG" : (looPShort > looPLong ? "SHORT" : "HOLD");
 
-      // Approximate LOO return from trade direction match
-      const dirMatch = looDir === r.direction ? 1.0 : (looDir === "HOLD" ? 0.0 : -1.0);
-      const looRet = ret * dirMatch;
+      // Reprice the historical outcome for the direction this subset would
+      // actually have taken.  HOLD earns zero; the opposite side receives
+      // the inverse signed return rather than inheriting the full ensemble's
+      // P&L.
+      const looRet = this.counterfactualReturn(r, looDir);
       looReturns.push(looRet);
 
-      looBrierSum += Math.pow(looPLong - actualBinary, 2);
+      const looProb = looDir === "LONG" ? looPLong : (looDir === "SHORT" ? looPShort : 0.5);
+      looBrierSum += Math.pow(looProb - (looRet > 0 ? 1 : 0), 2);
       if (looRet > 0) { looWins++; looGrossP += looRet; }
       else looGrossL += Math.abs(looRet);
     }
@@ -1049,6 +1071,51 @@ export class ForwardTelemetryStore {
    */
   public static getResolvedCount(): number {
     return this.records.filter(r => r.outcome !== undefined).length;
+  }
+
+  /**
+   * Returns only the most recent genuine observations for one model.  Weight
+   * selection must respond to a model's current behaviour instead of allowing
+   * an old full-history profit factor to mask a recent failure streak.
+   */
+  public static getRollingModelPerformance(modelName: string, window: number = 30): {
+    sampleCount: number;
+    netEV: number;
+    profitFactor: number;
+    winRate: number;
+  } {
+    const recent = this.getResolvedRecords()
+      .filter(r => {
+        const snap = r.modelBreakdowns[modelName];
+        return snap?.participating === true && this.snapshotDirection(snap.direction) !== "HOLD";
+      })
+      .slice(-Math.max(1, window));
+
+    if (recent.length === 0) {
+      return { sampleCount: 0, netEV: 0, profitFactor: 1, winRate: 0.5 };
+    }
+
+    let gains = 0;
+    let losses = 0;
+    let netEV = 0;
+    let wins = 0;
+    for (const record of recent) {
+      const ret = this.counterfactualReturn(record, this.snapshotDirection(record.modelBreakdowns[modelName].direction));
+      netEV += ret;
+      if (ret > 0) {
+        gains += ret;
+        wins++;
+      } else if (ret < 0) {
+        losses += Math.abs(ret);
+      }
+    }
+
+    return {
+      sampleCount: recent.length,
+      netEV: Number((netEV / recent.length).toFixed(6)),
+      profitFactor: losses > 0 ? Number((gains / losses).toFixed(6)) : (gains > 0 ? 99 : 1),
+      winRate: Number((wins / recent.length).toFixed(6))
+    };
   }
 
   /**
@@ -1228,30 +1295,19 @@ export class ForwardTelemetryStore {
 
           for (const [mName, mSnap] of Object.entries(record.modelBreakdowns)) {
             if (!mSnap.participating) continue;
-            this.updateRegimeStat(record.regime, mName, {
-              decisionId: d.decisionId,
-              timestamp: d.timestamp,
-              symbol: d.symbol,
-              regime: d.regime,
-              accountType: d.accountType as any,
-              entryPrice: out.entryPrice,
-              exitPrice: out.exitPrice,
-              realizedDirection: out.realizedDirection,
-              realizedReturn: out.realizedReturn,
-              realizedPnL: out.realizedPnL,
-              mfe: out.mfe,
-              mae: out.mae,
-              holdingDurationMs: out.holdingDurationMs,
-              fees: out.costActuallyIncurred?.fees || 0,
-              slippage: out.costActuallyIncurred?.slippage || 0,
-              outcome: out.winLoss,
-              directionCorrect: out.directionCorrect,
-              resolvedTimestamp: out.resolvedTimestamp
-            });
+            const modelDirection = this.snapshotDirection(mSnap.direction);
+            if (modelDirection !== "HOLD") {
+              this.updateRegimeStat(record.regime, mName, this.counterfactualReturn(record, modelDirection));
+            }
           }
         }
 
         this.records.push(record);
+        for (const [mName, mSnap] of Object.entries(record.modelBreakdowns)) {
+          if (record.outcome && mSnap.participating && this.snapshotDirection(mSnap.direction) !== "HOLD") {
+            ModelScorecardRegistry.syncForwardEvidence(mName, this.reconstructModelScorecard(mName));
+          }
+        }
       }
 
       return this.records.length;
@@ -1266,7 +1322,13 @@ export class ForwardTelemetryStore {
    */
   public static clear(): void {
     this.records = [];
+    this.recordMap.clear();
     this.regimeStats = [];
+    this.frozenExperiment = null;
+    this.experimentFrozenAt = 0;
+    this.invalidCount = 0;
+    this.duplicateCount = 0;
+    this.leakedCount = 0;
   }
 
   // ─── Private Helpers ───
@@ -1370,7 +1432,29 @@ export class ForwardTelemetryStore {
     }
   }
 
-  private static updateRegimeStat(regime: string, modelName: string, outcome: EnsembleRealizedOutcome): void {
+  /**
+   * Returns the outcome a candidate direction would have earned on this
+   * observation.  Outcome returns are signed for `realizedDirection`; an
+   * opposite side therefore receives the inverse return and HOLD opens no
+   * position.  This is the minimum valid counterfactual available from a
+   * closed trade without inventing a second fill or look-ahead price.
+   */
+  public static counterfactualReturn(
+    record: Pick<ForwardTelemetryRecord, "outcome">,
+    direction: "LONG" | "SHORT" | "HOLD"
+  ): number {
+    const outcome = record.outcome;
+    if (!outcome || direction === "HOLD" || outcome.realizedDirection === "HOLD") return 0;
+    const realized = Number(outcome.realizedReturn);
+    if (!Number.isFinite(realized)) return 0;
+    return direction === outcome.realizedDirection ? realized : -realized;
+  }
+
+  private static snapshotDirection(direction: string | undefined): "LONG" | "SHORT" | "HOLD" {
+    return direction === "LONG" || direction === "SHORT" ? direction : "HOLD";
+  }
+
+  private static updateRegimeStat(regime: string, modelName: string, modelReturn: number): void {
     let stat = this.regimeStats.find(s => s.regime === regime && s.modelName === modelName);
     if (!stat) {
       stat = { regime, modelName, wins: 0, losses: 0, total: 0, sumPnL: 0, sumBrier: 0, lastUpdated: Date.now() };
@@ -1378,9 +1462,9 @@ export class ForwardTelemetryStore {
     }
 
     stat.total++;
-    if (outcome.outcome === "WIN") stat.wins++;
-    else if (outcome.outcome === "LOSS") stat.losses++;
-    stat.sumPnL += outcome.realizedReturn;
+    if (modelReturn > 0) stat.wins++;
+    else if (modelReturn < 0) stat.losses++;
+    stat.sumPnL += modelReturn;
     stat.lastUpdated = Date.now();
   }
 
@@ -1392,8 +1476,10 @@ export class ForwardTelemetryStore {
     for (const r of records) {
       const snap = r.modelBreakdowns[modelName];
       if (!snap || !r.outcome) continue;
-      const predProb = Math.max(snap.probLong, snap.probShort);
-      const actual = r.outcome.directionCorrect ? 1 : 0;
+      const direction = this.snapshotDirection(snap.direction);
+      if (direction === "HOLD") continue;
+      const predProb = direction === "LONG" ? snap.probLong : snap.probShort;
+      const actual = this.counterfactualReturn(r, direction) > 0 ? 1 : 0;
       const binIdx = Math.min(NUM_BINS - 1, Math.floor(predProb * NUM_BINS));
 
       bins[binIdx].confSum += predProb;
@@ -1828,5 +1914,3 @@ export class ForwardTelemetryStore {
     return { compatible: true, reason: "Context matches frozen experiment", frozenContext: { ...f } };
   }
 }
-
-

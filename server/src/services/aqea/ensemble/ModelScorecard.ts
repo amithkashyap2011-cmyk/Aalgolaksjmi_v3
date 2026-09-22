@@ -1,3 +1,5 @@
+import type { ModelLeaveOneOutContribution, ModelOOSScorecard } from "./ForwardTelemetryStore.js";
+
 /**
  * ═══════════════════════════════════════════════════════════════════
  *  AQEA 2026–27 — Model Scorecard & Attribution Architecture (Phase 4 & 5)
@@ -187,6 +189,82 @@ export class ModelScorecardRegistry {
   public static updateScorecard(modelName: string, update: Partial<CompleteModelScorecard>): void {
     const card = this.getOrCreate(modelName);
     Object.assign(card, update, { lastUpdated: Date.now() });
+  }
+
+  /**
+   * Copies the auditable forward-OOS metrics into the live scorecard.  Keeping
+   * this mapping here prevents the learning pipeline from producing a report
+   * whose numbers are never visible to the fusion engine or promotion gate.
+   */
+  public static syncForwardEvidence(
+    modelName: string,
+    evidence: ModelOOSScorecard,
+    incremental?: ModelLeaveOneOutContribution,
+    currentLiveWeight?: number
+  ): CompleteModelScorecard {
+    const card = this.getOrCreate(modelName);
+    const n = evidence.sampleCount;
+    const p = evidence.predictive;
+    const t = evidence.trading;
+    const correct = Math.round((p.accuracy ?? 0) * n);
+    const wins = Math.round((t.winRate ?? 0) * n);
+
+    Object.assign(card.predictive, {
+      totalPredictions: n,
+      actionablePredictions: n,
+      correctPredictions: correct,
+      accuracy: p.accuracy ?? 0.5,
+      balancedAccuracy: p.balancedAccuracy ?? 0.5,
+      precision: p.precision ?? 0.5,
+      recall: p.recall ?? 0.5,
+      f1Score: p.macroF1 ?? 0.5,
+      brierScore: p.brierScore ?? 0.25,
+      brierReliability: p.brierReliability ?? 0,
+      brierResolution: p.brierResolution ?? 0,
+      expectedCalibrationError: p.ece ?? 0.05,
+      calibrationSlope: p.calibrationSlope ?? 1,
+      calibrationIntercept: p.calibrationIntercept ?? 0,
+      logLoss: p.logLoss ?? 0.693,
+    });
+
+    Object.assign(card.trading, {
+      totalTrades: n,
+      winCount: wins,
+      lossCount: Math.max(0, n - wins),
+      winRate: t.winRate ?? 0.5,
+      lossRate: t.lossRate ?? 0.5,
+      expectancyPercent: t.expectancyPercent ?? 0,
+      profitFactor: t.profitFactor ?? 1,
+      rollingSharpe: t.rollingSharpe ?? 0,
+      rollingSortino: t.rollingSortino ?? 0,
+      calmarRatio: t.calmarRatio ?? 0,
+      maxDrawdownPercent: t.maxDrawdownPercent ?? 0,
+      averageMFEPercent: t.averageMFE ?? 0,
+      averageMAEPercent: t.averageMAE ?? 0,
+      averageHoldingDurationMs: t.averageHoldingMs ?? 0,
+    });
+
+    if (incremental) {
+      Object.assign(card.incremental, {
+        sampleCount: incremental.sampleCount,
+        ensembleBrierWith: incremental.fullEnsembleBrier,
+        ensembleBrierWithout: incremental.looEnsembleBrier,
+        deltaBrier: incremental.deltaBrier,
+        ensembleProfitFactorWith: incremental.fullEnsemblePF,
+        ensembleProfitFactorWithout: incremental.looEnsemblePF,
+        deltaProfitFactor: incremental.deltaPF,
+        ensembleEVWith: incremental.fullEnsembleNetEV,
+        ensembleEVWithout: incremental.looEnsembleNetEV,
+        deltaEV: incremental.deltaNetEV,
+        incrementalValueScore: Math.min(1.5, Math.max(0.5, 1 + incremental.deltaNetEV)),
+      });
+    }
+
+    if (currentLiveWeight !== undefined && Number.isFinite(currentLiveWeight)) {
+      card.currentLiveWeight = Math.max(0, currentLiveWeight);
+    }
+    card.lastUpdated = Date.now();
+    return card;
   }
 
   public static getAllScorecards(): CompleteModelScorecard[] {

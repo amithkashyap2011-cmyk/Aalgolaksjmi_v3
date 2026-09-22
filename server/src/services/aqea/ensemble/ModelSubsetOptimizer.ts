@@ -205,20 +205,24 @@ export class ModelSubsetOptimizer {
       if (prevDirection && prevDirection !== subsetDir) directionChanges++;
       prevDirection = subsetDir;
 
-      // Brier score: using outcome binary
-      const actualBinary = r.outcome.outcomeResult === "WIN" ? 1 : 0;
+      // Score the probability against the profitability of the direction this
+      // subset would have selected, not against the original ensemble's win.
       const predProb = subsetDir === "LONG" ? pLong : (subsetDir === "SHORT" ? pShort : 0.5);
-      brierSum += Math.pow(predProb - actualBinary, 2);
 
-      // PnL attribution
-      const ret = r.outcome.realizedReturn;
+      // Counterfactual P&L must follow the subset direction.  The old code
+      // added the original executed trade's P&L for every candidate subset,
+      // making EV, drawdown and profit factor identical even for models that
+      // predicted the opposite side.
+      const ret = ForwardTelemetryStore.counterfactualReturn(r, subsetDir);
+      const actualBinary = ret > 0 ? 1 : 0;
+      brierSum += Math.pow(predProb - actualBinary, 2);
       returns.push(ret);
       totalReturn += ret;
 
-      if (r.outcome.outcomeResult === "WIN") {
+      if (ret > 0) {
         wins++;
         grossProfit += Math.max(0, ret);
-      } else if (r.outcome.outcomeResult === "LOSS") {
+      } else if (ret < 0) {
         losses++;
         grossLoss += Math.abs(ret);
       }

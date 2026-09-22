@@ -24,7 +24,7 @@ import { ModelExpertPrediction, ProbabilityDistribution, InferenceMode, ModelExp
 import { QuantExpertSignal } from "../src/services/aqea/quant/QuantStrategyRegistry.js";
 import { ForwardTelemetryStore } from "../src/services/aqea/ensemble/ForwardTelemetryStore.js";
 import { ModelCorrelationEngine } from "../src/services/aqea/ensemble/ModelCorrelationEngine.js";
-import { ModelSubsetOptimizer } from "../src/services/aqea/ensemble/ModelSubsetOptimizer.js";
+import { DEFAULT_SUBSET_CONFIG, ModelSubsetOptimizer } from "../src/services/aqea/ensemble/ModelSubsetOptimizer.js";
 import { StatisticalTests } from "../src/services/aqea/ensemble/StatisticalTests.js";
 import { ForwardLearningPipeline } from "../src/services/aqea/ensemble/ForwardLearningPipeline.js";
 
@@ -280,6 +280,14 @@ describe("Unified Ensemble Fusion — Phase 14 (25 Test Areas)", () => {
     expect(cryptoFriction.feePercent).toBe(0.08);
     expect(cryptoFriction.totalFrictionPercent).toBeGreaterThan(0.10);
 
+    const smallOrder = DynamicCostModel.calculateFriction({
+      symbol: "BTCUSDT", marketDomain: "CRYPTO", atrPercent: 1.5, orderValueUsdOrInr: 1_000
+    });
+    const largeOrder = DynamicCostModel.calculateFriction({
+      symbol: "BTCUSDT", marketDomain: "CRYPTO", atrPercent: 1.5, orderValueUsdOrInr: 100_000
+    });
+    expect(largeOrder.marketImpactPercent).toBeGreaterThan(smallOrder.marketImpactPercent);
+
     const mamba = makePrediction({ modelName: "MAMBA_RESEARCH_V1", direction: "LONG", probabilities: { LONG: 0.75, SHORT: 0.10, HOLD: 0.15 }, confidence: 0.75 });
     const result = UnifiedEnsembleFusion.fuse([mamba], [], neutralNLP, "TRENDING_BULL", defaultEVParams, {
       symbol: "BTCUSDT",
@@ -287,6 +295,22 @@ describe("Unified Ensemble Fusion — Phase 14 (25 Test Areas)", () => {
     });
     expect(result.expectedValue).toBeGreaterThan(1.0);
     expect(result.evPassesGate).toBe(true);
+  });
+
+  it("Area 10b: the adaptive threshold is an execution gate, not telemetry only", () => {
+    const marginal = makePrediction({
+      modelName: "MAMBA_RESEARCH_V1",
+      direction: "LONG",
+      probabilities: { LONG: 0.56, SHORT: 0.24, HOLD: 0.20 },
+      confidence: 0.56
+    });
+    const result = UnifiedEnsembleFusion.fuse([marginal], [], neutralNLP, "RANGING", {
+      ...defaultEVParams,
+      atrPercent: 0.4
+    });
+    expect(result.direction).toBe("HOLD");
+    expect(result.evPassesGate).toBe(false);
+    expect(result.decisionReason).toContain("NO_TRADE_GATE=");
   });
 
   // 11. Negative EV Rejection
@@ -978,6 +1002,57 @@ describe("Unified Ensemble Fusion — Phase 14 (25 Test Areas)", () => {
     expect(loo.deltaMaxDD).toBeDefined();
   });
 
+  // 35b. Opposing model signals must receive their own counterfactual P&L.
+  it("Area 35b: attribution and subset search penalize a model that predicts the opposite side", () => {
+    const timestamp = Date.now() - 10_000;
+    ForwardTelemetryStore.recordDecision({
+      decisionId: "OPPOSITE_SIGNAL_ATTRIBUTION",
+      timestamp,
+      symbol: "BTCUSDT",
+      marketDomain: "CRYPTO",
+      accountType: "FUTURES",
+      regime: "TRENDING_BULL",
+      featureVersion: 2,
+      buyProbability: 0.75,
+      sellProbability: 0.15,
+      holdProbability: 0.10,
+      direction: "LONG",
+      confidence: 0.75,
+      agreementScore: 0.5,
+      tradeQualityScore: 80,
+      tradeQualityTier: "HIGH_CONVICTION",
+      expectedValue: 1,
+      modelBreakdowns: {
+        LONG_MODEL: { modelName: "LONG_MODEL", direction: "LONG", rawProbability: { LONG: 0.8, SHORT: 0.1, HOLD: 0.1 }, effectiveWeight: 1, participating: true },
+        SHORT_MODEL: { modelName: "SHORT_MODEL", direction: "SHORT", rawProbability: { LONG: 0.1, SHORT: 0.8, HOLD: 0.1 }, effectiveWeight: 1, participating: true }
+      }
+    });
+    ForwardTelemetryStore.resolveOutcome("OPPOSITE_SIGNAL_ATTRIBUTION", {
+      decisionId: "OPPOSITE_SIGNAL_ATTRIBUTION",
+      timestamp,
+      symbol: "BTCUSDT",
+      regime: "TRENDING_BULL",
+      accountType: "FUTURES",
+      realizedDirection: "LONG",
+      realizedReturn: 2,
+      realizedPnL: 20,
+      outcome: "WIN",
+      directionCorrect: true,
+      resolvedTimestamp: timestamp + 1_000
+    });
+
+    const longCard = ForwardTelemetryStore.reconstructModelScorecard("LONG_MODEL");
+    const shortCard = ForwardTelemetryStore.reconstructModelScorecard("SHORT_MODEL");
+    expect(longCard.trading.expectedValue).toBeGreaterThan(0);
+    expect(shortCard.trading.expectedValue).toBeLessThan(0);
+    expect(ForwardTelemetryStore.getRollingModelPerformance("SHORT_MODEL").profitFactor).toBe(0);
+
+    const records = ForwardTelemetryStore.getResolvedRecords();
+    const config = { ...DEFAULT_SUBSET_CONFIG, minOOSSamples: 1, minNetEV: -10, maxDrawdown: 100, minProfitFactor: 0, maxBrier: 1, maxECE: 1 };
+    expect(ModelSubsetOptimizer.evaluateSubset(["LONG_MODEL"], records, config).netEV).toBeGreaterThan(0);
+    expect(ModelSubsetOptimizer.evaluateSubset(["SHORT_MODEL"], records, config).netEV).toBeLessThan(0);
+  });
+
   // 36. ForwardLearningPipeline: Stage 2 Fail-Closed Behavior (N < 100)
   it("Area 36: ForwardLearningPipeline halts at Stage 2 when N < 100, strictly blocking live promotion and retraining", async () => {
     // Currently 0 records in fresh test environment
@@ -1079,6 +1154,9 @@ describe("Unified Ensemble Fusion — Phase 14 (25 Test Areas)", () => {
     expect(report.bootstrapConfidenceInterval).toBeDefined();
     expect(report.holdoutValidation).toBeDefined();
     expect(report.weightUpdates).toBeDefined();
+    const mambaScorecard = ModelScorecardRegistry.getOrCreate("MAMBA_RESEARCH_V1");
+    expect(mambaScorecard.predictive.totalPredictions).toBe(105);
+    expect(mambaScorecard.incremental.sampleCount).toBe(105);
+    expect(mambaScorecard.currentLiveWeight).toBe(report.weightUpdates?.MAMBA_RESEARCH_V1);
   });
 });
-

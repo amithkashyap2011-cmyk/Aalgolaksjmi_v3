@@ -227,9 +227,7 @@ export class LakshmiMasterRouter {
     const evParams: EVGateParams = {
       atrPercent: features.atr.atrPercent,
       tpMultiplier: 2.0,
-      slMultiplier: 1.5,
-      feePercent: 0.10,
-      slippagePercent: 0.05
+      slMultiplier: 1.5
     };
 
     const marketDomain = (features.symbol && (features.symbol.endsWith("USDT") || features.symbol.endsWith("BTC") || features.symbol.endsWith("BUSD"))) ? "CRYPTO" : "INDIAN";
