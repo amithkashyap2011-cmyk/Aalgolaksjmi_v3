@@ -100,5 +100,7 @@ const AqeaDecisionAttributionSchema = new Schema<IAqeaDecisionAttribution>({
 });
 
 AqeaDecisionAttributionSchema.index({ timestamp: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
+// Powers the user-scoped timeline query without scanning every tenant's data.
+AqeaDecisionAttributionSchema.index({ userId: 1, timestamp: -1 });
 
 export const AqeaDecisionAttribution = mongoose.model<IAqeaDecisionAttribution>("AqeaDecisionAttribution", AqeaDecisionAttributionSchema);

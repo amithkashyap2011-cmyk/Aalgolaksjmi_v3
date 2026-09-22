@@ -728,8 +728,10 @@ router.get("/logs", async (req, res) => {
  */
 router.get("/attributions", async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit as string) || 50;
-    const attributions = await AqeaDecisionAttribution.find({})
+    const requestedLimit = parseInt(req.query.limit as string);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 50;
+    const userId = (req.query.userId as string) || (req as any).user?.userId || (req as any).user?.id || (req as any).userId;
+    const attributions = await AqeaDecisionAttribution.find({ userId: getSafeObjectId(userId) })
       .sort({ timestamp: -1 })
       .limit(limit)
       .lean();

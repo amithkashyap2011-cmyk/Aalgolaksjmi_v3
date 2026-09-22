@@ -130,6 +130,8 @@ const AQEAForwardDecisionSchema: Schema = new Schema({
 
 AQEAForwardDecisionSchema.index({ symbol: 1, timestamp: -1 });
 AQEAForwardDecisionSchema.index({ marketDomain: 1, regime: 1, timestamp: -1 });
+// Startup hydration reads the newest bounded window across all symbols.
+AQEAForwardDecisionSchema.index({ timestamp: -1 });
 
 export const AQEAForwardDecision = (mongoose?.models && mongoose.models.AQEAForwardDecision) ||
   (mongoose?.model && mongoose.model<IAQEAForwardDecision>("AQEAForwardDecision", AQEAForwardDecisionSchema)) ||

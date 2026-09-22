@@ -7,28 +7,27 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgres://user:password@postgres:5432/tradingdb
+      # The server persists its ledger and telemetry through Mongoose.  Keep
+      # this topology aligned with the runtime rather than provisioning an
+      # unused PostgreSQL database.
+      - MONGO_URI=mongodb://mongo:27017/aalgolakshmi
       - REDIS_URL=redis://redis:6379
       - NODE_ENV=production
     depends_on:
-      - postgres
+      - mongo
       - redis
       - kafka
     networks:
       - hft_net
     restart: always
 
-  postgres:
-    image: postgres:15-alpine
-    container_name: quant-db
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: tradingdb
+  mongo:
+    image: mongo:7
+    container_name: quant-mongo
     ports:
-      - "5432:5432"
+      - "27017:27017"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - mongodata:/data/db
     networks:
       - hft_net
 
@@ -85,5 +84,5 @@ networks:
     driver: bridge
 
 volumes:
-  pgdata:
+  mongodata:
   redisdata:

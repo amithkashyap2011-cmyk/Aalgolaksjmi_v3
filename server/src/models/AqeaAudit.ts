@@ -20,4 +20,7 @@ const AqeaAuditSchema = new Schema<IAqeaAudit>({
   data: { type: Schema.Types.Mixed, default: {} },
 });
 
+// Audit feed is filtered by component and sorted newest-first.
+AqeaAuditSchema.index({ component: 1, timestamp: -1 });
+
 export const AqeaAudit = mongoose.model<IAqeaAudit>("AqeaAudit", AqeaAuditSchema);
