@@ -13,6 +13,7 @@ import { StrategyRouter } from "./indianMarket/strategyRouter.js";
 import { StrategyEngine } from "./indianMarket/strategyEngine.js";
 import { InstrumentMaster } from "./indianMarket/instrumentMaster.js";
 import { OptionChainData, UnderlyingSymbol } from "./indianMarket/strategyTypes.js";
+import { MOCK_LIVE_INDIAN_TIKERS } from "./indianMarket/indianPricing.js";
 
 export interface IndianMarketTicker {
   symbol: string;
@@ -52,7 +53,11 @@ export class IndianMarketService {
     underlying: UnderlyingSymbol = "NIFTY",
     spotPrice?: number
   ): OptionChainData {
-    const price = spotPrice || (underlying.includes("BANK") ? 52140.50 : 24530.20);
+    // Live spot (real Angel One quote when the feed is up); the hardcoded
+    // fallbacks were stale by ~1,000 points and skewed the whole chain.
+    const norm = InstrumentMaster.normalizeUnderlying(underlying);
+    const live = MOCK_LIVE_INDIAN_TIKERS[norm === "NIFTY" ? "NIFTY50" : norm]?.ltp;
+    const price = spotPrice || live || (underlying.includes("BANK") ? 52140.50 : 24530.20);
     return OptionChainService.generateOptionChain(underlying, price);
   }
 

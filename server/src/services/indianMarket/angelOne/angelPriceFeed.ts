@@ -79,8 +79,21 @@ async function pollOptions(): Promise<void> {
       const c = optionContracts.getByToken(tok);
       if (c) (exchangeTokens[c.exchange] ??= []).push(tok);
     }
-    const data = await smartApi.getQuotes("LTP", exchangeTokens);
-    for (const q of data?.fetched ?? []) setOptionQuote(String(q.symbolToken), Number(q.ltp));
+    // FULL mode: LTP plus open interest, volume and best bid/ask for the chain.
+    const data = await smartApi.getQuotes("FULL", exchangeTokens);
+    for (const q of data?.fetched ?? []) {
+      const bestBid = q.depth?.buy?.[0];
+      const bestAsk = q.depth?.sell?.[0];
+      setOptionQuote(String(q.symbolToken), {
+        ltp: Number(q.ltp),
+        oi: Number(q.opnInterest),
+        volume: Number(q.tradeVolume),
+        bid: Number(bestBid?.price),
+        ask: Number(bestAsk?.price),
+        bidQty: Number(bestBid?.quantity),
+        askQty: Number(bestAsk?.quantity),
+      });
+    }
   }
   status.lastOptionQuoteAt = new Date().toISOString();
   status.optionError = undefined;

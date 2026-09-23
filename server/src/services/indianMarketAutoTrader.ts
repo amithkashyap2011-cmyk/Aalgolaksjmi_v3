@@ -371,7 +371,11 @@ export class IndianMarketAutoTrader {
         symbol: isMultiLeg ? `${trade.underlying}_${trade.strategy}` : trade.legs[0]?.tradingSymbol || targetSymbol,
         underlying: trade.underlying,
         instrumentType: trade.instrument,
-        side: trade.legs[0]?.action || "BUY",
+        // Multi-leg: side follows the position (net debit = BUY, net credit =
+        // SELL). It used the first leg's action, so an iron condor (first leg
+        // BUY PE, but a SHORT/credit position) was monitored as long — SL and
+        // target worked in reverse.
+        side: isMultiLeg ? (trade.position === "SHORT" ? "SELL" : "BUY") : (trade.legs[0]?.action || "BUY"),
         quantity: trade.quantity,
         entryPrice: trade.entryPrice,
         sl: trade.stopLoss,

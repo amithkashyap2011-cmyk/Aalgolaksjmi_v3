@@ -216,6 +216,8 @@ export interface OptionChainData {
   maxPainStrike: number;
   strikes: OptionChainStrike[];
   updatedAt: string;
+  /** "ANGEL_ONE" = real contracts/quotes/OI; "MODEL" (or absent) = generated. */
+  source?: "ANGEL_ONE" | "MODEL";
 }
 
 export interface SignalModel {

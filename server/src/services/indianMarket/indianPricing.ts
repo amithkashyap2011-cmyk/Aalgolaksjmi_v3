@@ -205,6 +205,25 @@ export function resolveLivePriceForIndianTrade(t: any): number {
   }
 
   const normUnderlying = InstrumentMaster.normalizeUnderlying(t.underlying || t.symbol || "NIFTY");
+
+  // Multi-leg (spreads, straddles, condors): value = Σ BUY legs − Σ SELL legs
+  // for a LONG/net-debit position, the negative for a SHORT/net-credit one —
+  // the same convention the strategies use for entryPrice. This used to price
+  // only legs[0] (or, with no legs stored, the underlying's spot price).
+  if (Array.isArray(t.legs) && t.legs.length > 1) {
+    const spotKey = normUnderlying === "NIFTY" ? "NIFTY50" : normUnderlying;
+    const spot = MOCK_LIVE_INDIAN_TIKERS[spotKey]?.ltp;
+    if (spot && spot > 0) {
+      let net = 0;
+      for (const leg of t.legs) {
+        const px = OptionChainService.markPrice(normUnderlying as any, spot, Number(leg.strike), leg.instrumentType === "CE", leg.expiry || t.expiry);
+        net += (leg.action === "SELL" ? -1 : 1) * px;
+      }
+      const isShort = t.position === "SHORT" || t.side === "SELL";
+      return Number(Math.max(0.05, isShort ? -net : net).toFixed(2));
+    }
+  }
+
   const isOption = t.instrumentType === "CE" || t.instrumentType === "PE" ||
     (t.legs && t.legs.length > 0 && (t.legs[0].instrumentType === "CE" || t.legs[0].instrumentType === "PE")) ||
     (typeof t.symbol === "string" && (t.symbol.endsWith("CE") || t.symbol.endsWith("PE")));

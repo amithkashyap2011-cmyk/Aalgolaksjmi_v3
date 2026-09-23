@@ -82,8 +82,8 @@ export class BullCallSpreadStrategy extends BaseStrategy {
     const leg2Inst = InstrumentMaster.resolveInstrument(context.underlying, "CE", expiryInfo.date, otmStrike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const leg1Prem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, atmStrike, dteYears, 0.15, true);
-    const leg2Prem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, otmStrike, dteYears, 0.15, true);
+    const leg1Prem = OptionChainService.markPrice(context.underlying, context.spotPrice, atmStrike, true, expiryInfo.expiry);
+    const leg2Prem = OptionChainService.markPrice(context.underlying, context.spotPrice, otmStrike, true, expiryInfo.expiry);
 
     const netDebit = Number((leg1Prem - leg2Prem).toFixed(2));
     const strikeWidth = otmStrike - atmStrike;
@@ -220,8 +220,8 @@ export class BearPutSpreadStrategy extends BaseStrategy {
     const leg2Inst = InstrumentMaster.resolveInstrument(context.underlying, "PE", expiryInfo.date, otmStrike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const leg1Prem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, atmStrike, dteYears, 0.15, false);
-    const leg2Prem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, otmStrike, dteYears, 0.15, false);
+    const leg1Prem = OptionChainService.markPrice(context.underlying, context.spotPrice, atmStrike, false, expiryInfo.expiry);
+    const leg2Prem = OptionChainService.markPrice(context.underlying, context.spotPrice, otmStrike, false, expiryInfo.expiry);
 
     const netDebit = Number((leg1Prem - leg2Prem).toFixed(2));
     const strikeWidth = atmStrike - otmStrike;
@@ -356,8 +356,8 @@ export class LongStraddleStrategy extends BaseStrategy {
     const peInst = InstrumentMaster.resolveInstrument(context.underlying, "PE", expiryInfo.date, atmStrike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const cePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, atmStrike, dteYears, 0.16, true);
-    const pePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, atmStrike, dteYears, 0.16, false);
+    const cePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, atmStrike, true, expiryInfo.expiry);
+    const pePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, atmStrike, false, expiryInfo.expiry);
     const combinedPremium = Number((cePrem + pePrem).toFixed(2));
 
     const calculatedQty = Math.floor((accountCapital * (riskPercent / 100)) / (combinedPremium * 0.35 * ceInst.lotSize)) * ceInst.lotSize;
@@ -446,8 +446,8 @@ export class ShortStraddleStrategy extends BaseStrategy {
     const peInst = InstrumentMaster.resolveInstrument(context.underlying, "PE", expiryInfo.date, atmStrike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const cePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, atmStrike, dteYears, 0.14, true);
-    const pePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, atmStrike, dteYears, 0.14, false);
+    const cePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, atmStrike, true, expiryInfo.expiry);
+    const pePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, atmStrike, false, expiryInfo.expiry);
     const combinedPremium = Number((cePrem + pePrem).toFixed(2));
 
     const calculatedQty = Math.floor((accountCapital * (riskPercent / 100)) / (combinedPremium * 0.35 * ceInst.lotSize)) * ceInst.lotSize;
@@ -544,10 +544,10 @@ export class IronCondorStrategy extends BaseStrategy {
     const buyCallInst = InstrumentMaster.resolveInstrument(context.underlying, "CE", expiryInfo.date, buyCallStrike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const pSellPut = OptionChainService.calculateTheoreticalPrice(context.spotPrice, sellPutStrike, dteYears, 0.14, false);
-    const pBuyPut = OptionChainService.calculateTheoreticalPrice(context.spotPrice, buyPutStrike, dteYears, 0.14, false);
-    const pSellCall = OptionChainService.calculateTheoreticalPrice(context.spotPrice, sellCallStrike, dteYears, 0.14, true);
-    const pBuyCall = OptionChainService.calculateTheoreticalPrice(context.spotPrice, buyCallStrike, dteYears, 0.14, true);
+    const pSellPut = OptionChainService.markPrice(context.underlying, context.spotPrice, sellPutStrike, false, expiryInfo.expiry);
+    const pBuyPut = OptionChainService.markPrice(context.underlying, context.spotPrice, buyPutStrike, false, expiryInfo.expiry);
+    const pSellCall = OptionChainService.markPrice(context.underlying, context.spotPrice, sellCallStrike, true, expiryInfo.expiry);
+    const pBuyCall = OptionChainService.markPrice(context.underlying, context.spotPrice, buyCallStrike, true, expiryInfo.expiry);
 
     const netCredit = Number(((pSellPut - pBuyPut) + (pSellCall - pBuyCall)).toFixed(2));
     const wingWidth = step * 2;
@@ -642,8 +642,8 @@ export class LongStrangleStrategy extends BaseStrategy {
     const peInst = InstrumentMaster.resolveInstrument(context.underlying, "PE", expiryInfo.date, putStrike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const cePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, callStrike, dteYears, 0.16, true);
-    const pePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, putStrike, dteYears, 0.16, false);
+    const cePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, callStrike, true, expiryInfo.expiry);
+    const pePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, putStrike, false, expiryInfo.expiry);
     const totalPrem = Number((cePrem + pePrem).toFixed(2));
 
     const calculatedQty = Math.floor((accountCapital * (riskPercent / 100)) / (totalPrem * 0.35 * ceInst.lotSize)) * ceInst.lotSize;
@@ -733,8 +733,8 @@ export class ShortStrangleStrategy extends BaseStrategy {
     const peInst = InstrumentMaster.resolveInstrument(context.underlying, "PE", expiryInfo.date, putStrike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const cePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, callStrike, dteYears, 0.14, true);
-    const pePrem = OptionChainService.calculateTheoreticalPrice(context.spotPrice, putStrike, dteYears, 0.14, false);
+    const cePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, callStrike, true, expiryInfo.expiry);
+    const pePrem = OptionChainService.markPrice(context.underlying, context.spotPrice, putStrike, false, expiryInfo.expiry);
     const totalPrem = Number((cePrem + pePrem).toFixed(2));
 
     const calculatedQty = Math.floor((accountCapital * (riskPercent / 100)) / (totalPrem * 0.35 * ceInst.lotSize)) * ceInst.lotSize;

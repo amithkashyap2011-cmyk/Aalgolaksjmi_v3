@@ -16,7 +16,8 @@ import { InstrumentMaster } from "./instrumentMaster.js";
 import { StrikeSelector } from "./strikeSelector.js";
 import { ExpiryResolver } from "./expiryResolver.js";
 import { optionContracts } from "./angelOne/optionContracts.js";
-import { getFreshOptionLtp } from "./angelOne/optionQuotes.js";
+import { getFreshOptionLtp, getFreshOptionQuote } from "./angelOne/optionQuotes.js";
+import { expiryCloseTime } from "./angelOne/optionContracts.js";
 
 // Standard normal cumulative distribution function approximation
 function cdf(x: number): number {
@@ -164,12 +165,112 @@ export class OptionChainService {
   /**
    * Builds realistic, continuous Option Chain data for an underlying
    */
+  /**
+   * Implied volatility (annualised fraction) that reproduces `price` under
+   * Black-Scholes, by bisection. undefined when the price is below intrinsic
+   * or outside the 1%–300% band (no meaningful IV).
+   */
+  public static impliedVolatility(price: number, spot: number, strike: number, dteYears: number, isCall: boolean): number | undefined {
+    if (!(price > 0) || !(spot > 0) || !(dteYears > 0)) return undefined;
+    const intrinsic = Math.max(0, isCall ? spot - strike : strike - spot);
+    if (price < intrinsic) return undefined;
+    let lo = 0.01;
+    let hi = 3.0;
+    if (this.calculateTheoreticalPrice(spot, strike, dteYears, hi, isCall) < price) return undefined;
+    if (this.calculateTheoreticalPrice(spot, strike, dteYears, lo, isCall) > price) return lo;
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (this.calculateTheoreticalPrice(spot, strike, dteYears, mid, isCall) > price) hi = mid; else lo = mid;
+    }
+    return (lo + hi) / 2;
+  }
+
+  /**
+   * Option chain from real Angel One contracts and quotes: listed strikes,
+   * exchange premiums, real OI/volume/bid-ask, IV solved from each premium and
+   * Greeks from that IV — so PCR and max pain come from real open interest.
+   * Returns undefined (caller uses the model) when contracts aren't loaded or
+   * fewer than half the window's legs have a fresh quote. Legs without a quote
+   * fall back to the model individually.
+   */
+  private static buildRealChain(underlying: UnderlyingSymbol, spotPrice: number, expiryDate: Date): OptionChainData | undefined {
+    const und = String(underlying).toUpperCase();
+    const expiryStr = ExpiryResolver.formatDate(expiryDate);
+    const listed = optionContracts.getStrikes(und, expiryStr);
+    if (listed.length === 0) return undefined;
+
+    let atmIdx = 0;
+    for (let i = 1; i < listed.length; i++) if (Math.abs(listed[i] - spotPrice) < Math.abs(listed[atmIdx] - spotPrice)) atmIdx = i;
+    const atmStrike = listed[atmIdx];
+    const window = listed.slice(Math.max(0, atmIdx - 10), atmIdx + 11);
+
+    const msDiff = expiryCloseTime(expiryStr).getTime() - Date.now();
+    const dteYears = Math.max(msDiff, 3600_000) / (365 * 86400_000);
+    const modelIV = und.includes("BANK") ? 0.165 : 0.142;
+
+    let quotedLegs = 0;
+    let totalCallOI = 0;
+    let totalPutOI = 0;
+    const strikesForMaxPain: Array<{ strike: number; callOI: number; putOI: number }> = [];
+
+    const leg = (strike: number, isCall: boolean) => {
+      const c = optionContracts.getContract(und, expiryStr, strike, isCall ? "CE" : "PE");
+      const q = getFreshOptionQuote(c?.token);
+      if (q) quotedLegs++;
+      const ltp = q?.ltp ?? this.calculateTheoreticalPrice(spotPrice, strike, dteYears, modelIV, isCall);
+      const iv = (q && this.impliedVolatility(q.ltp, spotPrice, strike, dteYears, isCall)) || modelIV;
+      const oi = q?.oi ?? 0;
+      return {
+        token: c?.token ?? "",
+        tradingSymbol: c?.tradingSymbol ?? "",
+        ltp,
+        bid: q?.bid || 0,
+        ask: q?.ask || 0,
+        bidQty: q?.bidQty || 0,
+        askQty: q?.askQty || 0,
+        volume: q?.volume ?? 0,
+        oi,
+        prevOi: q?.dayOpenOi ?? oi,
+        changeOi: q ? q.oi - q.dayOpenOi : 0,
+        greeks: this.calculateBlackScholesGreeks(spotPrice, strike, dteYears, iv, isCall),
+      };
+    };
+
+    const strikes: OptionChainStrike[] = window.map((strike) => {
+      const call = leg(strike, true);
+      const put = leg(strike, false);
+      totalCallOI += call.oi;
+      totalPutOI += put.oi;
+      strikesForMaxPain.push({ strike, callOI: call.oi, putOI: put.oi });
+      return { strike, isATM: strike === atmStrike, distanceFromATM: strike - atmStrike, call, put };
+    });
+
+    if (quotedLegs < window.length) return undefined; // < half of the 2×window legs quoted
+
+    return {
+      underlying,
+      spotPrice,
+      futuresPrice: Number((spotPrice * (1 + 0.07 * dteYears)).toFixed(2)),
+      atmStrike,
+      expiry: expiryStr,
+      totalCallOI,
+      totalPutOI,
+      pcr: totalCallOI > 0 ? Number((totalPutOI / totalCallOI).toFixed(2)) : 1.0,
+      maxPainStrike: this.calculateMaxPain(strikesForMaxPain),
+      strikes,
+      updatedAt: new Date().toISOString(),
+      source: "ANGEL_ONE",
+    };
+  }
+
   public static generateOptionChain(
     underlying: UnderlyingSymbol,
     spotPrice: number,
     expiryDate?: Date
   ): OptionChainData {
     const resolvedExpiry = expiryDate || ExpiryResolver.resolveExpiry(underlying, { type: "NEAREST_VALID_EXPIRY" }).date;
+    const realChain = this.buildRealChain(underlying, spotPrice, resolvedExpiry);
+    if (realChain) return realChain;
     const expiryStr = ExpiryResolver.formatDate(resolvedExpiry);
     const atmStrike = StrikeSelector.getATMStrike(underlying, spotPrice);
     const ladder = StrikeSelector.getStrikeLadder(underlying, spotPrice, 10, 10);

@@ -498,7 +498,9 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
         symbol: trade.legs.length > 1 ? `${trade.underlying}_${trade.strategy}` : trade.legs[0]?.tradingSymbol || underlying,
         underlying: trade.underlying,
         instrumentType: trade.instrument,
-        side: trade.legs[0]?.action || "BUY",
+        // Multi-leg side follows the position (credit strategies are SELL);
+        // the first leg's action inverted SL/TP for e.g. iron condors.
+        side: trade.legs.length > 1 ? (trade.position === "SHORT" ? "SELL" : "BUY") : (trade.legs[0]?.action || "BUY"),
         quantity: trade.quantity,
         entryPrice: trade.entryPrice,
         sl: trade.stopLoss,
@@ -543,6 +545,11 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
 /**
  * GET /api/indian-market/analytics
  */
+// Trades closed before the Angel One feed (2026-09-23) ran on simulated
+// premiums and stale lot sizes; they're kept for audit but tagged
+// meta.simulatedPricing and left out of every P&L total.
+const REAL_PRICED = { "meta.simulatedPricing": { $ne: true } };
+
 router.get("/analytics", async (req, res) => {
   try {
     // Per-user like /funds and /history; it aggregated every account's trades
@@ -551,6 +558,7 @@ router.get("/analytics", async (req, res) => {
     const closedTrades = await Trade.find({
       userId,
       status: "CLOSED",
+      ...REAL_PRICED,
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
     }).sort({ closedAt: -1 }).lean();
 
@@ -1082,6 +1090,7 @@ router.get("/history", async (req, res) => {
     const closedTrades = await Trade.find({
       userId,
       status: "CLOSED",
+      ...REAL_PRICED,
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
       ...timeFilter,
     })
@@ -1208,6 +1217,7 @@ router.get("/funds", async (req, res) => {
     const closedTrades = await Trade.find({
       userId,
       status: "CLOSED",
+      ...REAL_PRICED,
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
     }).lean();
 
@@ -1298,6 +1308,8 @@ router.get(["/account/reconciliation", "/reconciliation"], async (req, res) => {
       }).lean(),
       Trade.find({
         status: "CLOSED",
+        ...REAL_PRICED,
+      ...REAL_PRICED,
         accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
       }).lean(),
     ]);
