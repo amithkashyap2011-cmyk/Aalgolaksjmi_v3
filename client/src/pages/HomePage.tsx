@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 
 import AILearningProgressPanel from '../components/ai/AILearningProgressPanel';
+import CryptoPortfolioView from '../components/dashboard/CryptoPortfolioView';
 
 /* ── Design Tokens ── */
 const BG    = "var(--ds-bg)";
@@ -98,19 +99,6 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       useAppStore.getState().setAccountType(targetAcct);
     }
 
-    // 🛡️ 2026-09-16: the sidebar's "Portfolio" link (/crypto#portfolio)
-    // was never handled here — #portfolio fell through to the same
-    // default as no hash at all, so clicking it landed on an identical
-    // view to Dashboard with no visible difference. The actual holdings
-    // section already exists further down this same page; #portfolio now
-    // scrolls to it instead of doing nothing.
-    if (location.hash === "#portfolio") {
-      // Wait for the terminal-tab switch above to render its branch
-      // (spot/futures/all each mount a different #portfolio-holdings node).
-      setTimeout(() => {
-        document.getElementById("portfolio-holdings")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 50);
-    }
   }, [location.pathname, location.hash, defaultTerminal, accountType]);
 
   const refresh = async (silent = false) => {
@@ -458,6 +446,19 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     if (terminalTab === 'spot') return t.accountType === "SPOT";
     return true;
   });
+
+  // The sidebar's Portfolio link (/crypto#portfolio) gets its own holdings view.
+  // It used to scroll this dashboard, so Portfolio and Dashboard looked the same.
+  if (location.hash === "#portfolio") {
+    return (
+      <CryptoPortfolioView
+        mode={(mode as "PAPER" | "LIVE") || "PAPER"}
+        balances={balances}
+        livePrices={livePrices as any}
+        inrRate={cryptoD.inrRate || 85}
+      />
+    );
+  }
 
   return (
     <div className="crypto-terminal-page" style={{ background: BG, minHeight: "100%", padding: "16px 16px 64px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
