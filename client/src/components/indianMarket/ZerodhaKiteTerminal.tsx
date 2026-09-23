@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useAppStore } from "../../store/useAppStore";
 import {
   Search, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   Wallet, Layers, ShieldCheck, CheckCircle2, AlertCircle, RefreshCw,
@@ -137,6 +138,12 @@ export default function ZerodhaKiteTerminal({
   useEffect(() => {
     if (location.hash === "#portfolio" || location.hash === "#positions") {
       setActiveTab("HOLDINGS");
+    } else if (location.hash === "#reconciliation") {
+      // Same gap as #portfolio: Reconciliation landed on the watchlist, i.e.
+      // identical to Dashboard. FUNDS holds the ledger reconciliation card.
+      setActiveTab("FUNDS");
+    } else if (!location.hash) {
+      setActiveTab("WATCHLIST");
     }
   }, [location.hash]);
   const [marketwatchIndex, setMarketwatchIndex] = useState(1);
@@ -172,7 +179,7 @@ export default function ZerodhaKiteTerminal({
   const [toastMsg, setToastMsg] = useState<{ text: string; type: "success" | "error" | "info" } | null>(null);
 
   // Runtime Data State
-  const [funds, setFunds] = useState({ availableCashINR: 0, usedMarginINR: 0, totalCollateralINR: 0 });
+  const [funds, setFunds] = useState<any>({ availableCashINR: 0, usedMarginINR: 0, totalCollateralINR: 0 });
   const [positions, setPositions] = useState<PositionItem[]>([]);
   const [tradeHistory, setTradeHistory] = useState<HistoricalTradeItem[]>([]);
   const [analytics, setAnalytics] = useState<any | null>(null);
@@ -294,6 +301,7 @@ export default function ZerodhaKiteTerminal({
 
   // Fetch Live Positions, Funds, History & Analytics with concurrent calls and tiered refresh
   const fetchLiveData = async (isFullRefresh = false) => {
+    const mode = useAppStore.getState().indianMode;
     try {
       const activeCalls: Promise<any>[] = [
         // 1. Positions (high frequency) — also feeds Holdings below: CNC
@@ -326,7 +334,7 @@ export default function ZerodhaKiteTerminal({
             setHoldings(cncHoldings);
           }),
         // 2. Funds (high frequency)
-        fetch("/api/indian-market/funds?userId=guest-user")
+        fetch(`/api/indian-market/funds?userId=guest-user&mode=${mode}`)
           .then((res) => res.json())
           .then((data) => {
             if (data?.success) {
@@ -2163,6 +2171,29 @@ export default function ZerodhaKiteTerminal({
                     {formatINR(funds.totalCollateralINR)}
                   </div>
                 </div>
+              </div>
+
+              {/* Ledger reconciliation: cash + open value must equal deposits + net P&L */}
+              <div id="reconciliation" style={{ background: "#131b2e", border: "1px solid #1e293b", borderRadius: 10, padding: 20, marginBottom: 24 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#fff" }}>Ledger Reconciliation</h3>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: Math.abs(funds.reconciliationDifferenceINR || 0) < 1 ? "#34d399" : "#f87171" }}>
+                    {Math.abs(funds.reconciliationDifferenceINR || 0) < 1 ? "✓ RECONCILED" : `MISMATCH ${formatINR(funds.reconciliationDifferenceINR)}`}
+                  </span>
+                </div>
+                {[
+                  ["Account equity", funds.accountEquityINR],
+                  ["Available cash", funds.availableCashINR],
+                  ["Used margin", funds.usedMarginINR],
+                  ["Realized P&L (net of charges)", funds.cumulativeRealizedNetPnlINR],
+                  ["Unrealized P&L", funds.unrealizedPnlINR],
+                  ["Today's charges", funds.todayChargesINR],
+                ].map(([label, v]) => (
+                  <div key={label as string} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid #1e293b", fontSize: 13 }}>
+                    <span style={{ color: "#94a3b8" }}>{label}</span>
+                    <span style={{ color: "#e2e8f0", fontWeight: 600 }}>{formatINR(Number(v) || 0)}</span>
+                  </div>
+                ))}
               </div>
 
               {/* Quick Deposit Card */}

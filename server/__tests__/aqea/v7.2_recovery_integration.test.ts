@@ -22,6 +22,7 @@ const settingsMockFactory = () => ({
   Settings: { findOne: jest.fn().mockReturnValue(mockSettingsQuery) }
 });
 
+import { alignedDlMockFactory, approveBayesianGate } from "./alignedDlMock.js";
 jest.unstable_mockModule("mongoose", () => {
   class MockSchema {
     static Types: any = { ObjectId: "ObjectId" };
@@ -91,6 +92,7 @@ const mockGetAllPredictions = jest.fn() as any;
 const mockGetAuthorizedPredictions = jest.fn() as any;
 const mockGetPredictor = jest.fn() as any;
 
+jest.unstable_mockModule("../../src/services/aqea/ai/ModernModelRegistry.js", alignedDlMockFactory);
 jest.unstable_mockModule("../../src/services/aqea/ai/PredictorRegistry.js", () => ({
   PredictorRegistry: {
     getAllPredictions: mockGetAllPredictions,
@@ -140,6 +142,7 @@ let AQEAEngine: any, PredictorRegistry: any, AQEA_CONFIG: any;
 
 beforeAll(async () => {
   ({ AQEAEngine } = await import("../../src/services/aqea/engine.js"));
+  await approveBayesianGate(jest);
   ({ PredictorRegistry } = await import("../../src/services/aqea/ai/PredictorRegistry.js"));
   ({ AQEA_CONFIG } = await import("../../src/services/aqea/config.js"));
 });

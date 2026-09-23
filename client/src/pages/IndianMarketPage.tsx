@@ -803,7 +803,7 @@ export default function IndianMarketPage() {
               ● {executionMode === "LIVE" ? "LIVE BROKER (ANGEL ONE)" : "PAPER ACCOUNT (SIMULATED LEDGER)"}
             </span>
             <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>
-              {executionMode === "LIVE" ? "Source: Official Exchange Margin" : "Source: Paper Initial Capital (₹20,000 INR)"}
+              {executionMode === "LIVE" ? "Source: Official Exchange Margin" : `Source: Paper deposits (₹${Number((funds as any).totalDepositsINR || 0).toLocaleString("en-IN")} INR)`}
             </span>
           </div>
           <span style={{ fontSize: 11, color: "#10b981", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>

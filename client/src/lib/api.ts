@@ -197,9 +197,9 @@ export async function getEnsembleReport(symbol: string, interval = "5m", limit =
   return request<any>(`/trading/ensemble-report?symbol=${symbol}&interval=${interval}&limit=${limit}`, {}, 30000);
 }
 
-export async function getTradeHistory(mode: string, limit = 50, skip = 0, status?: "OPEN" | "CLOSED") {
+export async function getTradeHistory(mode: string, limit = 50, skip = 0, status?: "OPEN" | "CLOSED", market?: "CRYPTO" | "INDIA") {
   return request<{ trades: any[]; total: number }>(
-    `/trading/history?mode=${mode}&limit=${limit}&skip=${skip}${status ? `&status=${status}` : ""}`,
+    `/trading/history?mode=${mode}&limit=${limit}&skip=${skip}${status ? `&status=${status}` : ""}${market ? `&market=${market}` : ""}`,
   );
 }
 

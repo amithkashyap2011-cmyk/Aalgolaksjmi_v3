@@ -5,18 +5,13 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { quantSignalsFromBars, STRATEGY_IDS } from "../../aqea/quant/quantSignalsFromBars.js";
 import type {
   QuantumAgent,
   AgentContext,
   AgentSignal,
   AgentHealth,
 } from "../types.js";
-import { computeSnapshot } from "../../indicatorService.js";
-import { evaluateLakshmi } from "../../strategies/lakshmiStrategy.js";
-import { evaluateAaryan } from "../../strategies/aaryanStrategy.js";
-import { evaluateAayush } from "../../strategies/aayushStrategy.js";
-import { evaluateGayatri } from "../../strategies/gayatriStrategy.js";
-import { evaluateOhmkara } from "../../strategies/ohmkaraStrategy.js";
 
 export class StrategyAgent implements QuantumAgent {
   public name = "StrategyAgent";
@@ -31,22 +26,20 @@ export class StrategyAgent implements QuantumAgent {
     this.evaluationsCount++;
 
     try {
-      // 1. Convert ctx.bars into indicators required by legacy strategies
-      const legacyBars = ctx.bars.map(b => ({
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        volume: b.volume,
-      }));
-      const indSnapshot = computeSnapshot(legacyBars);
-
-      // 2. Evaluate all 5 strategies in parallel
-      const lakshmi = evaluateLakshmi(indSnapshot);
-      const aaryan = evaluateAaryan(indSnapshot);
-      const aayush = evaluateAayush(indSnapshot);
-      const gayatri = evaluateGayatri(indSnapshot);
-      const ohmkara = evaluateOhmkara(indSnapshot);
+      // 1–2. The LIVE quant specialists (the same code the auto-trader runs);
+      // this used the backtest-only reimplementations under services/strategies.
+      const bars = ctx.bars.map(b => ({ open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
+      const q = quantSignalsFromBars(bars, (ctx as any).symbol || "AGENT");
+      const toSig = (d: string) => (d === "LONG" ? "BUY" : d === "SHORT" ? "SELL" : "NEUTRAL");
+      const pick = (name: string) => {
+        const sig = q.signals.find((x) => x.strategyId === STRATEGY_IDS[name]);
+        return { signal: toSig(sig?.direction ?? "HOLD"), confidence: sig?.confidence ?? 0 };
+      };
+      const lakshmi = { signal: toSig(q.consensus.direction), confidence: q.consensus.confidence };
+      const aaryan = pick("AARYAN");
+      const aayush = pick("AAYUSH");
+      const gayatri = pick("GAYATRI");
+      const ohmkara = pick("OHMKARA");
 
       // 3. Regime-based weighting
       // Define baseline weights

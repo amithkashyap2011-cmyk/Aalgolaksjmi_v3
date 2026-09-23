@@ -19,6 +19,7 @@ const settingsMockFactory = () => ({
   Settings: { findOne: jest.fn().mockReturnValue(mockSettingsQuery) }
 });
 
+import { alignedDlMockFactory, approveBayesianGate } from "./alignedDlMock.js";
 jest.unstable_mockModule("mongoose", () => {
   class MockSchema {
     static Types: any = { ObjectId: "ObjectId" };
@@ -94,6 +95,7 @@ const mockPPOPredictor = {
 
 const mockGetAllPredictions = jest.fn() as any;
 const mockGetAuthorizedPredictions = jest.fn() as any;
+jest.unstable_mockModule("../../src/services/aqea/ai/ModernModelRegistry.js", alignedDlMockFactory);
 jest.unstable_mockModule("../../src/services/aqea/ai/PredictorRegistry.js", () => ({
   PredictorRegistry: { 
     getPredictor: jest.fn().mockImplementation((name: string) => name === "PPO" ? mockPPOPredictor : null),
@@ -140,6 +142,7 @@ let LakshmiMasterRouter: any, __origRoute: any;
 beforeAll(async () => {
   ({ Settings } = await import("../../src/models/Settings.js"));
   ({ AQEAEngine } = await import("../../src/services/aqea/engine.js"));
+  await approveBayesianGate(jest);
   ({ AQEA_CONFIG } = await import("../../src/services/aqea/config.js") as any);
   ({ PredictorRegistry } = await import("../../src/services/aqea/ai/PredictorRegistry.js") as any);
   // The real ensemble fusion is structurally sub-hurdle (evPassesGate === false)

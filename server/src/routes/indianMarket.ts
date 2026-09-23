@@ -1189,19 +1189,23 @@ router.get("/funds", async (req, res) => {
       return res.json(fundsCache.data);
     }
 
-    const wallet = paper.getWallet(userId, mode, "INDIAN_NSE" as any);
-    let inr = wallet.get("INR");
-    if ((inr === undefined || inr === null || inr === 0) && mode === "LIVE") {
-      const paperWallet = paper.getWallet(userId, "PAPER", "INDIAN_NSE" as any);
-      const paperInr = paperWallet.get("INR");
-      if (paperInr && paperInr > 0) {
-        inr = paperInr;
-      } else if (inr === undefined || inr === null) {
+    let inr: number;
+    let liveFundsError: string | undefined;
+    if (mode === "LIVE") {
+      // LIVE = the real Angel One account. It used to borrow the PAPER wallet
+      // whenever the live balance was 0, so LIVE showed the ₹5L paper funds.
+      try {
+        const { smartApi } = await import("../services/indianMarket/angelOne/smartApiClient.js");
+        const rms: any = await smartApi.getRms();
+        inr = Number(rms?.availablecash ?? rms?.net) || 0;
+      } catch (e: any) {
         inr = 0;
+        liveFundsError = e?.message || String(e);
       }
-    } else if (inr === undefined || inr === null) {
-      inr = 0;
-      wallet.set("INR", inr);
+    } else {
+      const wallet = paper.getWallet(userId, mode, "INDIAN_NSE" as any);
+      inr = wallet.get("INR") ?? 0;
+      if (!wallet.has("INR")) wallet.set("INR", inr);
     }
 
     // Query active open Indian positions (scoped to this user — the ledger
@@ -1209,6 +1213,7 @@ router.get("/funds", async (req, res) => {
     // so an unscoped query would leak and mis-aggregate every user's trades).
     const openTrades = await Trade.find({
       userId,
+      mode,
       status: { $in: ["OPEN", "TARGET_TRIGGERED", "STOP_TRIGGERED", "EXIT_PENDING", "EXIT_PARTIALLY_FILLED"] },
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
     }).lean();
@@ -1216,6 +1221,7 @@ router.get("/funds", async (req, res) => {
     // Query closed trade history
     const closedTrades = await Trade.find({
       userId,
+      mode,
       status: "CLOSED",
       ...REAL_PRICED,
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
@@ -1223,6 +1229,13 @@ router.get("/funds", async (req, res) => {
 
     const openPositions = openTrades.map((t: any) => AuthoritativeLedger.buildAuthoritativePosition(t));
     const closedPositions = closedTrades.map((t: any) => AuthoritativeLedger.buildAuthoritativePosition(t));
+
+    // Actual paper funding (the UI hardcoded "₹20,000 initial capital").
+    const depositAgg: any[] = await WalletTransaction.aggregate([
+      { $match: { userId: new mongoose.Types.ObjectId(String(userId)), type: "DEPOSIT", accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] } } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]).catch(() => []);
+    const totalDepositsINR = roundTo2(depositAgg[0]?.total ?? 0);
 
     const autoPilotMode = AutoPilotStateMachine.getMode();
     const ledger = AuthoritativeLedger.calculateAccountLedger(
@@ -1260,6 +1273,8 @@ router.get("/funds", async (req, res) => {
       todayUnrealizedPnlINR: ledger.unrealized_pnl_today,
       todayChargesINR: ledger.charges_today,
       todayPnlINR: ledger.net_today_pnl,
+      totalDepositsINR: mode === "LIVE" ? 0 : totalDepositsINR,
+      liveFundsError,
       todayNetPnlINR: ledger.net_today_pnl,
       netAccountPnlINR: ledger.net_account_pnl,
 

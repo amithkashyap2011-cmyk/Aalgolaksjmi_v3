@@ -112,7 +112,7 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
     htfTrendBullish,
     htfTrendBullish ? "Higher TF is bullish" : "Higher TF not bullish"); // advisory — Saraswati handles macro validation
 
-  // 18.8 Hz Infrasound Noise Gate — same formula as gayatriStrategy.ts's
+  // 18.8 Hz Infrasound Noise Gate — same formula the (removed) backtest gayatriStrategy.ts used for its
   // noiseGateActive: low ADX (trendless chop) OR RSI pinned near 50 while
   // volatility is compressed. This check PASSES when the gate is NOT active
   // (i.e. the market isn't chopping) and is mandatory, since entering during

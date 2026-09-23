@@ -333,7 +333,10 @@ export class FeaturePipeline {
       atr: { atr14: Number(atr14.toPrecision(6)), atrPercent: Number(atrPct.toFixed(2)), volatilityState: volState },
       rsi: { rsi14: Number(rsi14.toFixed(2)), state: rsiState, divergence: rsiDiv },
       macd: { macd: Number(macdVal.toFixed(4)), signal: Number(macdSig.toFixed(4)), histogram: Number(macdHist.toFixed(4)), momentum: macdMomentum },
-      bollinger: { upper: Number(bUpper.toFixed(2)), middle: Number(bMid.toFixed(2)), lower: Number(bLower.toFixed(2)), bandwidth: Number(bBandwidth.toFixed(4)), percentB: Number(bPercent.toFixed(4)), isSqueeze },
+      // Significant figures, not 2 decimals: toFixed(2) zeroed the bands for
+      // sub-cent coins (PEPE/SHIB/BONK/FLOKI), so close > middle was always
+      // true (a free bullish Gayatri vote) and Ohmkara's distance was garbage.
+      bollinger: { upper: Number(bUpper.toPrecision(8)), middle: Number(bMid.toPrecision(8)), lower: Number(bLower.toPrecision(8)), bandwidth: Number(bBandwidth.toFixed(4)), percentB: Number(bPercent.toFixed(4)), isSqueeze },
       smc: { orderBlock: Boolean(ind.orderBlock), fvg: Boolean(ind.fvg), bos: Boolean(ind.bos), choch: Boolean(ind.choch), poc: Number(ind.poc ?? price), structuralTrend: smcTrend },
       liquiditySweeps: { sweepBuySide: sweepBuy, sweepSellSide: sweepSell, sweepMagnitude: Number(atrPct.toFixed(2)) },
       marketBreadth: { breadthRatio: Number(breadthRatio.toFixed(2)), advanceDeclineState: breadthState },

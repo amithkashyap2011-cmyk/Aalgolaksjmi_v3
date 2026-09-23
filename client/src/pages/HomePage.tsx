@@ -113,7 +113,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       const activeMode = useAppStore.getState().mode || "PAPER";
       const [pos, hist, ens, walletRes] = await Promise.allSettled([
         api.getOpenPositions(activeMode, activeAcct === "BOTH" ? "FUTURES" : activeAcct),
-        api.getTradeHistory(activeMode, 12, 0),
+        api.getTradeHistory(activeMode, 12, 0, "CLOSED", "CRYPTO"),
         api.getEnsembleReport(symbol),
         // Fetch the tab-specific wallet so Capital Deposited reflects only
         // this account type's deposits, not the combined SPOT+FUTURES total.
@@ -442,6 +442,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   });
 
   const displayTrades = recentTrades.filter((t) => {
+    // Crypto dashboard: Indian trades carry INR P&L, which formatVal treats
+    // as USD and multiplies by the INR rate (₹3,828 loss → "-$3,828 (-₹3.66L)").
+    if (String(t.accountType ?? "").startsWith("INDIAN_") || t.market === "INDIA") return false;
     if (terminalTab === 'futures') return (t.accountType ?? "FUTURES") === "FUTURES";
     if (terminalTab === 'spot') return t.accountType === "SPOT";
     return true;

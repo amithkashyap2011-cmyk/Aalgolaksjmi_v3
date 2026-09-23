@@ -285,12 +285,27 @@ def train_cnn(warm_start: bool = True) -> dict:
     new_accuracy = float(report["accuracy"])
     logger.info(f"[TrainCNN] Validation macro F1: {new_f1:.4f}, accuracy: {new_accuracy:.4f}")
 
-    # Baseline resets on an input-version change — a v1 F1 measured on the
-    # repeated-bar task can't gate a v2 windowed model. The random-guess
-    # floor still applies regardless.
-    prior_f1 = state.get("last_promoted_f1") if same_input_version else None
-    promote = bool(new_f1 >= MIN_PROMOTE_F1
-                   and (prior_f1 is None or new_f1 >= prior_f1 - REGRESSION_TOLERANCE))
+    # Gate against the incumbent scored on THIS validation set. The stored
+    # last_promoted_f1 was measured on an older window (different regime),
+    # so comparing to it blocked every retrain for 9+ days while the live
+    # model itself had likely decayed below that number. The random-guess
+    # floor still applies regardless; on an input-version change there's no
+    # comparable incumbent.
+    prior_f1 = None
+    if same_input_version and CHECKPOINT_PATH.exists():
+        try:
+            incumbent = CNN1D(input_features=len(FEATURE_COLS))
+            incumbent.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
+            incumbent.eval()
+            with torch.no_grad():
+                inc_preds = torch.argmax(incumbent(X_val_t), dim=1).numpy()
+            prior_f1 = float(classification_report(y_val, inc_preds, output_dict=True, zero_division=0)["macro avg"]["f1-score"])
+            logger.info(f"[TrainCNN] Incumbent macro F1 on the same validation set: {prior_f1:.4f}")
+        except Exception as e:
+            logger.warning(f"[TrainCNN] Could not score incumbent ({e}) — falling back to stored F1.")
+            prior_f1 = state.get("last_promoted_f1")
+    # Same data for both → no tolerance needed: promote only if it's better.
+    promote = bool(new_f1 >= MIN_PROMOTE_F1 and (prior_f1 is None or new_f1 > prior_f1))
 
     if promote:
         if CHECKPOINT_PATH.exists():
@@ -313,6 +328,7 @@ def train_cnn(warm_start: bool = True) -> dict:
     state["last_attempt_promoted"] = promote
     state["last_attempt_at"] = datetime.now(timezone.utc).isoformat()
     state["last_attempt_f1"] = new_f1
+    state["last_attempt_incumbent_f1"] = prior_f1
     state["last_attempt_accuracy"] = new_accuracy
     state["rows_trained"] = int(len(X_train))
     state["rows_validated"] = int(len(X_val))

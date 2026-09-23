@@ -8,13 +8,7 @@ import { authGuard, type AuthRequest } from "../middleware/auth.js";
 import { BacktestRun } from "../models/BacktestRun.js";
 import * as binance from "../services/binanceService.js";
 import { computeSnapshot, type OHLC } from "../services/indicatorService.js";
-import {
-  evaluateAaryan,
-  evaluateAayush,
-  evaluateGayatri,
-  evaluateLakshmi,
-  evaluateOhmkara,
-} from "../services/strategies/index.js";
+import { quantSignalsFromBars, STRATEGY_IDS } from "../services/aqea/quant/quantSignalsFromBars.js";
 
 const router = Router();
 
@@ -34,6 +28,7 @@ function klineToOHLC(k: binance.Kline): OHLC {
     high: parseFloat(k.high),
     low: parseFloat(k.low),
     close: parseFloat(k.close),
+    volume: parseFloat(k.volume),
   };
 }
 
@@ -62,32 +57,22 @@ async function evaluateStrategy(
     return { signal: mappedSignal, slPct: 2, tpPct: 4 };
   }
 
-  switch (strategyName.toUpperCase()) {
-    case "AARYAN": {
-      const r = evaluateAaryan(ind);
-      return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
-    }
-    case "AAYUSH": {
-      const r = evaluateAayush(ind);
-      return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
-    }
-    case "GAYATRI": {
-      const r = evaluateGayatri(ind);
-      return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
-    }
-    case "OHMKARA": {
-      const r = evaluateOhmkara(ind);
-      return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
-    }
-    case "ENSEMBLE": {
-      return evaluateEnsembleBacktest(bars);
-    }
-    case "LAKSHMI":
-    default: {
-      const r = evaluateLakshmi(ind);
-      return { signal: r.signal, slPct: r.slPct, tpPct: r.tpPct };
-    }
-  }
+  if (strategyName.toUpperCase() === "ENSEMBLE") return evaluateEnsembleBacktest(bars);
+  return evaluateLiveQuant(strategyName, bars);
+}
+
+// Same strategy code the live bot runs (see quantSignalsFromBars for limits);
+// the old backtester ran a separate reimplementation that shared only names.
+function evaluateLiveQuant(strategyName: string, bars: OHLC[]): { signal: string; slPct: number; tpPct: number } {
+  const { features, signals, consensus } = quantSignalsFromBars(bars);
+  const id = STRATEGY_IDS[strategyName.toUpperCase()];
+  const direction = id ? (signals.find((s) => s.strategyId === id)?.direction ?? "HOLD") : consensus.direction;
+
+  // ATR-scaled exits: SL 1.5×ATR, TP 2.25×ATR (1.5R), bounded to sane ranges.
+  const atrPct = features.atr.atrPercent || 1;
+  const slPct = clamp(atrPct * 1.5, 0.3, 8);
+  const tpPct = clamp(atrPct * 2.25, 0.45, 12);
+  return { signal: direction === "LONG" ? "BUY" : direction === "SHORT" ? "SELL" : "NEUTRAL", slPct, tpPct };
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -28,9 +28,9 @@ export async function safeCreateAlert(data: {
   try {
     if (mongoose.connection.readyState !== 1) return;
     const validUserId = toValidObjectId(data.userId);
-    Alert.create({ ...data, userId: validUserId }).catch((err) =>
-      console.warn("[Alert] Failed to save alert:", err),
-    );
+    // Awaited: callers already await this, and a fire-and-forget create let
+    // the HTTP response (and the toast poll) race ahead of the saved alert.
+    await Alert.create({ ...data, userId: validUserId });
   } catch (err) {
     console.warn("[Alert] Failed to save alert:", err);
   }

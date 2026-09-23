@@ -1227,6 +1227,10 @@ router.get("/history", authGuard, async (req: AuthRequest, res) => {
     if (mongoose.connection.readyState === 1) {
       const filter: any = { userId: req.userId, mode };
       if (status === "OPEN" || status === "CLOSED") filter.status = status;
+      // Optional market scope: crypto views must not list Indian (INR) trades.
+      const market = (req.query?.market as string)?.toUpperCase();
+      if (market === "CRYPTO") filter.accountType = { $not: /^INDIAN_/ };
+      else if (market === "INDIA") filter.accountType = /^INDIAN_/;
       trades = await Trade.find(filter)
         .sort(status === "CLOSED" ? { closedAt: -1 } : { openedAt: -1 })
         .skip(skip)

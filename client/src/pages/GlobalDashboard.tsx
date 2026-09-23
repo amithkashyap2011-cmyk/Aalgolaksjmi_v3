@@ -79,13 +79,13 @@ export default function GlobalDashboard() {
       setData({
         india: {
           equityINR: indiaEquity,
-          cashINR: indiaData?.availableCashINR ?? 20000,
+          cashINR: indiaData?.availableCashINR ?? 0,
           marginUsedINR: indiaData?.usedMarginINR ?? 0,
           todayPnlINR: indiaTodayPnl,
           realizedPnlINR: indiaRealizedPnl,
           unrealizedPnlINR: indiaUnrealizedPnl,
           mode: indianMode,
-          source: indianMode === "LIVE" ? "Angel One Broker" : "Paper Initial Capital (₹20,000 INR)",
+          source: indianMode === "LIVE" ? "Angel One Broker" : `Paper deposits (₹${Number(indiaData?.totalDepositsINR || 0).toLocaleString("en-IN")} INR)`,
           status: "ONLINE",
         },
         crypto: {

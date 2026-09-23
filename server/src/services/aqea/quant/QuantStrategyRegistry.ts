@@ -3,13 +3,10 @@
  *  AQEA 2026–27 — Quant Strategy Specialists Layer (Phase 4)
  * ═══════════════════════════════════════════════════════════════════
  *
- *  ⚠️  THIS is the LIVE strategy layer (autoTradeEngine → AQEAEngine.decide →
- *  LakshmiMasterRouter → QuantStrategyRegistry.evaluateAll). It is a SEPARATE
- *  implementation from server/src/services/strategies/*.ts (Aaryan / Aayush /
- *  Gayatri / Ohmkara / Lakshmi), which run ONLY in the backtester and the
- *  manual recommendation endpoint. The two share names, not logic, inputs, or
- *  outputs — do NOT assume a backtest of a name validates the live behaviour of
- *  the same name. See services/strategies/index.ts for the other side of this.
+ *  The LIVE strategy layer (autoTradeEngine → AQEAEngine.decide →
+ *  LakshmiMasterRouter → QuantStrategyRegistry.evaluateAll). The backtester
+ *  and the quantum StrategyAgent run this same code over candles via
+ *  quantSignalsFromBars (the old separate reimplementations were removed).
  */
 
 import { Standardized15Features } from "../pipeline/FeaturePipeline.js";
@@ -138,14 +135,21 @@ export class QuantStrategyRegistry {
     let alignedBullish = 0;
     let alignedBearish = 0;
 
-    if (f.tensorVector[8] >= f.tensorVector[9]) alignedBullish++; else alignedBearish++;
-    if (f.macd.histogram >= 0) alignedBullish++; else alignedBearish++;
+    // Symmetric checks: each one votes bull, bear, or (no data / flat) neither.
+    // Previously ties and missing data counted as bullish — cvdScore is always
+    // 0 on the live path and imbalance is 0 without a book, so `>= 0` handed
+    // LONG two free votes — and the SMC check had no bearish counterpart, so
+    // LONG could reach 8/8 while SHORT capped at 6/8.
+    const vote = (x: number, eps = 0) => { if (x > eps) alignedBullish++; else if (x < -eps) alignedBearish++; };
+    vote(f.tensorVector[8] - f.tensorVector[9]);
+    vote(f.macd.histogram);
     if (f.rsi.rsi14 >= 45 && f.rsi.rsi14 <= 75) alignedBullish++;
     if (f.rsi.rsi14 <= 55 && f.rsi.rsi14 >= 25) alignedBearish++;
-    if (f.ohlcv.close >= f.bollinger.middle) alignedBullish++; else alignedBearish++;
-    if (f.cvd.cvdScore >= 0) alignedBullish++; else alignedBearish++;
-    if (f.orderBook.imbalance >= 0) alignedBullish++; else alignedBearish++;
-    if (f.smc.structuralTrend === "BULLISH" || f.smc.orderBlock || f.smc.bos) alignedBullish++;
+    vote(f.ohlcv.close - f.bollinger.middle);
+    vote(f.cvd.cvdNormalized, 0.05);
+    vote(f.orderBook.imbalance, 0.02);
+    if (f.smc.structuralTrend === "BULLISH" || (f.smc.bos && f.smc.structuralTrend !== "BEARISH")) alignedBullish++;
+    else if (f.smc.structuralTrend === "BEARISH" || f.smc.choch) alignedBearish++;
 
     const totalChecks = 8;
     const bullRatio = alignedBullish / totalChecks;
@@ -169,7 +173,11 @@ export class QuantStrategyRegistry {
 
   public static evaluateOhmkara(f: Standardized15Features): QuantExpertSignal {
     const rsi = f.rsi.rsi14;
-    const midDist = Math.abs(f.ohlcv.close - f.bollinger.middle) / Math.max(1, f.bollinger.middle);
+    // Relative distance from the Bollinger mid. It divided by max(1, mid), so
+    // for sub-$1 coins (DOGE, SHIB, PEPE, BONK…) the distance was absolute and
+    // ~0 — they could never register as stretched.
+    const mid = f.bollinger.middle;
+    const midDist = mid > 0 ? Math.abs(f.ohlcv.close - mid) / mid : 0;
     const rsiBalance = 1 - Math.abs(rsi - 50) / 50;
     const equilibriumScore = rsiBalance * 0.7 + (1 - Math.min(1, midDist * 20)) * 0.3;
 

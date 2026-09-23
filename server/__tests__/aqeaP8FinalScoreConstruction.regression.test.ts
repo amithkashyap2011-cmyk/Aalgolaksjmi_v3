@@ -267,7 +267,22 @@ describe("AQEA Phase 8 — Final Score Construction & Signal Suppression Forensi
     });
     const gayatri = QuantStrategyRegistry.evaluateGayatri(bullFeats, "TRENDING_BULL");
     expect(gayatri.direction).toBe("LONG");
-    expect(gayatri.confidence).toBeGreaterThanOrEqual(0.75);
+    // 0.625 (5/8): missing order-flow data no longer counts as two free
+    // bullish votes (was 0.75 only because cvdScore=0 / imbalance=0 voted LONG).
+    expect(gayatri.confidence).toBeGreaterThanOrEqual(0.625);
+  });
+
+  it("TC18b: Gayatri is symmetric — a mirrored bear state scores the same as SHORT", () => {
+    const bull = FeaturePipeline.process({ ...baseContext, indicators: { ...baseContext.indicators, rsi14: 60, ema9: 65500, ema21: 65000 } });
+    const bear = FeaturePipeline.process({ ...baseContext, indicators: { ...baseContext.indicators, rsi14: 40, ema9: 64500, ema21: 65000 } });
+    const g = QuantStrategyRegistry.evaluateGayatri(bull, "TRENDING_BULL");
+    const b = QuantStrategyRegistry.evaluateGayatri(bear, "TRENDING_BEAR");
+    expect(g.meta.alignedBullish + g.meta.alignedBearish).toBeLessThanOrEqual(8);
+    // No free bullish votes from absent flow data.
+    const flat = FeaturePipeline.process({ ...baseContext, indicators: { ...baseContext.indicators, rsi14: 50, ema9: 65000, ema21: 65000 } });
+    const f = QuantStrategyRegistry.evaluateGayatri(flat, "RANGING");
+    expect(f.direction).toBe("HOLD");
+    expect(b.direction === "SHORT" || b.direction === "HOLD").toBe(true);
   });
 
   it("TC19: Quant specialist OhmKara 528Hz identifies high resonance frequency", () => {

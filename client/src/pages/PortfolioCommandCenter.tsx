@@ -347,7 +347,7 @@ export default function PortfolioCommandCenter() {
               ₹{capital.netEquity.toLocaleString("en-IN")}
             </div>
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, fontWeight: 600 }}>
-              Source: {mode === "LIVE" ? "Angel One Broker" : "Paper Initial Capital (₹20,000 INR)"}
+              Source: {mode === "LIVE" ? "Angel One Broker" : "Paper account"}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#94a3b8", marginTop: 6 }}>
               <span>Used Margin: ₹{capital.usedMargin.toLocaleString("en-IN")}</span>

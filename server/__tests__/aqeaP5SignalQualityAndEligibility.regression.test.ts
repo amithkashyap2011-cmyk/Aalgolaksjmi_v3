@@ -248,13 +248,24 @@ describe("AQEA 2026-27 P5 Signal Quality and Eligibility Regression Suite", () =
         ...dummyIndicators,
         rsi14: 68,
         adx14: 35,
+        ema9: 65600,
+        ema21: 65000,
         ema20: 66000,
-        ema50: 65000
-      }
+        ema50: 65000,
+        macd: { macd: 120, signal: 60, histogram: 60 },
+      },
+      // Bid-heavy book + buy-side flow: a genuinely bullish state on every
+      // family, not one that relied on missing flow data voting LONG.
+      marketData: { ...(sampleContext as any).marketData, orderBook: { bidVol: 300, askVol: 100 } },
+      orderFlow: { imbalance: 0.5, cvdNormalized: 0.6 },
     };
     const std15 = FeaturePipeline.process(bullContext);
     const result = await LakshmiMasterRouter.route(std15, { state: "TRENDING_BULL", score: 85, confidence: 85 });
-    if (result.ensembleFusion.buyProbability > result.ensembleFusion.sellProbability) {
+    // LONG must win when buy beats BOTH sell and hold. (Buy > sell alone isn't
+    // enough — HOLD can dominate; this passed only while Gayatri got free
+    // bullish votes from missing order-flow data.)
+    const ef = result.ensembleFusion;
+    if (ef.buyProbability > ef.sellProbability && ef.buyProbability > ef.holdProbability) {
       expect(result.direction).toBe("LONG");
       expect(result.compositeProbability).toBeCloseTo(result.ensembleFusion.buyProbability, 3);
     }
