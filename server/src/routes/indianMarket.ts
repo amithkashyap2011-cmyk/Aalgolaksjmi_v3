@@ -333,7 +333,9 @@ router.get("/audit-logs", (req, res) => {
  */
 router.get("/trade-groups", async (req, res) => {
   try {
-    const groups = await IndianTradeGroup.find().sort({ openedAt: -1 }).limit(50).lean();
+    // Scoped to the requesting user — it listed every account's trade groups.
+    const userId = resolveIndianUserId((req.query.userId as string) || (req as any).userId);
+    const groups = await IndianTradeGroup.find({ userId }).sort({ openedAt: -1 }).limit(50).lean();
     res.json({ success: true, groups });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -528,7 +530,11 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
  */
 router.get("/analytics", async (req, res) => {
   try {
+    // Per-user like /funds and /history; it aggregated every account's trades
+    // (69 trades / +₹1,19,160 incl. a stray guest-account trade vs the ledger's 68).
+    const userId = resolveIndianUserId((req.query.userId as string) || (req as any).userId);
     const closedTrades = await Trade.find({
+      userId,
       status: "CLOSED",
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
     }).sort({ closedAt: -1 }).lean();
@@ -545,9 +551,11 @@ router.get("/analytics", async (req, res) => {
       const winRate = count > 0 ? Number(((wins.length / count) * 100).toFixed(1)) : 0;
       const totalWin = wins.reduce((acc, t: any) => acc + (t.pnl || 0), 0);
       const totalLoss = Math.abs(losses.reduce((acc, t: any) => acc + (t.pnl || 0), 0));
-      const net = Number((totalWin - totalLoss).toFixed(2));
+      // Real ledger charges (not a flat ₹45/trade estimate), and net after them,
+      // so this matches the ledger-backed Total Realized card.
+      const charges = Number(trades.reduce((acc, t: any) => acc + (AuthoritativeLedger.buildAuthoritativePosition(t).charges || 0), 0).toFixed(2));
+      const net = Number((totalWin - totalLoss - charges).toFixed(2));
       const profitFactor = totalLoss > 0 ? Number((totalWin / totalLoss).toFixed(2)) : (totalWin > 0 ? 3.5 : 1.0);
-      const estCharges = count * 45; // ~₹45 brokerage & STT per trade
       return {
         count,
         wins: wins.length,
@@ -556,7 +564,8 @@ router.get("/analytics", async (req, res) => {
         grossProfit: totalWin,
         grossLoss: totalLoss,
         netPnL: net,
-        charges: estCharges,
+        grossPnL: Number((totalWin - totalLoss).toFixed(2)),
+        charges,
         profitFactor,
       };
     };
@@ -831,7 +840,10 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
  */
 router.get("/positions", async (req, res) => {
   try {
+    // Scoped to the requesting user — it returned every account's open positions.
+    const userId = resolveIndianUserId((req.query.userId as string) || (req as any).userId);
     const openTrades = await Trade.find({
+      userId,
       status: { $in: ["OPEN", "TARGET_TRIGGERED", "STOP_TRIGGERED", "EXIT_PENDING", "EXIT_PARTIALLY_FILLED"] },
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
     }).lean();

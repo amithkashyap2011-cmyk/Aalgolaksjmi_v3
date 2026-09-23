@@ -62,7 +62,7 @@ describe("GET /api/indian-market/positions — exposes productType", () => {
     if (skipIfNoMongo()) return;
     await openTrade("RELIANCE", "CNC");
 
-    const res = await request(app).get("/api/indian-market/positions");
+    const res = await request(app).get(`/api/indian-market/positions?userId=${testUserId}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     const found = res.body.positions.find((p: any) => p.symbol === "RELIANCE" || p.instrument === "RELIANCE");
@@ -74,7 +74,7 @@ describe("GET /api/indian-market/positions — exposes productType", () => {
     if (skipIfNoMongo()) return;
     await openTrade("TATASTEEL", "MIS");
 
-    const res = await request(app).get("/api/indian-market/positions");
+    const res = await request(app).get(`/api/indian-market/positions?userId=${testUserId}`);
     expect(res.status).toBe(200);
     const found = res.body.positions.find((p: any) => p.symbol === "TATASTEEL" || p.instrument === "TATASTEEL");
     expect(found).toBeDefined();
