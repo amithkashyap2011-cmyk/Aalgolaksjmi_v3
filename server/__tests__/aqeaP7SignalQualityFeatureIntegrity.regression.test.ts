@@ -74,6 +74,35 @@ describe("AQEA Phase 7 — Signal Quality, Feature Edge & Directional Opportunit
     };
   });
 
+  // Regression 2026-09-23: sub-cent meme coins. An absolute 0.0001 ATR floor
+  // made BONK @ 0.00000402 report ATR 25x its price (atrPercent ~2500%,
+  // volatilityState EXTREME), and toFixed(4) rounded a real sub-cent ATR to 0.
+  it("keeps sub-cent coin ATR at its true scale", () => {
+    const price = 0.00000402;
+    const trueAtr = 0.00000004; // 1% of price
+    const feats = FeaturePipeline.process({
+      ...baseContext,
+      symbol: "BONKUSDT",
+      currentPrice: price,
+      indicators: {
+        ...baseContext.indicators,
+        open: price, high: price * 1.01, low: price * 0.99, close: price,
+        vwap: price, atr14: trueAtr, stdDev: price * 0.01,
+        ema9: price, ema21: price, ema50: price, ema200: price,
+        bollinger: { upper: price * 1.02, middle: price, lower: price * 0.98 },
+      },
+      bars: [
+        { open: price, high: price * 1.01, low: price * 0.99, close: price, volume: 1e9 },
+        { open: price, high: price * 1.01, low: price * 0.99, close: price, volume: 1e9 },
+      ],
+    });
+
+    expect(feats.atr.atr14).toBeCloseTo(trueAtr, 12);
+    expect(feats.atr.atr14).toBeGreaterThan(0);
+    expect(feats.atr.atrPercent).toBeCloseTo(1.0, 1);
+    expect(feats.atr.volatilityState).toBe("NORMAL");
+  });
+
   // ───────────────────────────────────────────────────────────────────────────
   // 1. Feature Freshness, Timestamps & Schema Integrity (TC01 - TC08)
   // ───────────────────────────────────────────────────────────────────────────

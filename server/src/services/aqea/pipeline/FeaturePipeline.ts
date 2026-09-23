@@ -250,7 +250,11 @@ export class FeaturePipeline {
     const volRatio = realizedVol / Math.max(0.001, parkinsonVol);
 
     // 7. ATR
-    const atr14 = Math.max(0.0001, Number(ind.atr14 ?? (price * 0.015)));
+    // Floor is price-relative: an absolute 0.0001 floor inflated sub-cent coins'
+    // ATR (BONK @ 0.000004 → 25× price), making atrPct ~2500% and volState
+    // permanently EXTREME for PEPE/SHIB/BONK/FLOKI.
+    const atrFloor = price > 0 ? price * 1e-6 : 0.0001;
+    const atr14 = Math.max(atrFloor, Number(ind.atr14 ?? (price * 0.015)));
     const atrPct = (atr14 / price) * 100;
     const volState = atrPct > 3.0 ? "EXTREME" : (atrPct > 1.8 ? "HIGH" : (atrPct < 0.6 ? "LOW" : "NORMAL"));
 
@@ -325,7 +329,8 @@ export class FeaturePipeline {
       fundingRate: { rate: funding, annualizedRate: Number((annFunding * 100).toFixed(2)), bias: fundingBias },
       openInterest: { oi, oiExpansion: oiExp, trend: oiTrend },
       volatility: { realizedVol: Number(realizedVol.toFixed(4)), parkinsonVol: Number(parkinsonVol.toFixed(4)), ratio: Number(volRatio.toFixed(2)) },
-      atr: { atr14: Number(atr14.toFixed(4)), atrPercent: Number(atrPct.toFixed(2)), volatilityState: volState },
+      // Significant figures, not toFixed(4) — that rounded a sub-cent ATR to 0.
+      atr: { atr14: Number(atr14.toPrecision(6)), atrPercent: Number(atrPct.toFixed(2)), volatilityState: volState },
       rsi: { rsi14: Number(rsi14.toFixed(2)), state: rsiState, divergence: rsiDiv },
       macd: { macd: Number(macdVal.toFixed(4)), signal: Number(macdSig.toFixed(4)), histogram: Number(macdHist.toFixed(4)), momentum: macdMomentum },
       bollinger: { upper: Number(bUpper.toFixed(2)), middle: Number(bMid.toFixed(2)), lower: Number(bLower.toFixed(2)), bandwidth: Number(bBandwidth.toFixed(4)), percentB: Number(bPercent.toFixed(4)), isSqueeze },
