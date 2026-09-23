@@ -94,8 +94,10 @@ router.get("/ticks", (_req, res) => {
         adx14: 20,
       };
       const cfg = INDIAN_SYMBOLS[sym];
-      const change = item.ltp - item.open;
-      const changePct = item.open > 0 ? Number(((change / item.open) * 100).toFixed(2)) : 0;
+      // Market convention: change vs previous close (real feed), else vs open.
+      const base = (item as any).prevClose || item.open;
+      const change = item.ltp - base;
+      const changePct = base > 0 ? Number(((change / base) * 100).toFixed(2)) : 0;
       const decision: "LONG" | "SHORT" | "HOLD" =
         item.rsi14 > 58 ? "LONG" : item.rsi14 < 42 ? "SHORT" : "HOLD";
       const score = Math.min(95, Math.round(50 + Math.abs(item.rsi14 - 50) * 1.2 + (item.adx14 || 20) * 0.5));
@@ -156,8 +158,9 @@ router.get("/scan", async (req, res) => {
           adx14: data.adx14,
         });
 
-        const change = data.ltp - data.open;
-        const changePct = (change / data.open) * 100;
+        const base = (data as any).prevClose || data.open; // vs previous close when the real feed has it
+        const change = data.ltp - base;
+        const changePct = base > 0 ? (change / base) * 100 : 0;
 
         return {
           symbol,
@@ -1416,6 +1419,45 @@ router.post("/funds/deposit", requirePermission("CREATE_ORDER"), async (req, res
  * GET /api/indian-market/kill-switch
  * Authoritative Kill Switch Status Query
  */
+/**
+ * GET /api/indian-market/broker/status — Angel One connection + price-feed state.
+ * GET /api/indian-market/broker/account — READ-ONLY profile, funds, holdings,
+ * positions from Angel One. No order endpoints exist for the real broker.
+ */
+router.get("/broker/status", async (_req, res) => {
+  try {
+    const { smartApi } = await import("../services/indianMarket/angelOne/smartApiClient.js");
+    const { getAngelFeedStatus } = await import("../services/indianMarket/angelOne/angelPriceFeed.js");
+    res.json({ success: true, broker: await smartApi.status(), priceFeed: getAngelFeedStatus(), ordersEnabled: false });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get("/broker/account", async (_req, res) => {
+  try {
+    const { smartApi } = await import("../services/indianMarket/angelOne/smartApiClient.js");
+    const [profile, rms, holdings, positions] = await Promise.allSettled([
+      smartApi.getProfile(), smartApi.getRms(), smartApi.getHoldings(), smartApi.getPositions(),
+    ]);
+    const val = (r: PromiseSettledResult<any>) => (r.status === "fulfilled" ? r.value : null);
+    const err = (r: PromiseSettledResult<any>) => (r.status === "rejected" ? String(r.reason?.message || r.reason) : undefined);
+    const p = val(profile);
+    res.json({
+      success: profile.status === "fulfilled",
+      readOnly: true,
+      // Profile trimmed to non-sensitive display fields.
+      profile: p ? { name: p.name, clientcode: p.clientcode, exchanges: p.exchanges, products: p.products } : null,
+      funds: val(rms),
+      holdings: val(holdings) ?? [],
+      positions: val(positions) ?? [],
+      errors: { profile: err(profile), funds: err(rms), holdings: err(holdings), positions: err(positions) },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get("/kill-switch", (_req, res) => {
   res.json({
     success: true,

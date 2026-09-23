@@ -83,6 +83,8 @@ export default function TopBar({ onMenuClick }: Props) {
   const [indianFunds, setIndianFunds] = useState<IndianFundsState | null>(null);
 
   // Emergency Stop & Reset Modals
+  // Real Angel One connection + price-feed state for the broker badge.
+  const [brokerStatus, setBrokerStatus] = useState<{ connected: boolean; feedLive: boolean; error?: string } | null>(null);
   const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
   const [emergencyLoading, setEmergencyLoading] = useState(false);
   const [emergencyStatus, setEmergencyStatus] = useState<string | null>(null);
@@ -100,6 +102,21 @@ export default function TopBar({ onMenuClick }: Props) {
     const t = setInterval(go, 15000);
     return () => clearInterval(t);
   }, [userId, accountType]);
+
+  useEffect(() => {
+    if (!isIndian) return;
+    let alive = true;
+    const load = () => fetch("/api/indian-market/broker/status")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive || !d?.success) return;
+        setBrokerStatus({ connected: !!d.broker?.connected, feedLive: d.priceFeed?.source === "ANGEL_ONE", error: d.broker?.lastError || d.priceFeed?.lastError });
+      })
+      .catch(() => {});
+    load();
+    const t = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, [isIndian]);
 
   useEffect(() => {
     if (!isIndian && !isGlobal) return;
@@ -519,8 +536,12 @@ export default function TopBar({ onMenuClick }: Props) {
             background: "rgba(56,189,248,0.12)", color: "#38bdf8",
             border: "1px solid rgba(56,189,248,0.3)", letterSpacing: "0.04em",
             textTransform: "uppercase", whiteSpace: "nowrap"
-          }} title={INDIAN_LIVE_AVAILABLE ? "Authenticated Indian Broker Engine (Angel One SmartAPI / Zerodha Kite)" : "No Indian broker connected yet — paper trading on simulated prices"}>
-            {INDIAN_LIVE_AVAILABLE ? "Angel / Kite" : "Simulated · No Broker"}
+          }} title={
+            brokerStatus?.feedLive
+              ? "Angel One connected (read-only): real NSE/BSE prices. Orders are not enabled — Indian trading is paper."
+              : `Simulated prices — Angel One not connected${brokerStatus?.error ? `: ${brokerStatus.error}` : ""}`
+          }>
+            {INDIAN_LIVE_AVAILABLE ? "Angel / Kite" : brokerStatus?.feedLive ? "Angel One · Read-only" : "Simulated · No Broker"}
           </div>
         </div>
       )}

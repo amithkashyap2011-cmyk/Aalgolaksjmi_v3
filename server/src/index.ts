@@ -710,6 +710,9 @@ async function boot() {
       IntradaySquareOffService.startDaemon();
       IndianReconciliationService.startDaemon();
       IndianMarketAutoTrader.startDaemon();
+      // Real NSE/BSE prices from Angel One (read-only); stays simulated if not configured.
+      const { startAngelPriceFeed } = await import("./services/indianMarket/angelOne/angelPriceFeed.js");
+      startAngelPriceFeed().catch((e: any) => bootLog(`Angel One price feed notice: ${e?.message || e}`));
       bootLog("Indian Market Daemons started (Auto-Trader, 3:15 PM Auto Square-off & Reconciliation active).");
     } catch (err: any) {
       bootLog(`Indian Market Daemons init notice: ${err.message}`);

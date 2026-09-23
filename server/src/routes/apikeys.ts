@@ -126,14 +126,21 @@ router.post("/angel-one/test", authGuard, async (req: AuthRequest, res) => {
       res.status(400).json({ error: "SmartAPI App Key and Client Code are required." });
       return;
     }
-    // This used to always answer "HANDSHAKE_SUCCESSFUL" without contacting
-    // Angel One. There is no SmartAPI client yet, so say so instead.
-    res.status(501).json({
-      ok: false,
-      error: "ANGEL_ONE_NOT_INTEGRATED: Angel One SmartAPI isn't connected yet — credentials are saved but not verified, and Indian trading stays paper-only.",
-      clientCode,
-      status: "NOT_INTEGRATED",
-    });
+    // Real read-only login + profile fetch with the SAVED credentials (this
+    // used to answer "HANDSHAKE_SUCCESSFUL" without contacting Angel One).
+    // Order placement is not enabled — Indian trading stays paper-only.
+    const { smartApi } = await import("../services/indianMarket/angelOne/smartApiClient.js");
+    try {
+      const profile = await smartApi.getProfile();
+      res.json({
+        ok: true,
+        message: `ANGEL_ONE_CONNECTED (read-only): ${profile?.name || "account"} · ${profile?.clientcode || clientCode}. Real prices on; order placement not enabled.`,
+        clientCode: profile?.clientcode || clientCode,
+        status: "CONNECTED_READ_ONLY",
+      });
+    } catch (e: any) {
+      res.status(502).json({ ok: false, error: e?.message || "Angel One login failed", status: "LOGIN_FAILED" });
+    }
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

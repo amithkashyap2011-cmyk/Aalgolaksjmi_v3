@@ -37,7 +37,7 @@ export function isCryptoTrade(t: any): boolean {
 // Mock baseline tickers shared across Indian Market subsystems
 export const MOCK_LIVE_INDIAN_TIKERS: Record<
   string,
-  { ltp: number; open: number; high: number; low: number; volume: number; rsi14: number; adx14: number }
+  { ltp: number; open: number; high: number; low: number; volume: number; rsi14: number; adx14: number; prevClose?: number }
 > = {
   "NIFTY50":   { ltp: 24538.50, open: 24371.80, high: 24590.00, low: 24350.10, volume: 1850000, rsi14: 61.2, adx14: 28.5 },
   "BANKNIFTY": { ltp: 52165.20, open: 51715.40, high: 52310.00, low: 51680.00, volume: 940000,  rsi14: 64.8, adx14: 31.2 },
@@ -53,6 +53,35 @@ export const MOCK_LIVE_INDIAN_TIKERS: Record<
   "KOTAKBANK": { ltp: 1783.50,  open: 1765.00,  high: 1792.00,  low: 1760.00,  volume: 3800000, rsi14: 61.8, adx14: 26.4 },
   "BHARTIARTL":{ ltp: 1488.60,  open: 1472.00,  high: 1495.00,  low: 1468.00,  volume: 4800000, rsi14: 67.8, adx14: 33.1 },
 };
+
+// ─── Real quotes (Angel One) ─────────────────────────────────────────────────
+// When the Angel One feed is up, each symbol's price comes from the exchange
+// and the random-walk simulator leaves it alone; it only fills in for symbols
+// with no quote in the last REAL_QUOTE_FRESH_MS (feed down / not configured).
+const REAL_QUOTE_FRESH_MS = 60_000;
+const realQuoteAt = new Map<string, number>();
+
+export function applyRealQuote(
+  symbol: string,
+  q: { ltp: number; open: number; high: number; low: number; prevClose?: number; volume?: number },
+): void {
+  if (!(q.ltp > 0)) return;
+  // Symbols with no simulated baseline (FINNIFTY, TATAMOTORS) get an entry from
+  // the real quote instead of being dropped — the scan otherwise showed a
+  // ₹1,000 placeholder for them.
+  const t = (MOCK_LIVE_INDIAN_TIKERS[symbol] ??= { ltp: q.ltp, open: q.open, high: q.high, low: q.low, volume: 0, rsi14: 50, adx14: 20 });
+  t.ltp = q.ltp;
+  t.open = q.open;
+  t.high = q.high;
+  t.low = q.low;
+  if (q.prevClose && q.prevClose > 0) t.prevClose = q.prevClose;
+  if (q.volume && q.volume > 0) t.volume = q.volume;
+  realQuoteAt.set(symbol, Date.now());
+}
+
+export function hasFreshRealQuote(symbol: string): boolean {
+  return Date.now() - (realQuoteAt.get(symbol) ?? 0) < REAL_QUOTE_FRESH_MS;
+}
 
 // ─── Simulated price persistence ────────────────────────────────────────────
 // The simulated prices above live only in memory, so every restart (pm2,
@@ -123,7 +152,8 @@ if (typeof setInterval !== "undefined" && process.env.NODE_ENV !== "test") {
       }
       savedWhileClosed = false;
 
-      for (const [, data] of Object.entries(MOCK_LIVE_INDIAN_TIKERS)) {
+      for (const [sym, data] of Object.entries(MOCK_LIVE_INDIAN_TIKERS)) {
+        if (hasFreshRealQuote(sym)) continue; // real exchange price — don't random-walk it
         // Uniform ±0.02% per 4s tick (sd ≈ 0.0118%) ≈ 14% annualised over a
         // 6.25h session — in line with NIFTY's real ~12-15%. The previous
         // 0.0015 scale was ~50% annualised and the -0.495 offset added a
