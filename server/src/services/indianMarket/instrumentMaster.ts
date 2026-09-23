@@ -17,6 +17,7 @@ import {
 } from "./strategyTypes.js";
 import { ExpiryResolver } from "./expiryResolver.js";
 import { StrikeSelector } from "./strikeSelector.js";
+import { optionContracts } from "./angelOne/optionContracts.js";
 
 export interface UnderlyingContractSpec {
   underlying: UnderlyingSymbol;
@@ -263,8 +264,22 @@ export class InstrumentMaster {
       strikeStep: spec.strikeStep,
     };
 
+    // Real listed contract (Angel One scrip master) when available: exchange
+    // trading symbol, token and — importantly — the current lot size, which
+    // the static specs had wrong (NIFTY 75 vs 65, BANKNIFTY 15 vs 30, ...).
+    if (instrumentType === "CE" || instrumentType === "PE") {
+      const real = optionContracts.getContract(String(spec.underlying).toUpperCase(), expiryStr, strikeVal, instrumentType);
+      if (real) {
+        item.tradingSymbol = real.tradingSymbol;
+        item.token = real.token;
+        item.exchange = real.exchange as any;
+        item.lotSize = real.lotSize;
+        item.tickSize = real.tickSize;
+      }
+    }
+
     // Cache in catalog
-    this.instrumentCatalog.set(`${spec.underlying}:${tradingSymbol}`, item);
+    this.instrumentCatalog.set(`${spec.underlying}:${item.tradingSymbol}`, item);
     return item;
   }
 

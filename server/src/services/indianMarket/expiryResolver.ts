@@ -12,6 +12,7 @@
 
 import { ExpirySelectionConfig, UnderlyingSymbol } from "./strategyTypes.js";
 import { IndianMarketHours } from "../indianMarketHours.js";
+import { optionContracts, expiryCloseTime } from "./angelOne/optionContracts.js";
 
 export class ExpiryResolver {
   /**
@@ -128,6 +129,21 @@ export class ExpiryResolver {
         date: d,
         isMonthly: false,
       };
+    }
+
+    // Real exchange expiries (Angel One scrip master) when loaded — the rule
+    // based calendar below assumed Thursday weeklies for everything, while
+    // NIFTY weeklies are Tuesdays and BANKNIFTY/FINNIFTY/stocks are monthly.
+    const real = optionContracts.getExpiries(underlying, referenceDate);
+    if (real.length > 0) {
+      const toResult = (e: string) => ({ expiry: e, date: expiryCloseTime(e), isMonthly: optionContracts.isMonthlyExpiry(underlying, e) });
+      const monthlies = real.filter((e) => optionContracts.isMonthlyExpiry(underlying, e));
+      switch (config.type) {
+        case "NEXT_EXPIRY": return toResult(real[1] ?? real[0]);
+        case "MONTHLY": return toResult(monthlies[0] ?? real[0]);
+        case "NEXT_MONTHLY": return toResult(monthlies[1] ?? monthlies[0] ?? real[0]);
+        default: return toResult(real[0]);
+      }
     }
 
     const expiries = this.getValidExpiries(underlying, referenceDate, 10);

@@ -23,6 +23,7 @@ const ROUTES = {
   holdings: "/rest/secure/angelbroking/portfolio/v1/getHolding",
   positions: "/rest/secure/angelbroking/order/v1/getPosition",
   quote: "/rest/secure/angelbroking/market/v1/quote",
+  candles: "/rest/secure/angelbroking/historical/v1/getCandleData",
 } as const;
 
 const LOGIN_COOLDOWN_MS = 15 * 60_000;
@@ -162,6 +163,14 @@ class SmartApiClient {
   getRms() { return this.call<any>("GET", "rms"); }
   getHoldings() { return this.call<any[]>("GET", "holdings"); }
   getPositions() { return this.call<any[]>("GET", "positions"); }
+
+  /**
+   * Historical candles: rows are [timeISO, open, high, low, close, volume].
+   * interval e.g. "FIVE_MINUTE"; dates "YYYY-MM-DD HH:mm" (IST).
+   */
+  getCandles(p: { exchange: string; symboltoken: string; interval: string; fromdate: string; todate: string }) {
+    return this.call<any[][]>("POST", "candles", p);
+  }
 
   /** mode: "LTP" | "OHLC" | "FULL"; exchangeTokens: { NSE: ["2885"], BSE: [...] } (≤50 tokens). */
   getQuotes(mode: "LTP" | "OHLC" | "FULL", exchangeTokens: Record<string, string[]>) {

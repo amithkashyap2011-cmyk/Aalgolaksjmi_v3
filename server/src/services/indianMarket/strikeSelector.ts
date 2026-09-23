@@ -16,12 +16,18 @@ import {
   StrikeSelectionConfig,
   UnderlyingSymbol,
 } from "./strategyTypes.js";
+import { optionContracts } from "./angelOne/optionContracts.js";
 
 export class StrikeSelector {
   /**
    * Returns default strike step interval for standard Indian indices
    */
-  public static getStrikeStep(underlying: UnderlyingSymbol): number {
+  public static getStrikeStep(underlying: UnderlyingSymbol, spotPrice?: number): number {
+    // Real listed strike spacing when contracts are loaded (e.g. RELIANCE 10).
+    if (spotPrice && spotPrice > 0) {
+      const real = optionContracts.getStrikeStep(String(underlying).toUpperCase(), spotPrice);
+      if (real) return real;
+    }
     const sym = underlying.toUpperCase();
     if (sym.includes("BANKNIFTY")) return 100;
     if (sym.includes("SENSEX") || sym.includes("BANKEX")) return 100;
@@ -38,7 +44,7 @@ export class StrikeSelector {
     underlying: UnderlyingSymbol,
     spotPrice: number
   ): number {
-    const step = this.getStrikeStep(underlying);
+    const step = this.getStrikeStep(underlying, spotPrice);
     return Math.round(spotPrice / step) * step;
   }
 
@@ -57,7 +63,7 @@ export class StrikeSelector {
     offset: number;
     selectionReason: string;
   } {
-    const step = this.getStrikeStep(underlying);
+    const step = this.getStrikeStep(underlying, spotPrice);
     const atmStrike = this.getATMStrike(underlying, spotPrice);
 
     // 1. EXACT_STRIKE
@@ -156,7 +162,7 @@ export class StrikeSelector {
     numStrikesAbove: number = 10,
     numStrikesBelow: number = 10
   ): number[] {
-    const step = this.getStrikeStep(underlying);
+    const step = this.getStrikeStep(underlying, spotPrice);
     const atm = this.getATMStrike(underlying, spotPrice);
     const strikes: number[] = [];
 

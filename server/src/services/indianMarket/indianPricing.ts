@@ -83,6 +83,23 @@ export function hasFreshRealQuote(symbol: string): boolean {
   return Date.now() - (realQuoteAt.get(symbol) ?? 0) < REAL_QUOTE_FRESH_MS;
 }
 
+// RSI/ADX from real Angel One candles. Until then the /ticks and /scan routes
+// fill rsi14/adx14 with a sine wave — which the strategies were deciding on.
+const REAL_INDICATORS_FRESH_MS = 40 * 60_000; // candles refresh every 5 min (30 off-hours)
+const realIndicatorsAt = new Map<string, number>();
+
+export function applyRealIndicators(symbol: string, ind: { rsi14?: number; adx14?: number }): void {
+  const t = MOCK_LIVE_INDIAN_TIKERS[symbol];
+  if (!t) return;
+  if (ind.rsi14 !== undefined && Number.isFinite(ind.rsi14)) t.rsi14 = Number(ind.rsi14.toFixed(1));
+  if (ind.adx14 !== undefined && Number.isFinite(ind.adx14)) t.adx14 = Number(ind.adx14.toFixed(1));
+  realIndicatorsAt.set(symbol, Date.now());
+}
+
+export function hasFreshRealIndicators(symbol: string): boolean {
+  return Date.now() - (realIndicatorsAt.get(symbol) ?? 0) < REAL_INDICATORS_FRESH_MS;
+}
+
 // ─── Simulated price persistence ────────────────────────────────────────────
 // The simulated prices above live only in memory, so every restart (pm2,
 // crash, deploy) snapped every symbol back to the hardcoded baseline. Open
@@ -210,7 +227,7 @@ export function resolveLivePriceForIndianTrade(t: any): number {
 
     if (strike) {
       // Same mark the entry was priced with (see OptionChainService.markPrice).
-      const mark = OptionChainService.markPrice(normUnderlying as any, spotPrice, strike, optionType === "CE");
+      const mark = OptionChainService.markPrice(normUnderlying as any, spotPrice, strike, optionType === "CE", t.legs?.[0]?.expiry || t.expiry);
       if (mark > 0) return mark;
     }
   }

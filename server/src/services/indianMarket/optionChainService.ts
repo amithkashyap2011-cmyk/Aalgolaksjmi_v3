@@ -15,6 +15,8 @@ import {
 import { InstrumentMaster } from "./instrumentMaster.js";
 import { StrikeSelector } from "./strikeSelector.js";
 import { ExpiryResolver } from "./expiryResolver.js";
+import { optionContracts } from "./angelOne/optionContracts.js";
+import { getFreshOptionLtp } from "./angelOne/optionQuotes.js";
 
 // Standard normal cumulative distribution function approximation
 function cdf(x: number): number {
@@ -293,7 +295,14 @@ export class OptionChainService {
    * this — entries priced at a flat 15% IV opened every trade 6-12% above or
    * below the chain price the monitor marks against, before spot even moved.
    */
-  public static markPrice(underlying: UnderlyingSymbol, spotPrice: number, strike: number, isCall: boolean): number {
+  public static markPrice(underlying: UnderlyingSymbol, spotPrice: number, strike: number, isCall: boolean, expiry?: string): number {
+    // Real exchange premium first (Angel One quote for the listed contract,
+    // nearest expiry unless one is given); the model below is the fallback.
+    const und = String(underlying).toUpperCase();
+    const exp = expiry || optionContracts.getExpiries(und)[0];
+    const real = exp ? getFreshOptionLtp(optionContracts.getContract(und, exp, strike, isCall ? "CE" : "PE")?.token) : undefined;
+    if (real && real > 0) return real;
+
     const matched = this.getCachedOptionChain(underlying, spotPrice)?.strikes?.find((s) => s.strike === strike);
     const chainLtp = matched ? (isCall ? matched.call?.ltp : matched.put?.ltp) : undefined;
     if (chainLtp && chainLtp > 0) return chainLtp;

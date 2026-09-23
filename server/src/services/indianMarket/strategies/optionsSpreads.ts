@@ -75,7 +75,7 @@ export class BullCallSpreadStrategy extends BaseStrategy {
   ): StructuredTrade {
     const expiryInfo = ExpiryResolver.resolveExpiry(context.underlying, { type: "NEAREST_VALID_EXPIRY" });
     const atmStrike = StrikeSelector.getATMStrike(context.underlying, context.spotPrice);
-    const step = StrikeSelector.getStrikeStep(context.underlying);
+    const step = StrikeSelector.getStrikeStep(context.underlying, context.spotPrice);
     const otmStrike = atmStrike + step * 2; // +2 strikes OTM
 
     const leg1Inst = InstrumentMaster.resolveInstrument(context.underlying, "CE", expiryInfo.date, atmStrike);
@@ -213,7 +213,7 @@ export class BearPutSpreadStrategy extends BaseStrategy {
   public constructTrade(signal: SignalModel, context: MarketEvaluationContext, accountCapital: number, riskPercent: number): StructuredTrade {
     const expiryInfo = ExpiryResolver.resolveExpiry(context.underlying, { type: "NEAREST_VALID_EXPIRY" });
     const atmStrike = StrikeSelector.getATMStrike(context.underlying, context.spotPrice);
-    const step = StrikeSelector.getStrikeStep(context.underlying);
+    const step = StrikeSelector.getStrikeStep(context.underlying, context.spotPrice);
     const otmStrike = atmStrike - step * 2; // -2 strikes OTM
 
     const leg1Inst = InstrumentMaster.resolveInstrument(context.underlying, "PE", expiryInfo.date, atmStrike);
@@ -531,7 +531,7 @@ export class IronCondorStrategy extends BaseStrategy {
   public constructTrade(signal: SignalModel, context: MarketEvaluationContext, accountCapital: number, riskPercent: number): StructuredTrade {
     const expiryInfo = ExpiryResolver.resolveExpiry(context.underlying, { type: "NEAREST_VALID_EXPIRY" });
     const atmStrike = StrikeSelector.getATMStrike(context.underlying, context.spotPrice);
-    const step = StrikeSelector.getStrikeStep(context.underlying);
+    const step = StrikeSelector.getStrikeStep(context.underlying, context.spotPrice);
 
     const sellPutStrike = atmStrike - step * 2;
     const buyPutStrike = atmStrike - step * 4;
@@ -634,7 +634,7 @@ export class LongStrangleStrategy extends BaseStrategy {
   public constructTrade(signal: SignalModel, context: MarketEvaluationContext, accountCapital: number, riskPercent: number): StructuredTrade {
     const expiryInfo = ExpiryResolver.resolveExpiry(context.underlying, { type: "NEAREST_VALID_EXPIRY" });
     const atmStrike = StrikeSelector.getATMStrike(context.underlying, context.spotPrice);
-    const step = StrikeSelector.getStrikeStep(context.underlying);
+    const step = StrikeSelector.getStrikeStep(context.underlying, context.spotPrice);
     const callStrike = atmStrike + step * 2;
     const putStrike = atmStrike - step * 2;
 
@@ -725,7 +725,7 @@ export class ShortStrangleStrategy extends BaseStrategy {
   public constructTrade(signal: SignalModel, context: MarketEvaluationContext, accountCapital: number, riskPercent: number): StructuredTrade {
     const expiryInfo = ExpiryResolver.resolveExpiry(context.underlying, { type: "NEAREST_VALID_EXPIRY" });
     const atmStrike = StrikeSelector.getATMStrike(context.underlying, context.spotPrice);
-    const step = StrikeSelector.getStrikeStep(context.underlying);
+    const step = StrikeSelector.getStrikeStep(context.underlying, context.spotPrice);
     const callStrike = atmStrike + step * 2;
     const putStrike = atmStrike - step * 2;
 

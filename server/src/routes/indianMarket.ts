@@ -11,6 +11,7 @@ import { safeCreateAlert } from "../services/alertService.js";
 import { IndianTradeGroup } from "../models/IndianTradeGroup.js";
 import { WalletTransaction } from "../models/WalletTransaction.js";
 import { IndianMarketAutoTrader, MOCK_LIVE_INDIAN_TIKERS, resolveLivePriceForIndianTrade } from "../services/indianMarketAutoTrader.js";
+import { hasFreshRealIndicators } from "../services/indianMarket/indianPricing.js";
 import { IndianMarketService } from "../services/indianMarketService.js";
 import { INDIAN_SYMBOLS, SUPPORTED_INDIAN_SYMBOLS } from "../config/indianSymbols.js";
 import { StrategyEngine } from "../services/indianMarket/strategyEngine.js";
@@ -76,7 +77,8 @@ router.get("/ticks", (_req, res) => {
       const now = Date.now();
       SUPPORTED_INDIAN_SYMBOLS.forEach((sym, idx) => {
         const item = MOCK_LIVE_INDIAN_TIKERS[sym];
-        if (item) {
+        // Sine-wave fill only when no real (Angel One candle) indicators exist.
+        if (item && !hasFreshRealIndicators(sym)) {
           item.rsi14 = Number(Math.max(35, Math.min(75, 52 + Math.sin(now / 20000 + idx) * 18)).toFixed(1));
           item.adx14 = Number(Math.max(15, Math.min(50, 28 + Math.cos(now / 25000 + idx) * 12)).toFixed(1));
         }
@@ -133,7 +135,8 @@ router.get("/scan", async (req, res) => {
       const now = Date.now();
       SUPPORTED_INDIAN_SYMBOLS.forEach((sym, idx) => {
         const item = MOCK_LIVE_INDIAN_TIKERS[sym];
-        if (item) {
+        // Sine-wave fill only when no real (Angel One candle) indicators exist.
+        if (item && !hasFreshRealIndicators(sym)) {
           item.rsi14 = Number(Math.max(35, Math.min(75, 52 + Math.sin(now / 20000 + idx) * 18)).toFixed(1));
           item.adx14 = Number(Math.max(15, Math.min(50, 28 + Math.cos(now / 25000 + idx) * 12)).toFixed(1));
         }
@@ -1428,7 +1431,23 @@ router.get("/broker/status", async (_req, res) => {
   try {
     const { smartApi } = await import("../services/indianMarket/angelOne/smartApiClient.js");
     const { getAngelFeedStatus } = await import("../services/indianMarket/angelOne/angelPriceFeed.js");
-    res.json({ success: true, broker: await smartApi.status(), priceFeed: getAngelFeedStatus(), ordersEnabled: false });
+    // Reference contracts: what an ATM entry would actually be priced at.
+    const { optionContracts } = await import("../services/indianMarket/angelOne/optionContracts.js");
+    const { getFreshOptionLtp } = await import("../services/indianMarket/angelOne/optionQuotes.js");
+    const reference = ["NIFTY", "BANKNIFTY"].map((und) => {
+      const spot = MOCK_LIVE_INDIAN_TIKERS[und === "NIFTY" ? "NIFTY50" : und]?.ltp;
+      const expiry = optionContracts.getExpiries(und)[0];
+      if (!spot || !expiry) return { underlying: und, available: false };
+      const atm = optionContracts.getAtmWindow(und, spot, 0);
+      const ce = atm.find((c) => c.type === "CE");
+      const pe = atm.find((c) => c.type === "PE");
+      return {
+        underlying: und, spot, expiry, lotSize: ce?.lotSize, atmStrike: ce?.strike,
+        ce: ce && { symbol: ce.tradingSymbol, ltp: getFreshOptionLtp(ce.token) ?? null },
+        pe: pe && { symbol: pe.tradingSymbol, ltp: getFreshOptionLtp(pe.token) ?? null },
+      };
+    });
+    res.json({ success: true, broker: await smartApi.status(), priceFeed: getAngelFeedStatus(), reference, ordersEnabled: false });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
