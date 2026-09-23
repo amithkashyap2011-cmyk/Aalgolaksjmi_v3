@@ -325,6 +325,27 @@ function classifierToContribution(
   };
 }
 
+/**
+ * Weighted fusion of directional contributors. REINFORCEMENT contributors
+ * (the PPO sizing/exit agent) stay in the report for transparency but are
+ * excluded here: their fixed 0.5/0.5 lean carries no direction, so averaging
+ * it in shrank every probability edge toward zero, and their confidence
+ * (certainty about an exit style) inflated the directional confidence.
+ */
+export function aggregateContributions(models: ModelContribution[], regimeScore: number) {
+  const voters = models.filter((m) => m.category !== "REINFORCEMENT");
+  const totalWeight = voters.reduce((sum, m) => sum + m.weight, 0) || 1;
+  const avg = (pick: (m: ModelContribution) => number) =>
+    voters.reduce((sum, m) => sum + pick(m) * m.weight, 0) / totalWeight;
+  return {
+    longProbability: clamp(avg((m) => m.longProbability), 0, 1),
+    shortProbability: clamp(avg((m) => m.shortProbability), 0, 1),
+    confidence: clamp(avg((m) => m.confidence) * 0.98 + regimeScore * 0.01, 0, 1),
+    expectedReturn: avg((m) => m.expectedReturn),
+    expectedDrawdown: clamp(avg((m) => m.expectedDrawdown), 0.02, 0.25),
+  };
+}
+
 /** A transparent, non-voting (weight 0) placeholder for a real model that
  *  was gated out (DEGRADED/stub/offline). Shown in the report so the UI can
  *  see the model was considered and why it does not contribute. */
@@ -696,12 +717,8 @@ async function executeBuildEnsembleReport(
     models.push(predictHeuristicTabular(mlFeatures, 0.01, fundingRate, volatilityScore, 1.0));
   }
 
-  const totalWeight = models.reduce((sum, m) => sum + m.weight, 0) || 1;
-  const longProbability = clamp(models.reduce((sum, m) => sum + m.longProbability * m.weight, 0) / totalWeight, 0, 1);
-  const shortProbability = clamp(models.reduce((sum, m) => sum + m.shortProbability * m.weight, 0) / totalWeight, 0, 1);
-  const confidence = clamp(models.reduce((sum, m) => sum + m.confidence * m.weight, 0) / totalWeight * 0.98 + regimeScore * 0.01, 0, 1);
-  const expectedReturn = models.reduce((sum, m) => sum + m.expectedReturn * m.weight, 0) / totalWeight;
-  const expectedDrawdown = clamp(models.reduce((sum, m) => sum + m.expectedDrawdown * m.weight, 0) / totalWeight, 0.02, 0.25);
+  const { longProbability, shortProbability, confidence, expectedReturn, expectedDrawdown } =
+    aggregateContributions(models, regimeScore);
 
   const drawdownWarning = confidence < 0.45 || regime === "High Volatility";
   const probEdge = Math.abs(longProbability - shortProbability);

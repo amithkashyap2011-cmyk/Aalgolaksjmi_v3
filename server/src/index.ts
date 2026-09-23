@@ -241,7 +241,7 @@ const serverStartTime = Date.now();
 export let io: IOServer;
 const SERVER_HOST = "0.0.0.0";
 // Quick retries handle a just-killed socket lingering in TIME_WAIT; after that
-// we fall back to a dynamic (OS-assigned) port instead of waiting/failing.
+// boot exits, because the port belongs to another live server instance.
 const SERVER_LISTEN_RETRIES = 2;
 const SERVER_LISTEN_RETRY_DELAY_MS = 400;
 const MONGO_CONNECT_RETRY_BASE_MS = 2000;
@@ -304,17 +304,12 @@ async function listenWithRetry(port: number) {
 
   for (let attempt = 0; attempt <= SERVER_LISTEN_RETRIES; attempt += 1) {
     try {
-      // 🛡️ If retries exhausted on default port, use dynamic port assignment
-      const listenPort = attempt >= SERVER_LISTEN_RETRIES ? 0 : port;
-
+      // Never fall back to an OS-assigned port: a persistently busy port means
+      // another server instance already owns the AutoTradeEngine, and a second
+      // headless instance would trade, retrain and hit Binance in parallel.
       await new Promise<void>((resolve, reject) => {
         const onListening = () => {
           server.off("error", onError);
-          const addr = server.address() as any;
-          const assignedPort = addr?.port || port;
-          if (assignedPort !== port) {
-            console.log(`[dynamic-port] Assigned port ${assignedPort} (requested ${port} was busy)`);
-          }
           resolve();
         };
 
@@ -325,7 +320,7 @@ async function listenWithRetry(port: number) {
 
         server.once("listening", onListening);
         server.once("error", onError);
-        server.listen(listenPort, SERVER_HOST);
+        server.listen(port, SERVER_HOST);
       });
 
       return;
@@ -583,6 +578,10 @@ async function boot() {
     await listenWithRetry(PORT);
   } catch (err: any) {
     bootLog(`[server_error] ${err.stack || err.message}`);
+    if (err?.code === "EADDRINUSE") {
+      bootLog(`[server] Port ${PORT} is owned by another server instance. Exiting to avoid a duplicate trading engine.`);
+      process.exit(1);
+    }
     systemManager.setState(SystemState.RECOVERING);
     return;
   }

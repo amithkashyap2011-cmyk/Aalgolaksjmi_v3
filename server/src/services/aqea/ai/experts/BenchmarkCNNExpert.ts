@@ -4,14 +4,20 @@ import { AnyRegime } from "../../regimeEngine.js";
 import { ModelInferenceBridge } from "../ModelInferenceBridge.js";
 import { AI_ENDPOINTS } from "../../../../config/aiEndpointRegistry.js";
 
+// Live production voter despite the legacy "_BENCHMARK" name (kept so shadow
+// ledgers and control-plane mappings keyed on it stay intact). It is the only
+// expert with a real training pipeline on Binance data and a measured forward
+// edge: across 2026-09-15..23 graded telemetry, P(up | LONG) exceeded
+// P(up | SHORT) by ~9pp on 8 of 9 days, while MAMBA_RESEARCH_V1 (untrained
+// checkpoint) called HOLD 97–100% of the time.
 export class BenchmarkCNNExpert implements IModelExpert {
   public readonly modelName = "CNN_1D_V1_BENCHMARK";
   public readonly modelVersion = "1.0.0";
-  public readonly architecture = "1D_TEMPORAL_CNN_LEGACY_BENCHMARK";
+  public readonly architecture = "1D_TEMPORAL_CNN";
   public readonly inputSchemaVersion = 2;
-  public readonly inferenceMode: InferenceMode = "BENCHMARK";
+  public readonly inferenceMode: InferenceMode = "REAL_MODEL";
   public readonly isTrained = true;
-  public status: ModelExpertStatus = "BENCHMARK";
+  public status: ModelExpertStatus = "PRODUCTION";
   public readonly supportedRegimes: AnyRegime[] = ["TRENDING_UP", "TRENDING_DOWN", "TRENDING_BULL", "TRENDING_BEAR"];
 
   public async predict(features: Standardized15Features, activeRegime: AnyRegime): Promise<ModelExpertPrediction> {
@@ -33,8 +39,9 @@ export class BenchmarkCNNExpert implements IModelExpert {
       timeoutMs: 2000
     });
 
-    prediction.inferenceMode = "BENCHMARK";
-    prediction.status = "BENCHMARK";
+    // The bridge marks error responses UNAVAILABLE/DISABLED; only a successful
+    // inference inherits this expert's status and becomes eligible to vote.
+    if (prediction.inferenceMode === "REAL_MODEL") prediction.status = this.status;
     prediction.regimeCompatibility = this.supportedRegimes.includes(activeRegime) ? 0.70 : 0.40;
     return prediction;
   }

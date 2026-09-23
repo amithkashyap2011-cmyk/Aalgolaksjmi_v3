@@ -97,7 +97,7 @@ export interface ForwardLearningPipelineReport {
 // observed in dedicated shadow paths, but are not default inputs to live
 // weight updates or promotion evaluation.
 export const DEFAULT_FORWARD_LEARNING_CANDIDATES = [
-  "MAMBA_RESEARCH_V1",
+  "CNN_1D_V1_BENCHMARK",
   "AARYAN_MOMENTUM",
   "AAYUSH_MEAN_REVERSION",
   "SMC_INSTITUTIONAL",

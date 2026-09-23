@@ -11,7 +11,11 @@ export class MambaExpert implements IModelExpert {
   public readonly inputSchemaVersion = 2;
   public readonly inferenceMode: InferenceMode = "REAL_MODEL";
   public readonly isTrained = true;
-  public status: ModelExpertStatus = "PRODUCTION";
+  // Shadow-only: the loaded checkpoint (mamba-research-v1.pt) was saved from a
+  // randomly initialised network with no training loop, and live telemetry
+  // shows it calls HOLD 97–100% of the time. It keeps producing predictions
+  // for shadow replay/ledgers but no longer votes in the live fusion.
+  public status: ModelExpertStatus = "SHADOW";
   public readonly supportedRegimes: AnyRegime[] = ["TRENDING_UP", "TRENDING_DOWN", "HIGH_VOLATILITY", "TRENDING_BULL", "TRENDING_BEAR"];
 
   public async predict(features: Standardized15Features, activeRegime: AnyRegime): Promise<ModelExpertPrediction> {
@@ -26,6 +30,9 @@ export class MambaExpert implements IModelExpert {
       timeoutMs: 2500
     });
 
+    // The bridge stamps successful inferences PRODUCTION; carry the expert's
+    // real status so the fusion's live-voting gate sees SHADOW.
+    if (prediction.inferenceMode === "REAL_MODEL") prediction.status = this.status;
     prediction.regimeCompatibility = this.supportedRegimes.includes(activeRegime) ? 0.95 : 0.60;
     return prediction;
   }
