@@ -341,7 +341,8 @@ export async function runSentinelAudit(userId: string, mode: "PAPER" | "LIVE", a
         if (!lastPrice || lastPrice <= 0) {
           lastWsReconnectPerSymbol.set(reconKey, now);
           logAutoFix(`Frozen price ticker detected for ${symbol} (Futures: ${isFutures}). Dynamically triggering background WebSocket reconnect.`);
-          binance.unsubscribeTicker(symbol, isFutures);
+          // force: drop and re-open the stream even while other owners hold it
+          binance.unsubscribeTicker(symbol, isFutures, "server", { force: true });
           binance.subscribeTicker(symbol, ioInstance, isFutures);
         }
       }

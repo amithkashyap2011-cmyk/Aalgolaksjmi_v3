@@ -520,6 +520,8 @@ setIO(io);
 // ── Socket Connection Handler ──────────────────────────
 io.on("connection", (socket) => {
   log(`socket client connected: ${socket.id}`);
+  // Streams this tab subscribed to, released on disconnect.
+  const clientTickers = new Set<string>();
 
   socket.on("subscribe", (payload: string | { symbol: string; isFutures?: boolean }) => {
     if (!payload) return;
@@ -532,7 +534,8 @@ io.on("connection", (socket) => {
       isFutures = !!payload.isFutures;
     }
     log(`client ${socket.id} subscribing to ${symbol} (Futures: ${isFutures})`);
-    subscribeTicker(symbol, io, isFutures);
+    clientTickers.add(`${symbol}|${isFutures ? 1 : 0}`);
+    subscribeTicker(symbol, io, isFutures, `client:${socket.id}`);
   });
 
   socket.on("unsubscribe", (payload: string | { symbol: string; isFutures?: boolean }) => {
@@ -546,11 +549,18 @@ io.on("connection", (socket) => {
       isFutures = !!payload.isFutures;
     }
     log(`client ${socket.id} unsubscribing from ${symbol} (Futures: ${isFutures})`);
-    unsubscribeTicker(symbol, isFutures);
+    clientTickers.delete(`${symbol}|${isFutures ? 1 : 0}`);
+    unsubscribeTicker(symbol, isFutures, `client:${socket.id}`);
   });
 
   socket.on("disconnect", (reason) => {
     log(`socket client disconnected: ${socket.id} (${reason})`);
+    // Release everything this tab held so its streams can close if unused.
+    for (const k of clientTickers) {
+      const [sym, fut] = k.split("|");
+      unsubscribeTicker(sym, fut === "1", `client:${socket.id}`);
+    }
+    clientTickers.clear();
   });
 });
 

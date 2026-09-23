@@ -34,7 +34,7 @@ export const socket: Socket = io(getSocketUrl(), {
 socket.on("connect", () => {
   console.log("[socket] connected:", socket.id);
   // Re-subscribe all active tickers on reconnection to trigger backend streams
-  for (const key of subscribed) {
+  for (const key of subscribed.keys()) {
     const parts = key.split("-");
     const symbol = parts[0];
     const isFutures = parts[1] === "FUTURES";
@@ -51,19 +51,29 @@ socket.on("connect_error", (err) => {
 
 /* ── helpers ───────────────────────────────────────── */
 
-const subscribed = new Set<string>();
+// Reference-counted: several components share one stream (the chart, the
+// footer's rotating ticker, the store's watchlist). With a plain Set, the first
+// component to unsubscribe dropped the stream for all of them — the footer
+// rotating off BTCUSDT froze the BTCUSDT chart until it remounted.
+const subscribed = new Map<string, number>();
 
 export function subscribeTicker(symbol: string, isFutures: boolean = false): void {
   const key = `${symbol}-${isFutures ? "FUTURES" : "SPOT"}`;
-  if (subscribed.has(key)) return;
-  subscribed.add(key);
+  const count = subscribed.get(key) ?? 0;
+  subscribed.set(key, count + 1);
+  if (count > 0) return;
   socket.emit("subscribe", { symbol, isFutures });
   console.log(`[socket] subscribed to ${symbol} (Futures: ${isFutures})`);
 }
 
 export function unsubscribeTicker(symbol: string, isFutures: boolean = false): void {
   const key = `${symbol}-${isFutures ? "FUTURES" : "SPOT"}`;
-  if (!subscribed.has(key)) return;
+  const count = subscribed.get(key) ?? 0;
+  if (count === 0) return;
+  if (count > 1) {
+    subscribed.set(key, count - 1);
+    return;
+  }
   subscribed.delete(key);
   socket.emit("unsubscribe", { symbol, isFutures });
   console.log(`[socket] unsubscribed from ${symbol} (Futures: ${isFutures})`);

@@ -1738,10 +1738,21 @@ function createCombinedSocket(symbols: string[], io: IOServer, isFutures: boolea
   return cs;
 }
 
-export function subscribeTicker(symbol: string, io: IOServer, isFutures: boolean = false): void {
+// Who needs each stream: "server" (open-trade price feeds, engine) or
+// "client:<socketId>" (a browser tab). A stream is only torn down when nobody
+// needs it — previously any tab's unsubscribe (e.g. the footer ticker rotating
+// off BTCUSDT) killed the Binance stream for every client AND for the SL/TP
+// monitor, freezing the chart and the prices exits are checked against.
+const tickerOwners = new Map<string, Set<string>>();
+
+export function subscribeTicker(symbol: string, io: IOServer, isFutures: boolean = false, owner: string = "server"): void {
   const type = isFutures ? "futures" : "spot";
   const symKey = `${symbol.toUpperCase()}-${type}`;
-  
+
+  const owners = tickerOwners.get(symKey) ?? new Set<string>();
+  owners.add(owner);
+  tickerOwners.set(symKey, owners);
+
   if (subscribedSymbolKeys.has(symKey)) return; // already subscribed
   subscribedSymbolKeys.add(symKey);
 
@@ -1815,9 +1826,25 @@ async function processUnsubscriptionQueue() {
   }
 }
 
-export function unsubscribeTicker(symbol: string, isFutures: boolean = false): void {
+/**
+ * Releases `owner`'s hold on a stream; the Binance stream is only dropped once
+ * no owner remains. `force` drops the stream regardless (owners are kept) so a
+ * caller can force a reconnect — the next subscribeTicker re-establishes it.
+ */
+export function unsubscribeTicker(
+  symbol: string,
+  isFutures: boolean = false,
+  owner: string = "server",
+  opts: { force?: boolean } = {},
+): void {
   const type = isFutures ? "futures" : "spot";
   const symKey = `${symbol.toUpperCase()}-${type}`;
+  const owners = tickerOwners.get(symKey);
+  if (!opts.force) {
+    owners?.delete(owner);
+    if (owners && owners.size > 0) return; // still needed by someone else
+    tickerOwners.delete(symKey);
+  }
   subscribedSymbolKeys.delete(symKey);
 
   unsubscriptionQueue.push({ symbol, isFutures });

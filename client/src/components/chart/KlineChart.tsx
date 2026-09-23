@@ -32,17 +32,26 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
   const [err, setErr]       = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [livePrice, setLivePrice] = useState<number | null>(null);
-  const isFetchingRef = useRef(false);
+  // Latest-request-wins. A single "fetching" flag used to drop the load for a
+  // newly clicked interval whenever a poll was still in flight, and the old
+  // interval's late response then overwrote the chart — so switching 1H → 5m
+  // could keep showing 1H candles. Polls still skip while their own request
+  // for the same symbol/interval is pending.
+  const inFlightKeyRef = useRef<string | null>(null);
+  const latestKeyRef = useRef<string>("");
 
   const load = useCallback((isSilent = false) => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
+    const key = `${symbol}:${binInterval}`;
+    latestKeyRef.current = key;
+    if (isSilent && inFlightKeyRef.current === key) return;
+    inFlightKeyRef.current = key;
     if (!isSilent) {
       setLoading(true);
       setErr(null);
     }
     api.getKlines(symbol, binInterval, 200)
       .then((kl: any[]) => {
+        if (latestKeyRef.current !== key) return; // superseded by a newer symbol/interval
         if (!Array.isArray(kl) || kl.length === 0) {
           if (!isSilent) setErr("No market data");
           return;
@@ -56,11 +65,11 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
         }
       })
       .catch((e: any) => {
-        if (!isSilent) setErr(e?.message || "Failed to load");
+        if (latestKeyRef.current === key && !isSilent) setErr(e?.message || "Failed to load");
       })
       .finally(() => {
-        isFetchingRef.current = false;
-        if (!isSilent) setLoading(false);
+        if (inFlightKeyRef.current === key) inFlightKeyRef.current = null;
+        if (latestKeyRef.current === key && !isSilent) setLoading(false);
       });
   }, [symbol, binInterval]);
 
@@ -133,6 +142,9 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
 
   const options: Highcharts.Options = {
     chart: { backgroundColor: "#070d1a", animation: false, height },
+    // Highstock is a separate bundle from the "highcharts" instance that
+    // chartSetup configures, so local time has to be set here too.
+    time: { useUTC: false },
     accessibility: { enabled: false },
     credits: { enabled: false },
     rangeSelector: { enabled: false },
