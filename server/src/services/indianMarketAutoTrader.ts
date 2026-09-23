@@ -267,27 +267,38 @@ export class IndianMarketAutoTrader {
     const adapter: BrokerAdapter = mode === "LIVE" ? new LiveBrokerExecutionAdapter() : new PaperExecutionAdapter();
     const isMultiLeg = trade.legs.length > 1;
 
-    // Place legs through broker
-    for (const leg of trade.legs) {
-      const orderRes = await adapter.placeOrder(userId, {
-        clientOrderId: trade.clientOrderId,
-        tradingSymbol: leg.tradingSymbol,
-        exchange: trade.exchange,
-        action: leg.action,
-        instrumentType: leg.instrumentType,
-        quantity: leg.quantity,
-        price: leg.entryPrice,
-        orderType: "MARKET",
-        productType: productType === "MIS" ? "MIS" : "CNC",
-      });
+    // Place legs through broker. If no leg was placed, release the cooldown
+    // reservation validateTrade made — the strategy shouldn't sit out 15m for
+    // a trade that never happened. Once any leg is live, keep it.
+    let placedLegs = 0;
+    try {
+      for (const leg of trade.legs) {
+        const orderRes = await adapter.placeOrder(userId, {
+          clientOrderId: trade.clientOrderId,
+          tradingSymbol: leg.tradingSymbol,
+          exchange: trade.exchange,
+          action: leg.action,
+          instrumentType: leg.instrumentType,
+          quantity: leg.quantity,
+          price: leg.entryPrice,
+          orderType: "MARKET",
+          productType: productType === "MIS" ? "MIS" : "CNC",
+        });
 
-      if (!orderRes.ok) {
-        trade.status = "FAILED";
-        throw new Error(`BROKER_ORDER_FAILED for leg ${leg.tradingSymbol}: ${orderRes.rejectionReason}`);
+        if (!orderRes.ok) {
+          trade.status = "FAILED";
+          throw new Error(`BROKER_ORDER_FAILED for leg ${leg.tradingSymbol}: ${orderRes.rejectionReason}`);
+        }
+        leg.status = "OPEN";
+        leg.brokerOrderId = orderRes.orderId;
+        placedLegs++;
       }
-      leg.status = "OPEN";
-      leg.brokerOrderId = orderRes.orderId;
+    } catch (placeErr) {
+      if (placedLegs === 0) IndianRiskManager.releaseReservation(trade);
+      else IndianRiskManager.confirmReservation(trade);
+      throw placeErr;
     }
+    IndianRiskManager.confirmReservation(trade);
 
     // Debit margin from wallet.
     // BUGFIX: `availableMargin` was captured well before this point (before

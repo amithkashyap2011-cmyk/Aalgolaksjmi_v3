@@ -68,16 +68,15 @@ router.get("/ticks", (_req, res) => {
   try {
     const session = IndianMarketService.getMarketSession();
     if (session.isOpen) {
+      // Price (ltp/high/low) is NOT mutated here — the 4s simulator tick in
+      // indianPricing.ts owns it. This GET used to multiply ltp by up to
+      // ±0.12% on every request, compounding with each UI poll (ribbon,
+      // footer bar, Indian page) into ~1% spot swings within seconds that
+      // blew option trades through SL/TP moments after entry.
       const now = Date.now();
       SUPPORTED_INDIAN_SYMBOLS.forEach((sym, idx) => {
         const item = MOCK_LIVE_INDIAN_TIKERS[sym];
         if (item) {
-          const wave = Math.sin(now / 15000 + idx * 1.3);
-          const deltaPct = wave * 0.0012;
-          const newLtp = Number((item.ltp * (1 + deltaPct)).toFixed(2));
-          item.ltp = newLtp;
-          if (newLtp > item.high) item.high = newLtp;
-          if (newLtp < item.low) item.low = newLtp;
           item.rsi14 = Number(Math.max(35, Math.min(75, 52 + Math.sin(now / 20000 + idx) * 18)).toFixed(1));
           item.adx14 = Number(Math.max(15, Math.min(50, 28 + Math.cos(now / 25000 + idx) * 12)).toFixed(1));
         }
@@ -125,19 +124,14 @@ router.get("/scan", async (req, res) => {
     const userId = resolveIndianUserId(req.query.userId as string);
     const session = IndianMarketService.getMarketSession();
 
-    // Only simulate live micro-ticks when the market is strictly OPEN.
-    // On weekends, holidays, and off-hours, prices remain strictly frozen at the last close.
+    // Only refresh simulated indicators when the market is strictly OPEN.
+    // Price is owned by the 4s simulator tick (see /ticks above for why it
+    // must not be mutated per request).
     if (session.isOpen) {
       const now = Date.now();
       SUPPORTED_INDIAN_SYMBOLS.forEach((sym, idx) => {
         const item = MOCK_LIVE_INDIAN_TIKERS[sym];
         if (item) {
-          const wave = Math.sin(now / 15000 + idx * 1.3);
-          const deltaPct = wave * 0.0012;
-          const newLtp = Number((item.ltp * (1 + deltaPct)).toFixed(2));
-          item.ltp = newLtp;
-          if (newLtp > item.high) item.high = newLtp;
-          if (newLtp < item.low) item.low = newLtp;
           item.rsi14 = Number(Math.max(35, Math.min(75, 52 + Math.sin(now / 20000 + idx) * 18)).toFixed(1));
           item.adx14 = Number(Math.max(15, Math.min(50, 28 + Math.cos(now / 25000 + idx) * 12)).toFixed(1));
         }
@@ -425,6 +419,7 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
     if (!riskCheck.approved) {
       return res.status(400).json({ error: `RISK_REJECTED: ${riskCheck.rejectionReason}` });
     }
+    IndianRiskManager.confirmReservation(trade);
 
     // Debit margin.
     // BUGFIX: this was an unlocked read-modify-write computed from

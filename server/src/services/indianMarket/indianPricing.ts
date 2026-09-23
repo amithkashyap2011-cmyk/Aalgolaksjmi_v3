@@ -60,7 +60,12 @@ if (typeof setInterval !== "undefined" && process.env.NODE_ENV !== "test") {
       if (!session.isOpen) return;
 
       for (const [, data] of Object.entries(MOCK_LIVE_INDIAN_TIKERS)) {
-        const drift = (Math.random() - 0.495) * 0.0015;
+        // Uniform ±0.02% per 4s tick (sd ≈ 0.0118%) ≈ 14% annualised over a
+        // 6.25h session — in line with NIFTY's real ~12-15%. The previous
+        // 0.0015 scale was ~50% annualised and the -0.495 offset added a
+        // ~4%/day upward bias; together they whipsawed option premiums
+        // through SL/TP within seconds of entry.
+        const drift = (Math.random() - 0.5) * 0.0004;
         const newLtp = Number((data.ltp * (1 + drift)).toFixed(2));
         data.ltp = newLtp;
         if (newLtp > data.high) data.high = newLtp;

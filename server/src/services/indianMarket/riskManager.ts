@@ -33,6 +33,11 @@ export class IndianRiskManager {
   private static consecutiveLosses = new Map<string, number>();
   private static strikeLossCooldowns = new Map<string, number>();
   private static consecutiveLossPauseUntil = new Map<string, number>();
+  // What an approved validateTrade reserved (fingerprint + strategy cooldown),
+  // keyed by tradeId, so releaseReservation can undo it when the order is then
+  // never placed — otherwise a broker/margin failure blocked the strategy for
+  // the full cooldown with no trade to show for it.
+  private static pendingReservations = new Map<string, { fingerprint: string; stratKey: string; prevStratTime?: number }>();
 
   /**
    * Required margin for a trade: its own computed risk amount when set,
@@ -197,6 +202,58 @@ export class IndianRiskManager {
     const userId = this.resolveUserId(rawUserId);
     const bucket = Math.floor(Date.now() / (5 * 60 * 1000)); // 5-minute bucket
     return `${userId}:${trade.underlying}:${trade.strategy}:${trade.position}:${trade.strike || 0}:${trade.expiry || ""}:${bucket}`;
+  }
+
+  /**
+   * Blocks an entry when Mongo already shows an OPEN trade for the same
+   * underlying + strategy, or a same-strategy entry within the cooldown.
+   * Returns the rejection reason, or null when clear. Skipped (null) when Mongo
+   * is down or the user id isn't an ObjectId, leaving the in-memory checks as
+   * the only guard, as before.
+   */
+  private static async checkPersistedEntryGuards(
+    trade: StructuredTrade,
+    rawUserId: string,
+    cooldownMinutes: number
+  ): Promise<string | null> {
+    const userId = this.resolveUserId(rawUserId);
+    if (mongoose.connection.readyState !== 1 || !mongoose.Types.ObjectId.isValid(userId)) return null;
+    try {
+      const base = {
+        userId: new mongoose.Types.ObjectId(userId),
+        accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
+        strategy: trade.strategy,
+      };
+      if (await Trade.exists({ ...base, underlying: trade.underlying, status: "OPEN" })) {
+        return "DUPLICATE_OPEN_POSITION";
+      }
+      // Trade has no createdAt (no schema timestamps); the ObjectId carries it.
+      const since = mongoose.Types.ObjectId.createFromTime(Math.floor((Date.now() - cooldownMinutes * 60_000) / 1000));
+      if (await Trade.exists({ ...base, _id: { $gte: since }, status: { $ne: "FAILED" } })) {
+        return "STRATEGY_COOLDOWN_ACTIVE";
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  /**
+   * Undoes the fingerprint + strategy-cooldown reservation an approved
+   * validateTrade made, for a trade that was then never placed.
+   */
+  public static releaseReservation(trade: StructuredTrade): void {
+    const r = trade.tradeId ? this.pendingReservations.get(trade.tradeId) : undefined;
+    if (!r) return;
+    this.pendingReservations.delete(trade.tradeId);
+    this.recentTradeFingerprints.delete(r.fingerprint);
+    if (r.prevStratTime) this.strategyCooldowns.set(r.stratKey, r.prevStratTime);
+    else this.strategyCooldowns.delete(r.stratKey);
+  }
+
+  /** Drops the reservation record once the trade is placed (the cooldown stays). */
+  public static confirmReservation(trade: StructuredTrade): void {
+    if (trade.tradeId) this.pendingReservations.delete(trade.tradeId);
   }
 
   /**
@@ -366,6 +423,25 @@ export class IndianRiskManager {
     }
     checks["STRIKE_LOSS_COOLDOWN"] = { passed: true, message: "Strike loss cooldown clear." };
 
+    // 6b. PERSISTED ENTRY GUARD (survives restarts)
+    // The in-memory fingerprint/cooldown maps below are wiped on every process
+    // restart — five tsx-watch reloads in 80s once opened four INFY puts on the
+    // same strategy, one per boot. Mongo is the durable record of what is open
+    // and what was just entered.
+    const persistedBlock = await this.checkPersistedEntryGuards(trade, userId, settings.strategyCooldownMinutes);
+    if (persistedBlock) {
+      checks["PERSISTED_ENTRY_GUARD"] = { passed: false, message: `Blocked by persisted trade history: ${persistedBlock}` };
+      IndianAuditLogger.log({
+        eventType: "RISK_REJECTED",
+        underlying: trade.underlying,
+        strategy: trade.strategy,
+        details: { tradeId: trade.tradeId },
+        reason: persistedBlock,
+      });
+      return { approved: false, rejectionReason: persistedBlock, checks };
+    }
+    checks["PERSISTED_ENTRY_GUARD"] = { passed: true, message: "No open or recent same-strategy trade on record." };
+
     // 7. DUPLICATE TRADE FINGERPRINT CHECK
     const fingerprint = this.generateFingerprint(trade, userId);
     const lastSeen = this.recentTradeFingerprints.get(fingerprint);
@@ -381,7 +457,6 @@ export class IndianRiskManager {
       });
       return { approved: false, rejectionReason: "DUPLICATE_TRADE_PREVENTED", checks };
     }
-    this.recentTradeFingerprints.set(fingerprint, now);
     checks["DUPLICATE_CHECK"] = { passed: true, message: "Duplicate check passed." };
 
     // 8. STRATEGY COOLDOWN CHECK
@@ -392,8 +467,14 @@ export class IndianRiskManager {
       checks["STRATEGY_COOLDOWN"] = { passed: false, message: `Strategy ${trade.strategy} is in cooldown.` };
       return { approved: false, rejectionReason: "STRATEGY_COOLDOWN_ACTIVE", checks };
     }
+    // Both reservations are recorded only once every check has passed, so a
+    // trade rejected at the cooldown step no longer leaves a fingerprint behind.
+    this.recentTradeFingerprints.set(fingerprint, now);
     this.strategyCooldowns.set(stratKey, now);
     checks["STRATEGY_COOLDOWN"] = { passed: true, message: "Strategy cooldown clear." };
+    if (trade.tradeId) {
+      this.pendingReservations.set(trade.tradeId, { fingerprint, stratKey, prevStratTime: lastStratTime });
+    }
 
     // All Risk Checks Passed
     IndianAuditLogger.log({
