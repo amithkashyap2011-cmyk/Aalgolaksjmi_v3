@@ -96,4 +96,9 @@ const AqeaTradeAnalyticsSchema = new Schema<IAqeaTradeAnalytics>({
   meta: { type: Schema.Types.Mixed, default: {} },
 });
 
+// DriftMonitor looks up a user's latest analytics by model predictor. With only
+// {userId, timestamp} it walked the user's whole history (5.8GB, 245k docs) to
+// find matches — 15s+ per query, and all of it when none matched at all.
+AqeaTradeAnalyticsSchema.index({ userId: 1, "aiPredictions.predictor": 1, timestamp: -1 });
+
 export const AqeaTradeAnalytics = mongoose.model<IAqeaTradeAnalytics>("AqeaTradeAnalytics", AqeaTradeAnalyticsSchema);

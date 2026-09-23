@@ -24,6 +24,11 @@ export interface DriftReport {
 
 export class DriftMonitor {
   private static cache = new Map<string, { report: DriftReport; timestamp: number }>();
+  // One computation per user at a time. The cache was only filled after the
+  // Mongo scans finished (15s+ on a 5.8GB collection), so every symbol
+  // evaluated in parallel missed it and started its own pair of scans — 22
+  // concurrent queries starved the connection pool and hung the HTTP routes.
+  private static inFlight = new Map<string, Promise<DriftReport>>();
 
   /**
    * Tracks model decay by comparing recent vs historical accuracy.
@@ -33,6 +38,14 @@ export class DriftMonitor {
     if (cached && Date.now() - cached.timestamp < 60000) {
       return cached.report;
     }
+    const pending = this.inFlight.get(userId);
+    if (pending) return pending;
+    const run = this.computeDrift(userId).finally(() => this.inFlight.delete(userId));
+    this.inFlight.set(userId, run);
+    return run;
+  }
+
+  private static async computeDrift(userId: string): Promise<DriftReport> {
 
     if (mongoose.connection.readyState !== 1) {
       return {
