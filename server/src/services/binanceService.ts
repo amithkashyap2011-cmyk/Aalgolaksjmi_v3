@@ -534,7 +534,7 @@ const klineCache = new Map<string, CachedKlines>(); // Key: "BTCUSDT:5m"
 const klineInFlight = new Map<string, Promise<Kline[]>>();
 const fundingRateCache = new Map<string, { rate: number; timestamp: number }>();
 
-const lastAcceptedEventTimestamp = new Map<string, number>();
+const lastAcceptedOpenTime = new Map<string, number>();
 
 export function updateKlineCache(symbol: string, interval: string, kline: Kline): void {
   const key = `${symbol.toUpperCase()}:${interval}`;
@@ -559,15 +559,19 @@ export function updateKlineCache(symbol: string, interval: string, kline: Kline)
     return;
   }
 
-  // 2. Out-of-order event check
-  const lastAccepted = lastAcceptedEventTimestamp.get(key) || 0;
-  if (kline.closeTime && kline.closeTime < lastAccepted) {
-    console.warn(`[binance-ws] Rejected out-of-order candle for ${key}: closeTime=${kline.closeTime} < lastAccepted=${lastAccepted}`);
+  // 2. Out-of-order event check, keyed on bar identity (openTime). The old
+  // closeTime guard compared against the in-progress bar's closeTime (in the
+  // future), so the previous bar's late final update — which Binance can
+  // deliver just after the next bar starts, notably around reconnects — was
+  // rejected and that bar kept a partial OHLC. Updates to the newest bar and
+  // the one before it are accepted; anything older is stale.
+  const newestOpen = lastAcceptedOpenTime.get(key) || 0;
+  const barMs = kline.closeTime && kline.openTime ? kline.closeTime - kline.openTime + 1 : 0;
+  if (barMs > 0 && kline.openTime < newestOpen - barMs) {
+    console.warn(`[binance-ws] Rejected out-of-order candle for ${key}: openTime=${kline.openTime} older than previous bar (newest=${newestOpen})`);
     return;
   }
-  if (kline.closeTime) {
-    lastAcceptedEventTimestamp.set(key, Math.max(lastAccepted, kline.closeTime));
-  }
+  lastAcceptedOpenTime.set(key, Math.max(newestOpen, kline.openTime));
 
   // 3. Mark live WS provenance
   kline.isSynthetic = false;
@@ -589,6 +593,8 @@ export function updateKlineCache(symbol: string, interval: string, kline: Kline)
   const last = arr[arr.length - 1];
   if (last.openTime === kline.openTime) {
     arr[arr.length - 1] = kline;
+  } else if (arr.length >= 2 && arr[arr.length - 2].openTime === kline.openTime) {
+    arr[arr.length - 2] = kline; // late final update of the previous bar
   } else if (kline.openTime > last.openTime) {
     arr.push(kline);
     if (arr.length > 500) arr.shift();
@@ -1056,6 +1062,52 @@ export async function placeOrder(
     body.timeInForce = params.timeInForce ?? "GTC";
   }
   return signedPost<OrderResult>("/api/v3/order", apiKey, apiSecret, body);
+}
+
+/**
+ * Market-equivalent USDT spot fill through Binance Convert, for when the order
+ * book rejects a spot MARKET order outright (the Order Station already opens
+ * small LIVE spot positions this way). Returns the OrderResult fields callers
+ * read to book the fill.
+ */
+export async function convertSpotMarket(
+  apiKey: string,
+  apiSecret: string,
+  params: { symbol: string; side: "BUY" | "SELL"; quantity: number; price: number },
+): Promise<{ orderId: string; executedQty: string; cummulativeQuoteQty: string; avgPrice: string }> {
+  const { LiveExecutionBarrier } = await import("./aqea/governance/LiveExecutionBarrier.js");
+  const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
+  if (!barrier.permitted) {
+    throw new Error(`[LIVE_EXECUTION_BARRIER] Binance Convert rejected: ${barrier.reason || "Live trading is blocked"}`);
+  }
+  if (!params.symbol.endsWith("USDT")) {
+    throw new Error(`Binance Convert fallback supports USDT pairs only (got ${params.symbol})`);
+  }
+
+  const baseAsset = params.symbol.slice(0, -"USDT".length);
+  const isSell = params.side === "SELL";
+  const quote = await signedPost<any>("/sapi/v1/convert/getQuote", apiKey, apiSecret, {
+    fromAsset: isSell ? baseAsset : "USDT",
+    toAsset: isSell ? "USDT" : baseAsset,
+    fromAmount: isSell ? String(params.quantity) : (params.quantity * params.price).toFixed(2),
+  });
+  if (!quote?.quoteId) {
+    throw new Error(`Binance Convert quote failed: ${quote?.msg || JSON.stringify(quote)}`);
+  }
+
+  const accepted = await signedPost<any>("/sapi/v1/convert/acceptQuote", apiKey, apiSecret, { quoteId: String(quote.quoteId) });
+  if (!accepted?.orderId) {
+    throw new Error(`Binance Convert accept failed: ${accepted?.msg || JSON.stringify(accepted)}`);
+  }
+
+  const baseQty = parseFloat(isSell ? quote.fromAmount : quote.toAmount);
+  const quoteQty = parseFloat(isSell ? quote.toAmount : quote.fromAmount);
+  return {
+    orderId: String(accepted.orderId),
+    executedQty: String(baseQty),
+    cummulativeQuoteQty: String(quoteQty),
+    avgPrice: String(quoteQty / baseQty),
+  };
 }
 
 /** Look up a previously-placed spot order by the clientOrderId it was

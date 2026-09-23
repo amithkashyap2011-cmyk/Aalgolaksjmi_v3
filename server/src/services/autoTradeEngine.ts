@@ -403,10 +403,12 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
     const heatEnforcement = PortfolioHeatEngine.checkEnforcement(currentHeat);
     if (!heatEnforcement.allowed && mode === "LIVE") {
       console.log(`[auto-v8] User ${userId} blocked by live heat enforcement: ${heatEnforcement.action} (Heat: ${currentHeat.toFixed(1)}%)`);
+      await manageHeldPositionsOnly(userId, mode, accountType, settings, currentHeat, balance);
       return;
     }
   } else if (mode === "LIVE") {
-    console.log(`[auto] User ${userId} has 0 balance in LIVE ${accountType}. Skipping live order execution.`);
+    console.log(`[auto] User ${userId} has 0 balance in LIVE ${accountType}. Skipping new entries; reviewing held positions only.`);
+    await manageHeldPositionsOnly(userId, mode, accountType, settings, currentHeat, balance);
     return;
   } else {
     console.log(`[auto] User ${userId} has $0.00 balance in PAPER ${accountType}. Proceeding with AQEA autonomous decision evaluation and forward telemetry accumulation.`);
@@ -486,6 +488,65 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
   }
 }
 
+// Real Binance spot taker fee per side. pnlService.TAKER_FEE (0.04%) is the
+// futures rate; judging a spot "profit" with it would bank trades that lose
+// money after the actual 0.1% fees.
+const SPOT_TAKER_FEE = 0.001;
+
+/** Sell a held position when it is in profit and the AI view has turned
+ *  against it (PositionManager.evaluateProfitBooking). Returns true if closed. */
+async function bookProfitOnAiView(
+  userId: string,
+  symbol: string,
+  mode: "PAPER" | "LIVE",
+  accountType: "SPOT" | "FUTURES",
+  settings: ISettings,
+  aqeaDecision: AQEADecision,
+  fallbackPrice: number,
+): Promise<boolean> {
+  const pos = paper.getPosition(userId, symbol, mode, accountType);
+  if (!pos) return false;
+
+  // The decision's close is the last completed 5m candle; judge profit on the live tick.
+  const price = binance.getTickerPriceSync(symbol, accountType === "FUTURES") || fallbackPrice;
+  if (!(price > 0)) return false;
+
+  const fusion = aqeaDecision.meta?.lakshmiEnsemble?.ensembleFusion;
+  const signal = PositionManager.evaluateProfitBooking(
+    `${userId}:${symbol}:${mode}:${accountType}`,
+    { side: pos.side, entryPrice: pos.entryPrice, sl: pos.sl },
+    { decision: aqeaDecision.decision, fusedDirection: fusion?.direction ?? "HOLD" },
+    price,
+    accountType === "SPOT" ? SPOT_TAKER_FEE : TAKER_FEE,
+    settings?.aiFlipExitMinProfitR ?? 0.3,
+  );
+  if (!signal.book) return false;
+
+  console.log(`[AI_BOOK_PROFIT] ${mode} ${accountType} ${symbol} ${pos.side} @ ${price} net=${(signal.netProfitPct * 100).toFixed(2)}% ai=${aqeaDecision.decision}/${fusion?.direction ?? "?"}`);
+  await handleExit(userId, symbol, mode, accountType, signal.reason, 1.0, price);
+  return !paper.getPosition(userId, symbol, mode, accountType);
+}
+
+/** A LIVE account that cannot open trades (no free USDT, heat-blocked) still
+ *  needs its open positions reviewed: evaluate only the held symbols, exits only. */
+async function manageHeldPositionsOnly(
+  userId: string,
+  mode: "PAPER" | "LIVE",
+  accountType: "SPOT" | "FUTURES",
+  settings: ISettings,
+  portfolioHeat: number,
+  balance: number,
+): Promise<void> {
+  const held = paper.getAllOpenPositions(mode, [accountType]).filter((p) => p.userId === userId);
+  for (const p of held) {
+    try {
+      await processSymbol(userId, p.symbol, mode, accountType, settings, portfolioHeat, balance, false);
+    } catch (err: any) {
+      console.error(`[auto] Held-position review ${p.symbol} failed: ${err?.message || err}`);
+    }
+  }
+}
+
 async function processSymbol(
   userId: string,
   symbol: string,
@@ -494,6 +555,7 @@ async function processSymbol(
   settings: ISettings,
   portfolioHeat: number = 0,
   balance: number = 0,
+  entriesAllowed: boolean = true,
 ): Promise<void> {
   // 🛡️ DUAL-MARKET ISOLATION GUARD — Section 6, 14, 55 Invariant
   // Prevent any Indian symbols from accidentally entering Crypto AutoTradeEngine execution pipeline
@@ -559,6 +621,12 @@ async function processSymbol(
 
   // Emit real-time decision for dashboard
   UITelemetryService.emitDecision(userId, symbol, aqeaDecision);
+
+  // AI profit booking on a held position. Runs on every evaluation — the
+  // entry gates below return early on HOLD / low conviction, which hid open
+  // positions from AI exit management on almost every tick.
+  if (await bookProfitOnAiView(userId, symbol, mode, accountType, settings, aqeaDecision, ctx.ind.close)) return;
+  if (!entriesAllowed) return;
 
   const decisionId = aqeaDecision.meta?.decisionId;
 
@@ -1599,6 +1667,12 @@ export async function handleShort(
 
 /* ── EXIT handler ─────────────────────────────────────── */
 
+// Exits in progress, keyed like paper positions. The SL/TP monitor and the
+// scheduler's exit monitoring can both decide to close the same position
+// within one exchange round-trip; without this a LIVE spot position would be
+// sold twice (the second SELL eating into any other holdings of that coin).
+const exitsInFlight = new Set<string>();
+
 export async function handleExit(
   userId: string,
   symbol: string,
@@ -1608,10 +1682,64 @@ export async function handleExit(
   qtyPct: number = 1.0,
   triggerPrice?: number
 ): Promise<void> {
+  const key = `${userId}:${symbol}:${mode}:${accountType}`;
+  if (exitsInFlight.has(key)) return;
+  exitsInFlight.add(key);
+  try {
+    await executeExit(userId, symbol, mode, accountType, reason, qtyPct, triggerPrice);
+  } finally {
+    exitsInFlight.delete(key);
+  }
+}
+
+/**
+ * Caps a LIVE spot SELL at the asset's real free Spot balance. The recorded
+ * position quantity can exceed it (buy fee charged in the base asset), and
+ * Binance can sweep spot funds into Simple Earn Flexible ("LD" + asset), where
+ * neither the order book nor Convert can sell them — both just reject, and
+ * Convert's quote comes back without a quoteId. A failed balance read does not
+ * block the exit; it proceeds with the requested quantity as before.
+ */
+async function capSpotSellToFreeBalance(
+  apiKey: string,
+  apiSecret: string,
+  symbol: string,
+  requestedQty: number
+): Promise<number> {
+  const baseAsset = symbol.replace(/(USDT|USDC|FDUSD)$/, "");
+  let balances: Array<{ asset: string; free: string }>;
+  try {
+    balances = await binance.getAccount(apiKey, apiSecret);
+  } catch (err: any) {
+    console.warn(`[auto] LIVE spot exit ${symbol}: balance check failed (${err?.message}); selling recorded qty`);
+    return requestedQty;
+  }
+  const free = parseFloat(balances.find((b) => b.asset === baseAsset)?.free ?? "0");
+  if (free >= requestedQty) return requestedQty;
+  if (free > 0) {
+    console.warn(`[auto] LIVE spot exit ${symbol}: capping sell ${requestedQty} → free Spot balance ${free}`);
+    return free;
+  }
+  const inEarn = parseFloat(balances.find((b) => b.asset === `LD${baseAsset}`)?.free ?? "0");
+  if (inEarn > 0) {
+    throw new Error(`${baseAsset} is in Binance Simple Earn (${inEarn} LD${baseAsset}), not the Spot wallet — redeem it to Spot so it can be sold`);
+  }
+  throw new Error(`No free ${baseAsset} in the Spot wallet to sell (recorded position ${requestedQty})`);
+}
+
+async function executeExit(
+  userId: string,
+  symbol: string,
+  mode: "PAPER" | "LIVE",
+  accountType: string,
+  reason: string,
+  qtyPct: number,
+  triggerPrice?: number
+): Promise<void> {
   const pos = paper.getPosition(userId, symbol, mode, accountType);
   if (!pos) return;
 
-  const requestedCloseQty = pos.quantity * Math.min(1, Math.max(0, qtyPct));
+  let requestedCloseQty = pos.quantity * Math.min(1, Math.max(0, qtyPct));
   let closeQty = requestedCloseQty;
 
   if (mode === "LIVE") {
@@ -1635,8 +1763,22 @@ export async function handleExit(
       const qtyStr = await binance.formatFuturesQuantity(symbol, requestedCloseQty);
       exitResult = await binance.placeFuturesOrder(apiKey, apiSecret, { symbol, side: exitSide, type: "MARKET", quantity: qtyStr, clientOrderId: exitClientOrderId, reduceOnly: true });
     } else {
+      if (exitSide === "SELL") {
+        requestedCloseQty = await capSpotSellToFreeBalance(apiKey, apiSecret, symbol, requestedCloseQty);
+      }
       const qtyStr = await binance.formatQuantity(symbol, requestedCloseQty);
-      exitResult = await binance.placeOrder(apiKey, apiSecret, { symbol, side: exitSide, type: "MARKET", quantity: qtyStr, clientOrderId: exitClientOrderId });
+      try {
+        exitResult = await binance.placeOrder(apiKey, apiSecret, { symbol, side: exitSide, type: "MARKET", quantity: qtyStr, clientOrderId: exitClientOrderId });
+      } catch (spotErr: any) {
+        // Only a definite order-book rejection (400/401/403: filters, key
+        // permissions, IP) falls back to Convert. A timeout or 5xx may have
+        // filled, and a second sell would double-exit.
+        if (!/^Binance Spot 40[013]:/.test(spotErr?.message ?? "")) throw spotErr;
+        console.warn(`[auto] LIVE spot exit ${symbol} rejected by order book (${spotErr.message}); retrying via Binance Convert`);
+        exitResult = await binance.convertSpotMarket(apiKey, apiSecret, {
+          symbol, side: exitSide, quantity: requestedCloseQty, price: triggerPrice ?? pos.entryPrice,
+        });
+      }
     }
     (pos.meta as any) = { ...(pos.meta || {}), exitClientOrderId, exitBinanceOrderId: exitResult.orderId };
 
@@ -1653,7 +1795,11 @@ export async function handleExit(
     }
   }
 
-  const isPartial = closeQty < pos.quantity - 1e-9;
+  // A LIVE full close is floored to the exchange lot step (495079.57 PEPE
+  // sells as 495079), and a sub-$1 remainder can never be sold. Treat it as
+  // closed rather than leaving an OPEN dust position that is retried forever.
+  const isLotDust = mode === "LIVE" && qtyPct >= 1 && (pos.quantity - closeQty) * pos.entryPrice < 1;
+  const isPartial = closeQty < pos.quantity - 1e-9 && !isLotDust;
 
   // Root cause of exits that booked a loss despite a favorable exitReason
   // (e.g. "TP3_HIT" closing at a net loss): the exit *decision* is made on

@@ -15,12 +15,76 @@ export interface PositionManagementSignal {
   newTakeProfit?: number;
 }
 
+/** The AI's view of a symbol on one evaluation tick. */
+export interface AiPositionView {
+  /** Final decision after entry gates (EV, Bayesian, risk, ...). */
+  decision: string;
+  /** Fused ensemble direction before any entry gate. */
+  fusedDirection: string;
+}
+
+export interface ProfitBookingSignal {
+  book: boolean;
+  reason: string;
+  netProfitPct: number;
+}
+
+/** Evaluations in a row the AI must lean against a position before banking it. */
+const PROFIT_BOOKING_CONFIRMATIONS = 2;
+/** Minimum profit after round-trip fees when there is no usable stop-loss to size R. */
+const MIN_NET_PROFIT_PCT = 0.002;
+
 export class PositionManager {
   /**
    * Tracks consecutive AI signals to prevent whipsaw closures.
    * Format: `userId:symbol:direction` -> count
    */
   private static signalState = new Map<string, number>();
+  private static profitBookingState = new Map<string, number>();
+
+  /**
+   * AI profit booking: close a position that is in profit after round-trip
+   * fees once the AI view turns against it on consecutive evaluations. Uses
+   * the fused ensemble direction as well as the gated decision — entry gates
+   * decide whether to OPEN a trade and rarely emit the opposite side, so
+   * relying on the gated decision alone almost never banks a gain. Never
+   * closes at a loss; losing positions are left to SL/risk exits.
+   */
+  public static evaluateProfitBooking(
+    positionKey: string,
+    position: { side: string; entryPrice: number; sl?: number },
+    view: AiPositionView,
+    currentPrice: number,
+    feePctPerSide: number,
+    minProfitR = 0.3,
+  ): ProfitBookingSignal {
+    const isLong = position.side === "BUY";
+    const grossPct = isLong
+      ? currentPrice / position.entryPrice - 1
+      : 1 - currentPrice / position.entryPrice;
+    const netProfitPct = grossPct - 2 * feePctPerSide;
+
+    const sl = position.sl ?? 0;
+    const slOnLossSide = sl > 0 && (isLong ? sl < position.entryPrice : sl > position.entryPrice);
+    const riskPct = slOnLossSide ? Math.abs(position.entryPrice - sl) / position.entryPrice : 0;
+    const minNetPct = Math.max(minProfitR * riskPct, MIN_NET_PROFIT_PCT);
+
+    const opposite = isLong ? "SHORT" : "LONG";
+    const aiAgainst = view.decision === opposite || view.fusedDirection === opposite;
+
+    if (!(netProfitPct >= minNetPct) || !aiAgainst) {
+      this.profitBookingState.delete(positionKey);
+      return { book: false, reason: "", netProfitPct };
+    }
+
+    const count = (this.profitBookingState.get(positionKey) ?? 0) + 1;
+    if (count < PROFIT_BOOKING_CONFIRMATIONS) {
+      this.profitBookingState.set(positionKey, count);
+      return { book: false, reason: "", netProfitPct };
+    }
+    this.profitBookingState.delete(positionKey);
+    return { book: true, reason: "AI_BOOK_PROFIT", netProfitPct };
+  }
 
   /**
    * Evaluates active positions for dynamic management.
