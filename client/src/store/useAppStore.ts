@@ -28,6 +28,7 @@ import * as api from "../lib/api";
 import { DEFAULT_INR_RATE } from "../lib/currency";
 import { socket, subscribeTicker, unsubscribeTicker, type TickData } from "../lib/socket";
 import type { EnsembleReport } from "../types/ensemble";
+import { INDIAN_LIVE_AVAILABLE } from "../lib/indianBroker";
 
 // Socket connection state listeners for reactive Online/Offline badge updates
 socket.on("connect", async () => {
@@ -433,7 +434,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   mode: "PAPER",
   // Never inherited from the crypto mode: LIVE must be an explicit choice made
   // in the Indian market view, so anything other than a stored "LIVE" is PAPER.
-  indianMode: getStoredItem("aalgo_indian_mode") === "LIVE" ? "LIVE" : "PAPER",
+  // LIVE only while a real Indian broker is integrated (see lib/indianBroker).
+  indianMode: INDIAN_LIVE_AVAILABLE && getStoredItem("aalgo_indian_mode") === "LIVE" ? "LIVE" : "PAPER",
   setIndianMode: (m) => {
     try { localStorage.setItem("aalgo_indian_mode", m); } catch {}
     set({ indianMode: m });

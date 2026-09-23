@@ -360,6 +360,15 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
 
     const { strategyId: sId, strategy, underlying = "NIFTY", mode = "PAPER" } = req.body;
 
+    // Like /execute: this route saves the trade itself without any broker, so
+    // mode "LIVE" would record a "live" trade that never reached Angel One/Kite.
+    if (mode === "LIVE") {
+      return res.status(501).json({
+        error: "LIVE_EXECUTION_NOT_IMPLEMENTED",
+        message: "No live Indian broker (Angel One / Kite) is connected yet — use PAPER mode.",
+      });
+    }
+
     // 🛡️ No real broker integration on this route either — same reasoning
     // as /execute above.
     if (mode === "LIVE") {

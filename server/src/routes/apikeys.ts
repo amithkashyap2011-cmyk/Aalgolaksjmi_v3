@@ -126,12 +126,13 @@ router.post("/angel-one/test", authGuard, async (req: AuthRequest, res) => {
       res.status(400).json({ error: "SmartAPI App Key and Client Code are required." });
       return;
     }
-    // Simulate Angel One SmartAPI authentication handshake
-    res.json({
-      ok: true,
-      message: "ANGEL_ONE_SMARTAPI_HANDSHAKE_SUCCESSFUL: CONNECTED TO NSE/BSE GATEWAY",
+    // This used to always answer "HANDSHAKE_SUCCESSFUL" without contacting
+    // Angel One. There is no SmartAPI client yet, so say so instead.
+    res.status(501).json({
+      ok: false,
+      error: "ANGEL_ONE_NOT_INTEGRATED: Angel One SmartAPI isn't connected yet — credentials are saved but not verified, and Indian trading stays paper-only.",
       clientCode,
-      status: "AUTHENTICATED",
+      status: "NOT_INTEGRATED",
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

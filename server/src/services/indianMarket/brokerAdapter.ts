@@ -158,6 +158,9 @@ export class PaperExecutionAdapter implements BrokerAdapter {
 }
 
 // ─── 2. LIVE BROKER EXECUTION ADAPTER (INDIAN BROKER PROTOCOL) ───
+export const INDIAN_BROKER_NOT_INTEGRATED =
+  "INDIAN_BROKER_NOT_INTEGRATED: No live Indian broker (Angel One / Kite) is connected yet — Indian trading is paper-only.";
+
 export class LiveBrokerExecutionAdapter implements BrokerAdapter {
   public readonly name = "LIVE_INDIAN_BROKER_ADAPTER";
 
@@ -205,15 +208,24 @@ export class LiveBrokerExecutionAdapter implements BrokerAdapter {
       };
     }
 
-    const orderId = `L_ORD_${Date.now()}`;
+    // No real Indian broker (Angel One / Kite) is integrated yet. This used to
+    // return an instant fake "COMPLETE" fill once LIVE_TRADING_ENABLED was
+    // true — recording "live" trades that never reached any broker. Refuse
+    // until a real adapter exists.
+    IndianAuditLogger.log({
+      eventType: "ORDER_FAILED",
+      details: { req },
+      reason: INDIAN_BROKER_NOT_INTEGRATED,
+    });
     return {
-      ok: true,
-      orderId,
+      ok: false,
+      orderId: "",
       clientOrderId: req.clientOrderId,
       tradingSymbol: req.tradingSymbol,
-      status: "COMPLETE",
-      filledQty: req.quantity,
-      averagePrice: req.price || 100,
+      status: "REJECTED",
+      filledQty: 0,
+      averagePrice: 0,
+      rejectionReason: INDIAN_BROKER_NOT_INTEGRATED,
       executionTimestamp: new Date().toISOString(),
     };
   }

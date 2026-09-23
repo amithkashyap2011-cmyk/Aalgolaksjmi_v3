@@ -631,10 +631,13 @@ export default function SettingsPage() {
                                     headers: { "Content-Type": "application/json" },
                                     body: JSON.stringify({ apiKey: angelApiKey || "saved", clientCode: angelClientCode || "saved" })
                                   });
-                                  if (res.ok) {
-                                    setAngelMsg({ ok: true, text: "ANGEL_ONE_HANDSHAKE_SUCCESSFUL: CONNECTED TO NSE/BSE GATEWAY" });
+                                  // Show what the server actually said; this used to print
+                                  // "HANDSHAKE_SUCCESSFUL" on any OK response.
+                                  const body = await res.json().catch(() => ({} as any));
+                                  if (res.ok && body?.ok) {
+                                    setAngelMsg({ ok: true, text: body.message || "ANGEL_ONE_CONNECTED" });
                                   } else {
-                                    setAngelMsg({ ok: false, text: "ANGEL_ONE_HANDSHAKE_FAILED" });
+                                    setAngelMsg({ ok: false, text: body?.error || body?.message || `ANGEL_ONE_HANDSHAKE_FAILED (HTTP ${res.status})` });
                                   }
                                 } catch (err: any) {
                                   setAngelMsg({ ok: false, text: `REJECT: ${err.message}` });

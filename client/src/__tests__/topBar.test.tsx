@@ -216,25 +216,30 @@ describe("TopBar Unit Tests", () => {
       expect(screen.queryByText("Backtest")).not.toBeInTheDocument();
     });
 
-    it("switching to LIVE in the Indian view changes only the Indian mode", () => {
+    // No Indian broker is integrated yet (lib/indianBroker INDIAN_LIVE_AVAILABLE
+    // = false): choosing LIVE must explain that and stay on PAPER, never
+    // pretend to route orders to Angel One / Kite.
+    it("choosing LIVE in the Indian view is blocked while no broker is integrated", () => {
+      const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
       const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      localStorage.removeItem("aalgo_indian_mode");
       useAppStore.setState({ activeMarket: "INDIA", mode: "PAPER", indianMode: "PAPER" });
       renderTopBar();
       fireEvent.click(screen.getByText("Live"));
-      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("INDIAN market to LIVE"));
-      expect(useAppStore.getState().indianMode).toBe("LIVE");
+      expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining("isn't available yet"));
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(useAppStore.getState().indianMode).toBe("PAPER");
       expect(useAppStore.getState().mode).toBe("PAPER");
-      expect(localStorage.getItem("aalgo_indian_mode")).toBe("LIVE");
+      expect(localStorage.getItem("aalgo_indian_mode")).not.toBe("LIVE");
+      alertSpy.mockRestore();
       confirmSpy.mockRestore();
     });
 
-    it("cancelling the LIVE confirmation keeps the Indian market on PAPER", () => {
-      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    it("the Indian broker badge says simulated, not Angel / Kite", () => {
       useAppStore.setState({ activeMarket: "INDIA", mode: "LIVE", indianMode: "PAPER" });
       renderTopBar();
-      fireEvent.click(screen.getByText("Live"));
-      expect(useAppStore.getState().indianMode).toBe("PAPER");
-      confirmSpy.mockRestore();
+      expect(screen.getByText("Simulated · No Broker")).toBeInTheDocument();
+      expect(screen.queryByText("Angel / Kite")).not.toBeInTheDocument();
     });
 
     it("fetches Indian funds with the Indian mode, not the crypto mode", () => {

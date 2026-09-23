@@ -6,6 +6,7 @@ import { formatCurrency, formatInrWithUsd, formatUsdWithInr } from "../../lib/cu
 import { hardReset } from "../../lib/api";
 import { Menu, Settings, Wifi, WifiOff, RotateCcw, AlertOctagon, ShieldAlert } from "lucide-react";
 import { LiveGovernanceModal } from "./LiveGovernanceModal";
+import { INDIAN_LIVE_AVAILABLE, INDIAN_LIVE_UNAVAILABLE_MESSAGE } from "../../lib/indianBroker";
 
 const MODES: { value: Mode; label: string; color: string }[] = [
   { value: "PAPER",    label: "Paper",    color: "#10b981" },
@@ -382,6 +383,10 @@ export default function TopBar({ onMenuClick }: Props) {
               key={m.value}
               onClick={() => {
                 if (isIndian) {
+                  if (m.value === "LIVE" && !INDIAN_LIVE_AVAILABLE) {
+                    window.alert(INDIAN_LIVE_UNAVAILABLE_MESSAGE);
+                    return;
+                  }
                   if (m.value === "LIVE" && indianMode !== "LIVE") {
                     if (!window.confirm("⚠️ Switch the INDIAN market to LIVE?\n\nOrders will route to your authenticated Indian broker and use real money. Your crypto mode is not changed.\n\nContinue?")) return;
                   }
@@ -514,8 +519,8 @@ export default function TopBar({ onMenuClick }: Props) {
             background: "rgba(56,189,248,0.12)", color: "#38bdf8",
             border: "1px solid rgba(56,189,248,0.3)", letterSpacing: "0.04em",
             textTransform: "uppercase", whiteSpace: "nowrap"
-          }} title="Authenticated Indian Broker Engine (Angel One SmartAPI / Zerodha Kite)">
-            Angel / Kite
+          }} title={INDIAN_LIVE_AVAILABLE ? "Authenticated Indian Broker Engine (Angel One SmartAPI / Zerodha Kite)" : "No Indian broker connected yet — paper trading on simulated prices"}>
+            {INDIAN_LIVE_AVAILABLE ? "Angel / Kite" : "Simulated · No Broker"}
           </div>
         </div>
       )}
