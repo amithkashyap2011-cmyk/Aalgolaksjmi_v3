@@ -6,11 +6,13 @@
  *  futures, and options without pulling heavy auto-trader daemon dependencies.
  */
 
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { INDIAN_SYMBOLS, SUPPORTED_INDIAN_SYMBOLS } from "../../config/indianSymbols.js";
 import { IndianMarketHours } from "../indianMarketHours.js";
 import { OptionChainService } from "./optionChainService.js";
 import { InstrumentMaster } from "./instrumentMaster.js";
-import { ExpiryResolver } from "./expiryResolver.js";
 
 // ─── Account type domain classification ─────────────────────────────────────
 export const INDIAN_ACCOUNT_TYPES = new Set([
@@ -52,12 +54,74 @@ export const MOCK_LIVE_INDIAN_TIKERS: Record<
   "BHARTIARTL":{ ltp: 1488.60,  open: 1472.00,  high: 1495.00,  low: 1468.00,  volume: 4800000, rsi14: 67.8, adx14: 33.1 },
 };
 
+// ─── Simulated price persistence ────────────────────────────────────────────
+// The simulated prices above live only in memory, so every restart (pm2,
+// crash, deploy) snapped every symbol back to the hardcoded baseline. Open
+// trades then saw a fake discontinuity — an INFY put "gained" 143% 8s after a
+// reboot. The latest prices are saved each tick and restored at load; a save
+// from an earlier IST day opens the new session at that last close.
+const SIM_STATE_FILE = process.env.INDIAN_SIM_STATE_FILE
+  || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../runtime/indian_sim_tickers.json");
+
+function istDateKey(d: Date = new Date()): string {
+  return new Date(d.getTime() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export function restoreSimulatedTickers(file: string = SIM_STATE_FILE): number {
+  let saved: { date?: string; tickers?: Record<string, any> };
+  try {
+    saved = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return 0; // first run or unreadable — keep the baseline
+  }
+  const sameDay = saved.date === istDateKey();
+  let restored = 0;
+  for (const [sym, data] of Object.entries(MOCK_LIVE_INDIAN_TIKERS)) {
+    const s = saved.tickers?.[sym];
+    if (!s || !(Number(s.ltp) > 0)) continue;
+    const ltp = Number(s.ltp);
+    data.ltp = ltp;
+    if (sameDay) {
+      data.open = Number(s.open) > 0 ? Number(s.open) : ltp;
+      data.high = Math.max(Number(s.high) || ltp, ltp);
+      data.low = Math.min(Number(s.low) || ltp, ltp);
+      data.volume = Number(s.volume) > 0 ? Number(s.volume) : data.volume;
+    } else {
+      data.open = data.high = data.low = ltp; // new session opens at last close
+    }
+    restored++;
+  }
+  return restored;
+}
+
+export function persistSimulatedTickers(file: string = SIM_STATE_FILE): void {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ date: istDateKey(), savedAt: new Date().toISOString(), tickers: MOCK_LIVE_INDIAN_TIKERS }));
+    fs.renameSync(tmp, file); // atomic swap so a crash mid-write can't corrupt the state
+  } catch {
+    // Persistence is best-effort; pricing keeps working in memory.
+  }
+}
+
+if (process.env.NODE_ENV !== "test") {
+  restoreSimulatedTickers();
+}
+
 // Realistic micro-tick simulation during active market sessions
 if (typeof setInterval !== "undefined" && process.env.NODE_ENV !== "test") {
+  let savedWhileClosed = false;
   const tickInterval = setInterval(() => {
     try {
       const session = IndianMarketHours.getSessionStatus();
-      if (!session.isOpen) return;
+      if (!session.isOpen) {
+        // Prices are frozen off-hours; save once so the last close survives
+        // an overnight restart, then stop writing until the next session.
+        if (!savedWhileClosed) { persistSimulatedTickers(); savedWhileClosed = true; }
+        return;
+      }
+      savedWhileClosed = false;
 
       for (const [, data] of Object.entries(MOCK_LIVE_INDIAN_TIKERS)) {
         // Uniform ±0.02% per 4s tick (sd ≈ 0.0118%) ≈ 14% annualised over a
@@ -72,27 +136,13 @@ if (typeof setInterval !== "undefined" && process.env.NODE_ENV !== "test") {
         if (newLtp < data.low) data.low = newLtp;
         data.volume += Math.floor(Math.random() * 200) + 50;
       }
+      persistSimulatedTickers();
     } catch {}
   }, 4000);
 
   if (typeof tickInterval.unref === "function") {
     tickInterval.unref();
   }
-}
-
-// In-memory 1.5s TTL cache for generated option chains across concurrent trade evaluations
-const chainCache = new Map<string, { chain: any; expiry: number }>();
-
-function getCachedOptionChain(underlying: string, spotPrice: number) {
-  const key = `${underlying}_${spotPrice}`;
-  const now = Date.now();
-  const hit = chainCache.get(key);
-  if (hit && now < hit.expiry) {
-    return hit.chain;
-  }
-  const chain = OptionChainService.generateOptionChain(underlying as any, spotPrice);
-  chainCache.set(key, { chain, expiry: now + 1500 });
-  return chain;
 }
 
 /**
@@ -116,7 +166,6 @@ export function resolveLivePriceForIndianTrade(t: any): number {
     const spotKey = normUnderlying === "NIFTY" ? "NIFTY50" : normUnderlying;
     const spotTicker = MOCK_LIVE_INDIAN_TIKERS[spotKey] || MOCK_LIVE_INDIAN_TIKERS["NIFTY50"] || { ltp: 24538.50 };
     const spotPrice = spotTicker.ltp;
-    const chain = getCachedOptionChain(normUnderlying, spotPrice);
 
     let strike = t.legs?.[0]?.strike;
     let optionType = t.legs?.[0]?.instrumentType || (t.symbol?.endsWith("PE") ? "PE" : "CE");
@@ -130,17 +179,9 @@ export function resolveLivePriceForIndianTrade(t: any): number {
     }
 
     if (strike) {
-      const matched = chain?.strikes?.find((s: any) => s.strike === strike);
-      if (matched) {
-        const optionLtp = optionType === "CE" ? matched.call?.ltp : matched.put?.ltp;
-        if (optionLtp && optionLtp > 0) return optionLtp;
-      }
-
-      // Direct Black-Scholes theoretical pricing fallback with live spot
-      const expiryInfo = ExpiryResolver.resolveExpiry(normUnderlying as any, { type: "NEAREST_VALID_EXPIRY" });
-      const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-      const calcPrice = OptionChainService.calculateTheoreticalPrice(spotPrice, strike, dteYears, 0.15, optionType === "CE");
-      if (calcPrice > 0) return calcPrice;
+      // Same mark the entry was priced with (see OptionChainService.markPrice).
+      const mark = OptionChainService.markPrice(normUnderlying as any, spotPrice, strike, optionType === "CE");
+      if (mark > 0) return mark;
     }
   }
 

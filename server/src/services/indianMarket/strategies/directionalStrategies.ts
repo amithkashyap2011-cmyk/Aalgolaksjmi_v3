@@ -120,7 +120,7 @@ export class LongCallStrategy extends BaseStrategy {
     const instrument = InstrumentMaster.resolveInstrument(context.underlying, "CE", expiryInfo.date, strikeInfo.strike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const optionPremium = OptionChainService.calculateTheoreticalPrice(context.spotPrice, strikeInfo.strike, dteYears, 0.15, true);
+    const optionPremium = OptionChainService.markPrice(context.underlying, context.spotPrice, strikeInfo.strike, true);
     const greeks = OptionChainService.calculateBlackScholesGreeks(context.spotPrice, strikeInfo.strike, dteYears, 0.15, true);
 
     const stopLoss = Number((optionPremium * 0.70).toFixed(2)); // 30% stop loss on premium
@@ -270,7 +270,7 @@ export class LongPutStrategy extends BaseStrategy {
     const instrument = InstrumentMaster.resolveInstrument(context.underlying, "PE", expiryInfo.date, strikeInfo.strike);
 
     const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-    const optionPremium = OptionChainService.calculateTheoreticalPrice(context.spotPrice, strikeInfo.strike, dteYears, 0.15, false);
+    const optionPremium = OptionChainService.markPrice(context.underlying, context.spotPrice, strikeInfo.strike, false);
     const greeks = OptionChainService.calculateBlackScholesGreeks(context.spotPrice, strikeInfo.strike, dteYears, 0.15, false);
 
     const stopLoss = Number((optionPremium * 0.70).toFixed(2));

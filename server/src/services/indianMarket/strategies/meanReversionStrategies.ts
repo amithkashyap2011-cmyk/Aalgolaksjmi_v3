@@ -38,7 +38,7 @@ function buildMeanRevOptionTrade(
   const instrument = InstrumentMaster.resolveInstrument(context.underlying, optionType, expiryInfo.date, strikeInfo.strike);
 
   const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
-  const optionPremium = OptionChainService.calculateTheoreticalPrice(context.spotPrice, strikeInfo.strike, dteYears, 0.15, isCall);
+  const optionPremium = OptionChainService.markPrice(context.underlying, context.spotPrice, strikeInfo.strike, isCall);
   const greeks = OptionChainService.calculateBlackScholesGreeks(context.spotPrice, strikeInfo.strike, dteYears, 0.15, isCall);
 
   const stopLoss = Number((optionPremium * 0.72).toFixed(2)); // 28% initial SL (with dynamic BE shift at +16%)

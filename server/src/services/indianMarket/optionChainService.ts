@@ -271,4 +271,35 @@ export class OptionChainService {
       updatedAt: new Date().toISOString(),
     };
   }
+
+  // 1.5s TTL cache of generated chains, shared by entry pricing and the exit
+  // monitor so concurrent evaluations don't regenerate the same chain.
+  private static chainCache = new Map<string, { chain: OptionChainData; expiry: number }>();
+
+  public static getCachedOptionChain(underlying: UnderlyingSymbol, spotPrice: number): OptionChainData {
+    const key = `${underlying}_${spotPrice}`;
+    const now = Date.now();
+    const hit = this.chainCache.get(key);
+    if (hit && now < hit.expiry) return hit.chain;
+    const chain = this.generateOptionChain(underlying, spotPrice);
+    this.chainCache.set(key, { chain, expiry: now + 1500 });
+    return chain;
+  }
+
+  /**
+   * The one mark price for a single option: the generated chain's premium
+   * (with its IV smile/skew), else Black-Scholes at 15% IV when the strike is
+   * outside the chain. Entry construction and the exit monitor must both use
+   * this — entries priced at a flat 15% IV opened every trade 6-12% above or
+   * below the chain price the monitor marks against, before spot even moved.
+   */
+  public static markPrice(underlying: UnderlyingSymbol, spotPrice: number, strike: number, isCall: boolean): number {
+    const matched = this.getCachedOptionChain(underlying, spotPrice)?.strikes?.find((s) => s.strike === strike);
+    const chainLtp = matched ? (isCall ? matched.call?.ltp : matched.put?.ltp) : undefined;
+    if (chainLtp && chainLtp > 0) return chainLtp;
+
+    const expiryInfo = ExpiryResolver.resolveExpiry(underlying, { type: "NEAREST_VALID_EXPIRY" });
+    const dteYears = Math.max(0.5, (expiryInfo.date.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) / 365;
+    return this.calculateTheoreticalPrice(spotPrice, strike, dteYears, 0.15, isCall);
+  }
 }

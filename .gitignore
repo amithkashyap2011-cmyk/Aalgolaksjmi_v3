@@ -31,6 +31,7 @@ logs/
 soak_logs/
 
 # Databases / runtime data
+server/runtime/
 db/
 db_data/
 *.wt
