@@ -49,7 +49,7 @@ interface GlobalFundsState {
 
 export default function GlobalDashboard() {
   const navigate = useNavigate();
-  const { mode, setActiveMarket } = useAppStore();
+  const { mode, indianMode, setActiveMarket } = useAppStore();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<GlobalFundsState | null>(null);
 
@@ -57,7 +57,7 @@ export default function GlobalDashboard() {
     setLoading(true);
     try {
       // 1. Fetch Indian funds
-      const indiaRes = await fetch("/api/indian-market/funds");
+      const indiaRes = await fetch(`/api/indian-market/funds?mode=${indianMode}`);
       const indiaData = indiaRes.ok ? await indiaRes.json() : null;
 
       // 2. Fetch crypto domain metrics (authoritative aggregation of spot+futures paper wallets)
@@ -84,8 +84,8 @@ export default function GlobalDashboard() {
           todayPnlINR: indiaTodayPnl,
           realizedPnlINR: indiaRealizedPnl,
           unrealizedPnlINR: indiaUnrealizedPnl,
-          mode: mode,
-          source: mode === "LIVE" ? "Angel One Broker" : "Paper Initial Capital (₹20,000 INR)",
+          mode: indianMode,
+          source: indianMode === "LIVE" ? "Angel One Broker" : "Paper Initial Capital (₹20,000 INR)",
           status: "ONLINE",
         },
         crypto: {
@@ -113,7 +113,7 @@ export default function GlobalDashboard() {
     fetchGlobalState();
     const timer = setInterval(fetchGlobalState, 15000);
     return () => clearInterval(timer);
-  }, [mode]);
+  }, [mode, indianMode]);
 
   const fxRate = data?.fxRate || 95.613964;
   const indiaInr = data?.india.equityINR ?? 20000;

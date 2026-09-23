@@ -90,6 +90,7 @@ async function ensureDemoAuthSession(): Promise<void> {
 /* ── Types ────────────────────────────────────────────── */
 
 export type Mode = "PAPER" | "LIVE" | "BACKTEST";
+export type IndianMode = "PAPER" | "LIVE";
 // "BOTH" is a client-only view mode — it merges Spot + Futures data for
 // display (ticker subscriptions, wallet, positions) but is never sent to
 // the server as Settings.accountType, whose enum only knows SPOT/FUTURES.
@@ -211,6 +212,9 @@ interface AppState {
   connected: boolean;            // true if backend auth succeeded
 
   mode: Mode;
+  /** Indian market execution mode — chosen separately from the crypto `mode`. */
+  indianMode: IndianMode;
+  setIndianMode: (m: IndianMode) => void;
   accountType: AccountType;
   execMode: ExecMode;
   activeMarket: "INDIA" | "CRYPTO" | "GLOBAL";
@@ -427,6 +431,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   inrRate: MOCK_WALLET.inrRate ?? DEFAULT_INR_RATE,
 
   mode: "PAPER",
+  // Never inherited from the crypto mode: LIVE must be an explicit choice made
+  // in the Indian market view, so anything other than a stored "LIVE" is PAPER.
+  indianMode: getStoredItem("aalgo_indian_mode") === "LIVE" ? "LIVE" : "PAPER",
+  setIndianMode: (m) => {
+    try { localStorage.setItem("aalgo_indian_mode", m); } catch {}
+    set({ indianMode: m });
+  },
   accountType: (getStoredItem("aalgo_account_type") as AccountType) || "BOTH",
   execMode: "AUTO",
   activeMarket: ((typeof window !== "undefined" && (getStoredItem("aalgo_active_market") as "INDIA" | "CRYPTO" | "GLOBAL")) || "CRYPTO"),

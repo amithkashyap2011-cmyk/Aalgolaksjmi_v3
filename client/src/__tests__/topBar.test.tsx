@@ -204,4 +204,54 @@ describe("TopBar Unit Tests", () => {
       expect(onMenuClick).toHaveBeenCalledTimes(1);
     }
   });
+
+  describe("Indian market mode is independent of the crypto mode", () => {
+    const isActive = (label: string) => (screen.getByText(label).closest("button") as HTMLButtonElement).style.color === "rgb(255, 255, 255)";
+
+    it("shows the Indian PAPER choice even when crypto is LIVE", () => {
+      useAppStore.setState({ activeMarket: "INDIA", mode: "LIVE", indianMode: "PAPER" });
+      renderTopBar();
+      expect(isActive("Paper")).toBe(true);
+      expect(isActive("Live")).toBe(false);
+      expect(screen.queryByText("Backtest")).not.toBeInTheDocument();
+    });
+
+    it("switching to LIVE in the Indian view changes only the Indian mode", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      useAppStore.setState({ activeMarket: "INDIA", mode: "PAPER", indianMode: "PAPER" });
+      renderTopBar();
+      fireEvent.click(screen.getByText("Live"));
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("INDIAN market to LIVE"));
+      expect(useAppStore.getState().indianMode).toBe("LIVE");
+      expect(useAppStore.getState().mode).toBe("PAPER");
+      expect(localStorage.getItem("aalgo_indian_mode")).toBe("LIVE");
+      confirmSpy.mockRestore();
+    });
+
+    it("cancelling the LIVE confirmation keeps the Indian market on PAPER", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      useAppStore.setState({ activeMarket: "INDIA", mode: "LIVE", indianMode: "PAPER" });
+      renderTopBar();
+      fireEvent.click(screen.getByText("Live"));
+      expect(useAppStore.getState().indianMode).toBe("PAPER");
+      confirmSpy.mockRestore();
+    });
+
+    it("fetches Indian funds with the Indian mode, not the crypto mode", () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockClear();
+      useAppStore.setState({ activeMarket: "INDIA", mode: "LIVE", indianMode: "PAPER" });
+      renderTopBar();
+      const fundsCalls = fetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/api/indian-market/funds"));
+      expect(fundsCalls.length).toBeGreaterThan(0);
+      expect(fundsCalls.every((u) => u.includes("mode=PAPER"))).toBe(true);
+    });
+
+    it("crypto view still shows and switches the crypto mode", () => {
+      useAppStore.setState({ activeMarket: "CRYPTO", mode: "PAPER", indianMode: "LIVE" });
+      renderTopBar();
+      expect(isActive("Paper")).toBe(true);
+      expect(screen.getByText("Backtest")).toBeInTheDocument();
+    });
+  });
 });

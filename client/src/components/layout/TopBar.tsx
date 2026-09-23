@@ -68,7 +68,7 @@ function getIndianSessionStatus(): { label: string; color: string; tooltip: stri
 }
 
 export default function TopBar({ onMenuClick }: Props) {
-  const { mode, setMode, connected, accountType, setAccountType, activeMarket, setActiveMarket, execMode } = useAppStore();
+  const { mode, setMode, indianMode, setIndianMode, connected, accountType, setAccountType, activeMarket, setActiveMarket, execMode } = useAppStore();
   const { userId } = useAppStore();
   const { currencyMode, fetchDashboard } = useDashboardStore();
   const summary = useDashboardStore((s) => s.summary) ?? INITIAL_SUMMARY;
@@ -106,7 +106,7 @@ export default function TopBar({ onMenuClick }: Props) {
       try {
         const query = new URLSearchParams();
         if (userId) query.set("userId", userId);
-        if (mode) query.set("mode", mode);
+        query.set("mode", indianMode);
         const res = await fetch(`/api/indian-market/funds?${query.toString()}`);
         const json = await res.json();
         if (json.success) setIndianFunds(json);
@@ -115,10 +115,13 @@ export default function TopBar({ onMenuClick }: Props) {
     fetchIndian();
     const t = setInterval(fetchIndian, 6000);
     return () => clearInterval(t);
-  }, [isIndian, isGlobal, userId, mode]);
+  }, [isIndian, isGlobal, userId, indianMode]);
 
   const inrRate = summary.inrRate || 85.0;
-  const activeMode = MODES.find((m) => m.value === mode) ?? MODES[0];
+  // The Indian view has its own PAPER/LIVE choice; it never shows the crypto mode.
+  const shownMode = isIndian ? indianMode : mode;
+  const modeOptions = isIndian ? MODES.filter((m) => m.value !== "BACKTEST") : MODES;
+  const activeMode = MODES.find((m) => m.value === shownMode) ?? MODES[0];
   const indianWinRate = indianFunds?.winRate ?? domains.indianStock.realizedWinRate ?? domains.indianStock.winRate ?? 0;
   const indianTradesCount = indianFunds?.closedTradesCount ?? domains.indianStock.closedTrades ?? 0;
 
@@ -363,8 +366,8 @@ export default function TopBar({ onMenuClick }: Props) {
         border: "1px solid rgba(255, 255, 255, 0.12)",
         gap: 2, flexShrink: 0
       }} title="Execution Engine Mode">
-        {MODES.map((m) => {
-          const active = mode === m.value;
+        {modeOptions.map((m) => {
+          const active = shownMode === m.value;
           let activeBg = "linear-gradient(135deg, #059669, #047857)";
           let shadow = "0 2px 8px rgba(5, 150, 105, 0.4)";
           if (m.value === "LIVE") {
@@ -378,6 +381,13 @@ export default function TopBar({ onMenuClick }: Props) {
             <button
               key={m.value}
               onClick={() => {
+                if (isIndian) {
+                  if (m.value === "LIVE" && indianMode !== "LIVE") {
+                    if (!window.confirm("⚠️ Switch the INDIAN market to LIVE?\n\nOrders will route to your authenticated Indian broker and use real money. Your crypto mode is not changed.\n\nContinue?")) return;
+                  }
+                  setIndianMode(m.value as "PAPER" | "LIVE");
+                  return;
+                }
                 // Switching INTO live moves real money — make the user confirm.
                 if (m.value === "LIVE" && mode !== "LIVE") {
                   if (!window.confirm("⚠️ Switch to LIVE trading?\n\nLIVE mode places REAL orders and can move REAL money on your Binance account. Your balances below will show your actual Binance wallet.\n\nContinue?")) return;
