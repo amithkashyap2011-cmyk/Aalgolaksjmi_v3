@@ -43,6 +43,8 @@ export interface DomainMetrics {
   invested: { total: number; spot: number; futures: number };
   balances: { spot: number; futures: number };
   netPnL: { total: number; spot: number; futures: number };
+  /** Realized P&L of trades closed since midnight (optional: older servers omit it). */
+  todayRealized?: { total: number; spot: number; futures: number };
   currency: string;
   inrRate: number;
 }

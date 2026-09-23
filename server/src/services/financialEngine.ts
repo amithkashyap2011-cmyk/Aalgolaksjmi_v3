@@ -75,6 +75,7 @@ export interface DomainMetrics {
   invested: { total: number; spot: number; futures: number };
   balances: { spot: number; futures: number };
   netPnL: { total: number; spot: number; futures: number };
+  todayRealized: { total: number; spot: number; futures: number };
 }
 
 // ─── Core Calculation: computeDomainMetrics ──────────────────────────────────
@@ -188,18 +189,24 @@ export function computeDomainMetrics(inputs: DomainInputs): DomainMetrics {
   // ── Net Realized P&L (SPOT vs FUTURES split) ─────────────────────────────
   let netPnlSpot    = 0;
   let netPnlFutures = 0;
+  let todaySpot     = 0;
+  let todayFutures  = 0;
   closedTrades.forEach(t => {
     const acct = t.accountType || "FUTURES";
-    if (acct === "SPOT") netPnlSpot    += t.pnl ?? 0;
-    else                 netPnlFutures += t.pnl ?? 0;
+    const closedToday = !!t.closedAt && new Date(t.closedAt) >= startOfDay;
+    if (acct === "SPOT") { netPnlSpot    += t.pnl ?? 0; if (closedToday) todaySpot    += t.pnl ?? 0; }
+    else                 { netPnlFutures += t.pnl ?? 0; if (closedToday) todayFutures += t.pnl ?? 0; }
   });
 
   const netRealized    = netPnlSpot + netPnlFutures;
   const totalAllTimePnL = netRealized + openPnl;
 
   // ── Max Drawdown (peak-to-trough over closed trade equity curve) ──────────
+  // Baseline is the domain's whole capital (spot + futures), since closedTrades
+  // spans both. It used to be futures-only, so a spot-only account with $0 in
+  // futures started the curve at -realized and a small loss read as 100% DD.
   const lifetimeRealized = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const startCap = walletBalances.futures - lifetimeRealized;
+  const startCap = walletBalances.spot + walletBalances.futures - lifetimeRealized;
   let ddPeak = startCap;
   let ddRunning = startCap;
   let maxDrawdownPct = 0;
@@ -246,6 +253,13 @@ export function computeDomainMetrics(inputs: DomainInputs): DomainMetrics {
       total:   fix2(netRealized),
       spot:    fix2(netPnlSpot),
       futures: fix2(netPnlFutures),
+    },
+    // Realized P&L of trades closed since startOfDay, per account — lets the
+    // dashboard show a per-tab "Today" instead of lifetime realized.
+    todayRealized: {
+      total:   fix2(todaySpot + todayFutures),
+      spot:    fix2(todaySpot),
+      futures: fix2(todayFutures),
     },
   };
 }

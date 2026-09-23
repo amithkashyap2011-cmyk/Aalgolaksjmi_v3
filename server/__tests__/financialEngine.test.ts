@@ -342,3 +342,40 @@ describe("SENTINEL_REASONS filter (BUG-01 regression guard)", () => {
     expect(result.realizedWinRate).toBe(100); // 1/1 = 100%
   });
 });
+
+// ─── Regression 2026-09-23: spot-only LIVE account ───────────────────────────
+// Real LIVE book: DOGE +0.062 and PEPE +0.161 closed yesterday, PEPE -0.131
+// closed today; $3.37 in spot, $0 in futures. The dashboard showed Today +$0.09
+// (lifetime) and Max Drawdown 100% (futures-only baseline).
+
+describe("computeDomainMetrics — spot-only LIVE account", () => {
+  const closed = [
+    makeTrade({ accountType: "SPOT", pnl: 0.062, closedAt: new Date(YESTERDAY.getTime() + 1000) }),
+    makeTrade({ accountType: "SPOT", pnl: 0.161, closedAt: new Date(YESTERDAY.getTime() + 2000) }),
+    makeTrade({ accountType: "SPOT", pnl: -0.131, closedAt: new Date(TODAY.getTime() + 1000) }),
+  ];
+  const run = () => computeDomainMetrics({
+    closedTrades: closed,
+    openTrades: [],
+    allTrades: closed,
+    walletBalances: { spot: 3.37, futures: 0 },
+    openPnlByType: { spot: 0, futures: 0 },
+    investedByType: { spot: 0, futures: 0 },
+    notionalByType: { spot: 0, futures: 0 },
+    startOfDay: TODAY,
+  });
+
+  test("todayRealized counts only trades closed since midnight, per account", () => {
+    // PROOF: only the -0.131 PEPE exit closed today, and it is SPOT
+    const r = run();
+    expect(r.todayRealized).toEqual({ total: -0.13, spot: -0.13, futures: 0 });
+    expect(r.netPnL.total).toBe(0.09); // lifetime stays lifetime
+  });
+
+  test("drawdown is measured against spot + futures capital, not futures alone", () => {
+    // PROOF: startCap = 3.37 - 0.092 = 3.278; peak 3.501; trough 3.370
+    // dd = (3.501 - 3.370) / 3.501 = 3.74%  (futures-only baseline gave ~100%)
+    const r = run();
+    expect(r.maxDrawdown).toBeCloseTo(3.74, 1);
+  });
+});

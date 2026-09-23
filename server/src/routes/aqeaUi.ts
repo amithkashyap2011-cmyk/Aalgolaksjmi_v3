@@ -122,15 +122,18 @@ router.get("/dashboard", async (req, res) => {
       const winRate = domainClosedTrades.length > 0 ? closedWinRate : overallWinRate;
 
       // Net realized P&L (spot vs futures split)
-      let netPnlSpot = 0, netPnlFutures = 0;
+      let netPnlSpot = 0, netPnlFutures = 0, todaySpot = 0, todayFutures = 0;
       domainClosedTrades.forEach(t => {
-        if ((t.accountType || "FUTURES") === "SPOT") netPnlSpot += t.pnl || 0;
-        else netPnlFutures += t.pnl || 0;
+        const closedToday = !!t.closedAt && new Date(t.closedAt) >= startOfDay;
+        if ((t.accountType || "FUTURES") === "SPOT") { netPnlSpot += t.pnl || 0; if (closedToday) todaySpot += t.pnl || 0; }
+        else { netPnlFutures += t.pnl || 0; if (closedToday) todayFutures += t.pnl || 0; }
       });
 
-      // Drawdown
+      // Drawdown. Baseline is the domain's whole capital (spot + futures): it
+      // was futures-only, so a spot-only LIVE account with $0 futures started
+      // at -realized and one small loss read as a 100% drawdown.
       const lifetimeRealized = domainClosedTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-      const startCap = walletBalances.futures - lifetimeRealized;
+      const startCap = walletBalances.spot + walletBalances.futures - lifetimeRealized;
       let ddPeak = startCap, ddRunning = startCap, maxDrawdownPct = 0;
       [...domainClosedTrades]
         .sort((a, b) => new Date(a.closedAt || 0).getTime() - new Date(b.closedAt || 0).getTime())
@@ -172,6 +175,13 @@ router.get("/dashboard", async (req, res) => {
           total: parseFloat((netPnlSpot + netPnlFutures).toFixed(2)),
           spot: parseFloat(netPnlSpot.toFixed(2)),
           futures: parseFloat(netPnlFutures.toFixed(2)),
+        },
+        // Realized P&L of trades closed since midnight, per account, so the
+        // dashboard's per-tab "Today" isn't lifetime realized.
+        todayRealized: {
+          total: parseFloat((todaySpot + todayFutures).toFixed(2)),
+          spot: parseFloat(todaySpot.toFixed(2)),
+          futures: parseFloat(todayFutures.toFixed(2)),
         },
       };
     }

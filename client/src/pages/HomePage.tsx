@@ -332,6 +332,10 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   let terminalDailyPnl = cryptoD.dailyPnL;
   let terminalOpenPnl  = cryptoD.openPnL;
   let terminalRealized = netPnl.total;
+  // "Today" = realized from trades closed since midnight + live open P&L.
+  // It used lifetime realized (terminalRealized), so Today always equalled
+  // Overall Total — a loss closed today still showed yesterday's gains.
+  const todayRealized = cryptoD.todayRealized ?? { total: 0, spot: 0, futures: 0 };
 
   // Capital Invested = total deposited (money actually put in), not just
   // locked margin. invested.total is margin-in-open-positions only, which
@@ -384,20 +388,20 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     terminalRealized = netPnl.futures || 0;
     terminalOpenPnl = futOpenPnl;
     terminalEquity = (balances.futures || 0) + terminalInvested + terminalOpenPnl;
-    terminalDailyPnl = terminalRealized + terminalOpenPnl;
+    terminalDailyPnl = (todayRealized.futures || 0) + terminalOpenPnl;
   } else if (terminalTab === 'spot') {
     terminalInvested = (invested.spot || 0) || spotInvested;
     terminalRealized = netPnl.spot || 0;
     terminalOpenPnl = spotOpenPnl;
     terminalEquity = (balances.spot || 0) + spotHoldingsValue;
-    terminalDailyPnl = terminalRealized + terminalOpenPnl;
+    terminalDailyPnl = (todayRealized.spot || 0) + terminalOpenPnl;
   } else {
     // Total / All terminal
     terminalInvested = (invested.total || 0) || (spotInvested + (invested.futures || 0));
     terminalRealized = netPnl.total || 0;
     terminalOpenPnl = futOpenPnl + spotOpenPnl;
     terminalEquity = (balances.spot || 0) + spotHoldingsValue + (balances.futures || 0) + (invested.futures || 0) + futOpenPnl;
-    terminalDailyPnl = terminalRealized + terminalOpenPnl;
+    terminalDailyPnl = (todayRealized.total || 0) + terminalOpenPnl;
   }
 
   // Graceful fallback if balances/positions are still loading
