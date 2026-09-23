@@ -146,6 +146,10 @@ export default function ZerodhaKiteTerminal({
   // P&L & History Timeframe: daily, weekly, monthly, all
   const [historyTimeframe, setHistoryTimeframe] = useState<"daily" | "weekly" | "monthly" | "all">("daily");
   const [marketSession, setMarketSession] = useState<any>(null);
+  // Live scan rows keyed by symbol (price, change, AI signal). The watchlist
+  // below used to render DEFAULT_INDIAN_WATCHLIST's hardcoded prices and AI
+  // calls forever — e.g. NIFTY50 ₹24,530.20 "AI 89% BUY" regardless of market.
+  const [liveScan, setLiveScan] = useState<Record<string, any>>({});
 
   // Order Placement Modal State
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
@@ -344,6 +348,14 @@ export default function ZerodhaKiteTerminal({
             .then((res) => res.json())
             .then((data) => {
               if (data?.success) setAnalytics(data.analytics);
+            }),
+          fetch("/api/indian-market/scan?userId=guest-user")
+            .then((res) => res.json())
+            .then((data) => {
+              if (Array.isArray(data?.stocks)) {
+                setLiveScan(Object.fromEntries(data.stocks.map((r: any) => [r.symbol, r])));
+              }
+              if (data?.session) setMarketSession((prev: any) => prev ?? data.session);
             })
         );
       }
@@ -544,7 +556,27 @@ export default function ZerodhaKiteTerminal({
   };
 
   // Filter Watchlist Stocks
-  const filteredStocks = DEFAULT_INDIAN_WATCHLIST.filter((s) => {
+  const watchlist: StockItem[] = useMemo(() => DEFAULT_INDIAN_WATCHLIST.map((s) => {
+    const live = liveScan[s.symbol];
+    if (!live) {
+      // No live source (FINNIFTY, the sample option contracts): keep the row
+      // but never show a made-up AI call for it.
+      return { ...s, aiSignal: undefined, aiConfidence: undefined };
+    }
+    const sig = live.aiSignal === "LONG" ? "BUY" : live.aiSignal === "SHORT" ? "SELL" : "HOLD";
+    return {
+      ...s,
+      price: Number(live.price) || s.price,
+      change: Number(live.change) || 0,
+      changePct: Number(live.changePct) || 0,
+      lotSize: Number(live.lotSize) || s.lotSize,
+      aiSignal: sig,
+      aiConfidence: Number(live.aiConfidence) || undefined,
+      aiRegime: live.regime || s.aiRegime,
+    };
+  }), [liveScan]);
+
+  const filteredStocks = watchlist.filter((s) => {
     const matchesSearch = s.symbol.toLowerCase().includes(searchQuery.toLowerCase()) || s.name.toLowerCase().includes(searchQuery.toLowerCase());
     if (!matchesSearch) return false;
     if (categoryFilter === "INDICES") return s.category === "INDEX";
@@ -568,9 +600,9 @@ export default function ZerodhaKiteTerminal({
   const currentRiskReward = totalMaxRiskINR > 0 ? (totalTargetProfitINR / totalMaxRiskINR).toFixed(2) : "2.0";
 
   // Spot Index Prices for Kite Header
-  const niftySpot = DEFAULT_INDIAN_WATCHLIST.find((s) => s.symbol === "NIFTY50") || { price: 24530.20, change: 158.40, changePct: 0.65 };
-  const bankNiftySpot = DEFAULT_INDIAN_WATCHLIST.find((s) => s.symbol === "BANKNIFTY") || { price: 52140.50, change: 425.10, changePct: 0.82 };
-  const sensexSpot = DEFAULT_INDIAN_WATCHLIST.find((s) => s.symbol === "SENSEX") || { price: 80519.30, change: 432.50, changePct: 0.54 };
+  const niftySpot = watchlist.find((s) => s.symbol === "NIFTY50") || { price: 24530.20, change: 158.40, changePct: 0.65 };
+  const bankNiftySpot = watchlist.find((s) => s.symbol === "BANKNIFTY") || { price: 52140.50, change: 425.10, changePct: 0.82 };
+  const sensexSpot = watchlist.find((s) => s.symbol === "SENSEX") || { price: 80519.30, change: 432.50, changePct: 0.54 };
 
   // Holdings Summary
   const totalInvested = holdings.reduce((sum, h) => sum + h.invested, 0);
@@ -1014,21 +1046,29 @@ export default function ZerodhaKiteTerminal({
                       >
                         {stock.exchange}
                       </span>
-                      {stock.aiConfidence && (
-                        <span
-                          style={{
-                            fontSize: 9,
-                            fontWeight: 800,
-                            padding: "1px 5px",
-                            borderRadius: 3,
-                            background: stock.aiSignal === "BUY" ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)",
-                            color: stock.aiSignal === "BUY" ? "#34d399" : "#f87171",
-                            border: `1px solid ${stock.aiSignal === "BUY" ? "rgba(16,185,129,0.4)" : "rgba(239,68,68,0.4)"}`,
-                          }}
-                        >
-                          AI {stock.aiConfidence}% {stock.aiSignal}
-                        </span>
-                      )}
+                      {stock.aiConfidence && (() => {
+                        // After close the signal was computed on frozen prices:
+                        // show CLOSED with the last call as a tooltip.
+                        const closed = !!marketSession && !marketSession.isOpen;
+                        const tone = closed ? "100,116,139" : stock.aiSignal === "BUY" ? "16,185,129" : stock.aiSignal === "SELL" ? "239,68,68" : "245,158,11";
+                        const fg = closed ? "#94a3b8" : stock.aiSignal === "BUY" ? "#34d399" : stock.aiSignal === "SELL" ? "#f87171" : "#fbbf24";
+                        return (
+                          <span
+                            title={closed ? `Last AI signal at close: ${stock.aiConfidence}% ${stock.aiSignal}` : stock.aiRegime}
+                            style={{
+                              fontSize: 9,
+                              fontWeight: 800,
+                              padding: "1px 5px",
+                              borderRadius: 3,
+                              background: `rgba(${tone},0.2)`,
+                              color: fg,
+                              border: `1px solid rgba(${tone},0.4)`,
+                            }}
+                          >
+                            {closed ? "CLOSED" : `AI ${stock.aiConfidence}% ${stock.aiSignal}`}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
                       {stock.name} • {stock.lotSize > 1 ? `Lot: ${stock.lotSize}` : "1 Share"}

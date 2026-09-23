@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { TrendingUp, TrendingDown, CircleDot, Coins, Landmark } from 'lucide-react';
 import clsx from 'clsx';
 import IntelligenceDrawer from './IntelligenceDrawer';
+import { checkIsIndianMarketOpen } from '../../utils/indianMarketHours';
 
 const getCoinIcon = (symbol: string) => {
   const iconMap: Record<string, string> = {
@@ -96,8 +97,12 @@ const MarketRibbon: React.FC = () => {
             <div className="animate-marquee d-flex align-items-center whitespace-nowrap">
               
               {/* 🇮🇳 INDIAN MARKET TICKERS */}
-              {isIndian ? (
-                [...indianPulse, ...indianPulse].map((item, idx) => {
+              {isIndian ? (() => {
+                // After NSE close these signals are computed on frozen prices;
+                // show CLOSED and keep the last signal as a tooltip.
+                const nse = checkIsIndianMarketOpen();
+                const nseClosed = !nse.isOpen && !nse.isPreMarket;
+                return [...indianPulse, ...indianPulse].map((item, idx) => {
                   const isPositive = item.changePct >= 0;
                   const isLong = item.decision === "LONG";
                   const isShort = item.decision === "SHORT";
@@ -124,13 +129,19 @@ const MarketRibbon: React.FC = () => {
                       </span>
 
                       {/* Action Badge */}
-                      <span className={clsx("market-ribbon-badge d-flex align-items-center gap-1 text-[9.5px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider", isLong ? "signal-long" : isShort ? "signal-short" : "signal-hold")}>
-                        {actionText} {item.score}
-                      </span>
+                      {nseClosed ? (
+                        <span title={`Last signal at close: ${actionText} ${item.score}`} className="market-ribbon-badge d-flex align-items-center gap-1 text-[9.5px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider signal-hold">
+                          CLOSED
+                        </span>
+                      ) : (
+                        <span className={clsx("market-ribbon-badge d-flex align-items-center gap-1 text-[9.5px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider", isLong ? "signal-long" : isShort ? "signal-short" : "signal-hold")}>
+                          {actionText} {item.score}
+                        </span>
+                      )}
                     </div>
                   );
-                })
-              ) : (
+                });
+              })() : (
                 /* ₿ CRYPTO MARKET TICKERS */
                 [...headerData, ...headerData].map((item, idx) => {
                   const priceUsdt = item.price || 0;
