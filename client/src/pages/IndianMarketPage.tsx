@@ -195,7 +195,9 @@ export default function IndianMarketPage() {
 
   // Core Controls (Auto-Trade enabled by default)
   const [autoTradeEnabled, setAutoTradeEnabled] = useState(true);
-  const [executionMode, setExecutionMode] = useState<"PAPER" | "LIVE">("PAPER");
+  // Shared with the TopBar toggle and persisted; independent of the crypto mode.
+  const executionMode = useAppStore((s) => s.indianMode);
+  const setExecutionMode = useAppStore((s) => s.setIndianMode);
   const [panicStopActive, setPanicStopActive] = useState(false);
   const [dailyRiskLock, setDailyRiskLock] = useState(false);
 
@@ -301,7 +303,7 @@ export default function IndianMarketPage() {
 
       const activeTasks: Promise<any>[] = [
         // 0. Account Margin & Funds
-        safeFetch("/api/indian-market/funds?userId=guest-user").then((json) => {
+        safeFetch(`/api/indian-market/funds?userId=guest-user&mode=${executionMode}`).then((json) => {
           if (json?.success) {
             setFunds(json);
             if (typeof json.autoTradeEnabled === "boolean") {
@@ -388,7 +390,7 @@ export default function IndianMarketPage() {
     } catch (err: any) {
       console.warn("Failed fetching Indian Market state:", err);
     }
-  }, [selectedUnderlying, historyTimeframe]);
+  }, [selectedUnderlying, historyTimeframe, executionMode]);
 
   useEffect(() => {
     let tickCount = 0;
@@ -896,7 +898,12 @@ export default function IndianMarketPage() {
 
               {/* 4. Total All-Time Profit */}
               {(() => {
-                const totP = funds?.realizedPnlINR ?? 0;
+                // Net of charges, like Today's P&L. It showed the gross ledger
+                // figure while Today was net, so the tiles didn't compare.
+                const grossP = funds?.realizedPnlINR ?? 0;
+                const totP = funds?.cumulativeRealizedNetPnlINR ?? grossP;
+                const chargesP = grossP - totP;
+                const settledCount = funds?.closedTradesCount ?? closedTrades.length;
                 const isPos = totP >= 0;
                 return (
                   <div style={{ background: "linear-gradient(145deg, #0f172a 0%, #0a1120 100%)", border: `1px solid ${isPos ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"}`, borderRadius: 14, padding: "16px 18px", boxShadow: "0 4px 20px rgba(0,0,0,0.35)", position: "relative", overflow: "hidden" }}>
@@ -908,7 +915,7 @@ export default function IndianMarketPage() {
                         <span style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Realized Profit</span>
                       </div>
                       <span style={{ fontSize: 10, fontWeight: 800, color: "#38bdf8", background: "rgba(56, 189, 248, 0.12)", padding: "2px 8px", borderRadius: 6 }}>
-                        {closedTrades.length} Trades Settled
+                        {settledCount} Trades Settled
                       </span>
                     </div>
                     <div style={{ fontSize: 24, fontWeight: 900, color: isPos ? "#10b981" : "#ef4444", fontFamily: "monospace", marginTop: 10, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
@@ -916,7 +923,7 @@ export default function IndianMarketPage() {
                       <span style={{ fontSize: 13, opacity: 0.85, fontWeight: 700 }}>({isPos ? "+" : ""}${((totP / inrFxRate)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
                     </div>
                     <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
-                      Cumulative Settled: ₹{(funds?.cumulativeRealizedNetPnlINR ?? 0).toLocaleString("en-IN")} (${(((funds?.cumulativeRealizedNetPnlINR ?? 0) / inrFxRate)).toFixed(2)})
+                      Net of charges · Gross ₹{grossP.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} − Charges ₹{chargesP.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
                   </div>
                 );

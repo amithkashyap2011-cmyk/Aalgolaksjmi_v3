@@ -384,7 +384,8 @@ export default function AIFooterTradeBar() {
   /* Store */
   const activeMarket = useAppStore((s) => s.activeMarket);
   const accountType = useAppStore((s) => s.accountType);
-  const mode = useAppStore((s) => s.mode) as "PAPER" | "LIVE";
+  const cryptoMode = useAppStore((s) => s.mode) as "PAPER" | "LIVE";
+  const indianMode = useAppStore((s) => s.indianMode);
   const setSymbol = useAppStore((s) => s.setSymbol);
   const selectedSymbol = useAppStore((s) => s.selectedSymbol);
   const allowedSymbols = useAppStore((s) => s.allowedSymbols);
@@ -487,6 +488,15 @@ export default function AIFooterTradeBar() {
       applyPrediction(cached.pred);
       return;
     }
+    // After NSE close the inputs are frozen, so re-scanning only repeats the
+    // last signal; keep the cached one until the next session.
+    if (!forceRefresh && cached && isTargetIndian) {
+      const status = checkIsIndianMarketOpen();
+      if (!status.isOpen && !status.isPreMarket) {
+        applyPrediction(cached.pred);
+        return;
+      }
+    }
 
     setIsLoadingPrediction(true);
     try {
@@ -585,6 +595,11 @@ export default function AIFooterTradeBar() {
     activeSymbol.includes("CE") ||
     activeSymbol.includes("PE") ||
     !activeSymbol.endsWith("USDT");
+
+  // Indian orders use the Indian market's own PAPER/LIVE choice — sending the
+  // crypto mode here routed Indian orders to the broker as LIVE whenever
+  // crypto was LIVE.
+  const mode = isIndianAsset ? indianMode : cryptoMode;
 
   const indianStatus = isIndianAsset ? checkIsIndianMarketOpen() : null;
   const mktClosed = !!(indianStatus && !indianStatus.isOpen && !indianStatus.isPreMarket);
@@ -850,23 +865,39 @@ export default function AIFooterTradeBar() {
                     </button>
                   </div>
 
-                  {/* Direction pill */}
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: `${dc}14`, color: dc, border: `1px solid ${dc}38` }}>
-                    {isLoadingPrediction ? (
-                      <RotateCw size={φ.ic.sm - 2} className="animate-spin" />
-                    ) : prediction.direction === "LONG" ? (
-                      <TrendingUp size={φ.ic.sm - 2} />
-                    ) : prediction.direction === "SHORT" ? (
-                      <TrendingDown size={φ.ic.sm - 2} />
-                    ) : (
-                      <Minus size={φ.ic.sm - 2} />
-                    )}
-                    {isLoadingPrediction ? "EVALUATING" : prediction.direction}
-                  </span>
-                  {/* Confidence — 13px secondary (φ.fs.sm) */}
-                  <span style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }} className="hidden sm:inline">
-                    <strong style={{ color: "#2563eb" }}>{prediction.confidence}%</strong>
-                  </span>
+                  {/* Direction pill. After NSE close an Indian signal is computed on
+                      frozen closing prices, so it's shown as the last signal, not
+                      as a live call. */}
+                  {mktClosed && isIndianAsset ? (
+                    <>
+                      <span title={indianStatus?.message} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: "rgba(100,116,139,.12)", color: "#64748b", border: "1px solid rgba(100,116,139,.35)" }}>
+                        <Minus size={φ.ic.sm - 2} />
+                        MARKET CLOSED
+                      </span>
+                      <span style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }} className="hidden sm:inline">
+                        Last: <strong style={{ color: dc }}>{prediction.direction}</strong> {prediction.confidence}% at close
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: `${dc}14`, color: dc, border: `1px solid ${dc}38` }}>
+                        {isLoadingPrediction ? (
+                          <RotateCw size={φ.ic.sm - 2} className="animate-spin" />
+                        ) : prediction.direction === "LONG" ? (
+                          <TrendingUp size={φ.ic.sm - 2} />
+                        ) : prediction.direction === "SHORT" ? (
+                          <TrendingDown size={φ.ic.sm - 2} />
+                        ) : (
+                          <Minus size={φ.ic.sm - 2} />
+                        )}
+                        {isLoadingPrediction ? "EVALUATING" : prediction.direction}
+                      </span>
+                      {/* Confidence — 13px secondary (φ.fs.sm) */}
+                      <span style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }} className="hidden sm:inline">
+                        <strong style={{ color: "#2563eb" }}>{prediction.confidence}%</strong>
+                      </span>
+                    </>
+                  )}
 
                   {/* Auto-cycle indicator badge / button */}
                   <button

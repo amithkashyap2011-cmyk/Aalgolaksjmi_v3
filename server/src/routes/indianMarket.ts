@@ -1048,7 +1048,12 @@ router.get("/history", async (req, res) => {
       timeFilter = { closedAt: { $gte: new Date(now - 30 * 86400000) } };
     }
 
+    // Scoped to the requesting user, like /funds. It had no user filter, so
+    // it returned every account's Indian trades — "69 Trades Settled" counted a
+    // stray guest-account trade that the ledger totals (correctly) excluded.
+    const userId = resolveIndianUserId((req.query.userId as string) || (req as any).userId);
     const closedTrades = await Trade.find({
+      userId,
       status: "CLOSED",
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
       ...timeFilter,
