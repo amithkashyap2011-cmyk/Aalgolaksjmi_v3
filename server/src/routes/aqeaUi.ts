@@ -177,8 +177,22 @@ router.get("/dashboard", async (req, res) => {
     }
 
     // ── 1. Fetch ALL trades for this user (both domains) ──
-    const allTrades = await Trade.find({ userId: objectId, mode }).lean();
-    const allOpenTrades = await Trade.find({ userId: objectId, status: "OPEN", mode }).lean();
+    let allTrades = await Trade.find({ userId: objectId, mode }).lean();
+    let allOpenTrades = await Trade.find({ userId: objectId, status: "OPEN", mode }).lean();
+
+    // If in LIVE mode but user has no LIVE Indian trades, pull Indian PAPER trades
+    // so Indian metrics (settled trades, PnL, win rate) match the Indian wallet balance!
+    const isIndianTrade = (t: any) => INDIAN_ACCOUNT_TYPES.includes(t.accountType);
+    const hasLiveIndian = allTrades.some(isIndianTrade) || allOpenTrades.some(isIndianTrade);
+    if (mode === "LIVE" && !hasLiveIndian) {
+      const [indianPaperTrades, indianPaperOpen] = await Promise.all([
+        Trade.find({ userId: objectId, mode: "PAPER", accountType: { $in: INDIAN_ACCOUNT_TYPES } }).lean(),
+        Trade.find({ userId: objectId, status: "OPEN", mode: "PAPER", accountType: { $in: INDIAN_ACCOUNT_TYPES } }).lean(),
+      ]);
+      allTrades = [...allTrades, ...indianPaperTrades];
+      allOpenTrades = [...allOpenTrades, ...indianPaperOpen];
+    }
+
     await enrichOpenTrades(allOpenTrades);
 
     // ── 2. Split by domain ──
@@ -204,9 +218,10 @@ router.get("/dashboard", async (req, res) => {
     let cryptoSpotBalance: number;
     if (mode === "LIVE") {
       const [futLive, spotLive] = await Promise.all([
-        computeAccountBalance(userId, "LIVE", "FUTURES", inrRate).catch(() => null),
-        computeAccountBalance(userId, "LIVE", "SPOT", inrRate).catch(() => null),
+        computeAccountBalance(userId, "LIVE", "FUTURES", inrRate).catch((err) => { console.error("[aqea-ui] futLive err:", err.message); return null; }),
+        computeAccountBalance(userId, "LIVE", "SPOT", inrRate).catch((err) => { console.error("[aqea-ui] spotLive err:", err.message); return null; }),
       ]);
+      console.log("[DEBUG_LIVE_BALANCE] userId:", userId, "futLive:", futLive, "spotLive:", spotLive);
       cryptoFuturesBalance = futLive?.totalBalance ?? futLive?.usdt ?? 0;
       cryptoSpotBalance = spotLive?.totalBalance ?? spotLive?.usdt ?? 0;
     } else {

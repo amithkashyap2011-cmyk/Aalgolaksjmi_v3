@@ -117,7 +117,30 @@ export default function Positions() {
     try {
       await api.closePosition(tradeId, mode);
       await load();
-    } catch (e) { console.error(e); }
+    } catch (e: any) {
+      console.error(e);
+      const errMsg = e?.message || String(e);
+      const isLiveFailure = errMsg.includes("Binance LIVE Close Error") || errMsg.includes("-2015") || errMsg.includes("401");
+      if (isLiveFailure) {
+        const confirmForce = window.confirm(
+          `${errMsg}\n\n` +
+          `Would you like to Force Close (mark as CLOSED locally)?\n\n` +
+          `• Click OK if you have already closed or sold this position directly on Binance.\n` +
+          `• Machine Public IP: 14.98.201.25 (whitelist this in Binance API Management if you want live orders).`
+        );
+        if (confirmForce) {
+          try {
+            await api.closePosition(tradeId, mode, true);
+            await load();
+            return;
+          } catch (forceErr: any) {
+            alert("Force close failed: " + (forceErr?.message || forceErr));
+          }
+        }
+      } else {
+        alert("Failed to close position: " + errMsg);
+      }
+    }
     finally { setClosingId(null); }
   };
 

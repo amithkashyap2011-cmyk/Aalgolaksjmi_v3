@@ -261,15 +261,37 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     }
   };
 
-  const handleClosePosition = async (tradeId: string) => {
+  const handleClosePosition = async (tradeId: string, force = false) => {
     setClosingId(tradeId);
     try {
       const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
-      await api.closePosition(tradeId, mode);
-      addAlert("GREEN", "✓ Position closed at market");
+      await api.closePosition(tradeId, mode, force);
+      addAlert("GREEN", force ? "✓ Position marked as closed locally" : "✓ Position closed at market");
       await refresh();
     } catch (e: any) {
-      alert("Close position failed: " + (e?.message || e));
+      const errMsg = e?.message || String(e);
+      const isLiveFailure = errMsg.includes("Binance LIVE Close Error") || errMsg.includes("-2015") || errMsg.includes("401");
+      if (isLiveFailure && !force) {
+        const confirmForce = window.confirm(
+          `${errMsg}\n\n` +
+          `Would you like to Force Close (mark as CLOSED locally)?\n\n` +
+          `• Click OK if you have already closed or sold this position directly on Binance.\n` +
+          `• Machine Public IP: 14.98.201.25 (whitelist this in Binance API Management if you want live orders).`
+        );
+        if (confirmForce) {
+          try {
+            const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
+            await api.closePosition(tradeId, mode, true);
+            addAlert("GREEN", "✓ Position marked as closed locally (Force Closed)");
+            await refresh();
+            return;
+          } catch (forceErr: any) {
+            alert("Force close failed: " + (forceErr?.message || forceErr));
+          }
+        }
+      } else {
+        alert("Close position failed: " + errMsg);
+      }
     } finally {
       setClosingId(null);
     }
@@ -411,6 +433,15 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     return `$${val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
+  const formatCoinPrice = (price: number) => {
+    if (price == null || isNaN(price) || price === 0) return "0.00";
+    if (price >= 100) return price.toFixed(2);
+    if (price >= 1) return price.toFixed(4);
+    if (price >= 0.01) return price.toFixed(5);
+    if (price >= 0.0001) return price.toFixed(6);
+    return price.toFixed(8);
+  };
+
   // Filter positions and trades based on active terminal
   const displayPositions = positions.filter((p) => {
     if (terminalTab === 'futures') return (p.accountType ?? "FUTURES") === "FUTURES";
@@ -425,10 +456,10 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   });
 
   return (
-    <div style={{ background: BG, minHeight: "100%", padding: "16px 16px 64px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
+    <div className="crypto-terminal-page" style={{ background: BG, minHeight: "100%", padding: "16px 16px 64px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
 
       {/* 👑 HEADER: DISTINCT BRANDING PER TERMINAL */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+      <div className="crypto-terminal-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{
             width: 40, height: 40,
@@ -468,7 +499,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div className="crypto-terminal-actions" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={() => setShowValues(!showValues)}
             style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: `1px solid ${BORD}`, background: CARD, color: "var(--ds-text-faint)", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
@@ -525,7 +556,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       </div>
 
       {/* 🔀 CRYPTO TERMINAL MODE TABS */}
-      <div style={{
+      <div className="crypto-terminal-tabs" style={{
         display: "flex", gap: 0, borderRadius: 12, overflow: "hidden",
         border: `1px solid ${BORD}`, background: CARD, alignItems: "center"
       }}>
@@ -626,6 +657,24 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 <span style={{ color: "#94a3b8", fontSize: 10 }}>· Margin in use: ${terminalInvested.toFixed(2)}</span>
               )}
             </div>
+            {mode === "LIVE" && terminalEquity === 0 && (
+              <div style={{
+                marginTop: 8,
+                padding: "6px 12px",
+                borderRadius: 8,
+                background: "rgba(239, 68, 68, 0.12)",
+                border: "1px solid rgba(239, 68, 68, 0.28)",
+                color: "#fca5a5",
+                fontSize: 11,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                maxWidth: "fit-content"
+              }}>
+                <span style={{ fontWeight: 800 }}>⚠️ Live Binance IP Restricted:</span>
+                <span>Your network IP changes dynamically (currently <strong>157.35.8.92</strong>). In Binance API Management, select <strong>"Unrestricted"</strong> to prevent IP rotation blocks, or switch to <strong>PAPER SIMULATOR</strong>.</span>
+              </div>
+            )}
           </div>
 
           {/* Quick PnL Badges Row */}
@@ -695,7 +744,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
         </div>
 
         {/* Balance Allocation Strip */}
-        <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "12px 14px", border: "1px solid rgba(255,255,255,0.06)" }}>
+        <div className="crypto-balance-allocation" style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "12px 14px", border: "1px solid rgba(255,255,255,0.06)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, marginBottom: 6 }}>
             <span style={{ color: "#38bdf8", display: "flex", alignItems: "center", gap: 6 }}>
               <span>SPOT ACCOUNT:</span>
@@ -1148,7 +1197,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       <AILearningProgressPanel />
 
       {/* Main Grid: Chart + Intelligence Sidebar */}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 16 }} className="chart-grid">
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 16 }} className="chart-grid crypto-terminal-chart-grid">
         <div style={{ background: CARD, border: `1px solid ${BORD}`, borderRadius: 12, overflow: "hidden" }}>
           <Suspense fallback={<div style={{ height: 420, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 12 }}>Loading Live Market Chart...</div>}>
             <KlineChart symbol={symbol} interval="60" height={420} />
@@ -1246,7 +1295,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                     const tradeId = p.id || p.tradeId || p._id || `trade-${i}`;
                     // AI dynamic SL: use stored value if present, else 1.5×ATR (≈2% below entry for spot)
                     const storedSL = parseFloat(p.stopLoss ?? p.sl ?? p.stop_loss ?? 0);
-                    const aiSL = storedSL > 0 ? storedSL : parseFloat((entry * 0.97).toFixed(entry > 100 ? 2 : 4));
+                    const aiSL = storedSL > 0 ? storedSL : (entry * 0.97);
                     const slSource = storedSL > 0 ? "📌" : "🤖";
                     const slBreached = mark <= aiSL;
 
@@ -1259,14 +1308,14 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                           </span>
                         </td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700, color: "#f8fafc" }}>{qty}</td>
-                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${entry.toFixed(2)}</td>
-                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${mark.toFixed(2)}</td>
+                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${formatCoinPrice(entry)}</td>
+                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${formatCoinPrice(mark)}</td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700, color: "#38bdf8" }}>${notional.toFixed(2)}</td>
                         {/* AI Stop-Loss column */}
                         <td style={{ padding: "10px 14px" }}>
                           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                             <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 12, color: slBreached ? "#ef4444" : "#fbbf24" }}>
-                              ${aiSL.toFixed(entry > 100 ? 2 : 4)}
+                              ${formatCoinPrice(aiSL)}
                             </span>
                             <span style={{ fontSize: 8, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: slBreached ? "rgba(239,68,68,0.18)" : "rgba(16,185,129,0.15)", color: slBreached ? "#ef4444" : "#34d399", width: "fit-content" }}>
                               {slSource} {slBreached ? "AT RISK" : "SAFE"}
@@ -1377,8 +1426,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                     const aiSL = storedSL > 0
                       ? storedSL
                       : isLong
-                        ? parseFloat((entry * (1 - atrPct)).toFixed(entry > 100 ? 2 : 4))
-                        : parseFloat((entry * (1 + atrPct)).toFixed(entry > 100 ? 2 : 4));
+                        ? (entry * (1 - atrPct))
+                        : (entry * (1 + atrPct));
                     const slSource = storedSL > 0 ? "📌" : "🤖 AI";
                     const slBreached = isLong ? mark <= aiSL : mark >= aiSL;
 
@@ -1395,13 +1444,13 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                         </td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700, color: "#fbbf24" }}>{lev}×</td>
                         <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>{qty}</td>
-                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${entry.toFixed(2)}</td>
-                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${mark.toFixed(2)}</td>
+                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${formatCoinPrice(entry)}</td>
+                        <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${formatCoinPrice(mark)}</td>
                         {/* AI Stop-Loss column */}
                         <td style={{ padding: "10px 14px" }}>
                           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                             <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 12, color: slBreached ? "#ef4444" : "#fbbf24" }}>
-                              ${aiSL.toFixed(entry > 100 ? 2 : 4)}
+                              ${formatCoinPrice(aiSL)}
                             </span>
                             <span style={{ fontSize: 8, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: slBreached ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.15)", color: slBreached ? "#ef4444" : "#34d399", width: "fit-content" }}>
                               {slSource} {slBreached ? "⚠ AT RISK" : "SAFE"}
@@ -1492,10 +1541,10 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                   const aiSLAll = storedSLAll > 0
                     ? storedSLAll
                     : isLongAll
-                      ? parseFloat((entry * (1 - atrPctAll)).toFixed(entry > 100 ? 2 : 4))
-                      : parseFloat((entry * (1 + atrPctAll)).toFixed(entry > 100 ? 2 : 4));
+                      ? (entry * (1 - atrPctAll))
+                      : (entry * (1 + atrPctAll));
                   const slBreachedAll = isLongAll ? mark <= aiSLAll : mark >= aiSLAll;
-                  const slSourceAll = storedSLAll > 0 ? "📌" : "🤖";
+                  const slSourceAll = storedSLAll > 0 ? "📌" : "🤖 AI";
 
                   return (
                     <tr key={i} style={{ borderBottom: `1px solid ${BORD}` }}>
@@ -1511,13 +1560,13 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                         </span>
                       </td>
                       <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>{qty}</td>
-                      <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${entry.toFixed(2)}</td>
-                      <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${mark.toFixed(2)}</td>
+                      <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${formatCoinPrice(entry)}</td>
+                      <td style={{ padding: "10px 14px", fontFamily: "monospace" }}>${formatCoinPrice(mark)}</td>
                       {/* AI Stop-Loss column */}
                       <td style={{ padding: "10px 14px" }}>
                         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                           <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 12, color: slBreachedAll ? "#ef4444" : "#fbbf24" }}>
-                            ${aiSLAll.toFixed(entry > 100 ? 2 : 4)}
+                            ${formatCoinPrice(aiSLAll)}
                           </span>
                           <span style={{ fontSize: 8, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: slBreachedAll ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.15)", color: slBreachedAll ? "#ef4444" : "#34d399", width: "fit-content" }}>
                             {slSourceAll} {slBreachedAll ? "⚠ AT RISK" : "SAFE"}

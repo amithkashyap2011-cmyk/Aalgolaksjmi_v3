@@ -412,9 +412,13 @@ export async function setFuturesLeverage(apiKey: string, apiSecret: string, symb
 // below let a caller ask Binance directly whether a given ID executed.
 // This doesn't build a full automatic reconciliation loop (deciding what
 // to do about an orphaned exchange-side position is a product decision,
-// not a mechanical fix) — it provides the primitive that loop would need.
 export function genClientOrderId(prefix: string = "aalgo"): string {
-  return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
+  // Binance requires newClientOrderId to match ^[a-zA-Z0-9-_]{1,36}$ (max 36 chars)
+  const cleanPrefix = prefix.replace(/[^a-zA-Z0-9-_]/g, "").slice(0, 10) || "aalgo";
+  const ts = Date.now().toString(); // 13 chars
+  const rand = crypto.randomBytes(4).toString("hex"); // 8 chars
+  const candidate = `${cleanPrefix}_${ts}_${rand}`;
+  return candidate.slice(0, 36);
 }
 
 export async function placeFuturesOrder(
@@ -456,7 +460,9 @@ export async function placeFuturesOrder(
     side: params.side,
     type: params.type,
     quantity: finalQuantity,
-    newClientOrderId: params.clientOrderId ?? genClientOrderId("aalgofut"),
+    newClientOrderId: params.clientOrderId
+      ? params.clientOrderId.replace(/[^a-zA-Z0-9-_]/g, "").slice(0, 36)
+      : genClientOrderId("aalgofut"),
   };
   if (params.reduceOnly) body.reduceOnly = "true";
   return signedFuturesPost<any>("/fapi/v1/order", apiKey, apiSecret, body);
@@ -1041,7 +1047,9 @@ export async function placeOrder(
     side: params.side,
     type: params.type,
     quantity: params.quantity,
-    newClientOrderId: params.clientOrderId ?? genClientOrderId("aalgospot"),
+    newClientOrderId: params.clientOrderId
+      ? params.clientOrderId.replace(/[^a-zA-Z0-9-_]/g, "").slice(0, 36)
+      : genClientOrderId("aalgospot"),
   };
   if (params.type === "LIMIT") {
     body.price = params.price!;

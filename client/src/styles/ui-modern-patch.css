@@ -218,3 +218,26 @@ button,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Crypto terminal: compact controls without allowing any page-level overflow. */
+@media (max-width: 639px) {
+  .crypto-terminal-page { padding: 12px 12px 112px !important; overflow-x: clip; }
+  .crypto-terminal-header > div:first-child { width: 100%; min-width: 0; }
+  .crypto-terminal-header > div:first-child > div:last-child { min-width: 0; }
+  .crypto-terminal-header > div:first-child span:first-child { overflow-wrap: anywhere; }
+  .crypto-terminal-actions { width: 100%; display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .crypto-terminal-actions button { min-width: 0 !important; justify-content: center; padding-inline: 8px !important; }
+  .crypto-terminal-tabs { overflow-x: auto !important; scrollbar-width: none; }
+  .crypto-terminal-tabs button { flex: 0 0 132px !important; min-width: 132px !important; padding: 9px 8px !important; font-size: 10px !important; }
+  .crypto-balance-allocation > div:first-child { flex-wrap: wrap; gap: 8px; }
+  .crypto-balance-allocation > div:first-child > span { min-width: 0; flex-wrap: wrap; }
+  .crypto-terminal-chart-grid { min-width: 0; }
+  .crypto-terminal-chart-grid .highcharts-container,
+  .crypto-terminal-chart-grid .highcharts-root { max-width: 100% !important; }
+  .ai-learning-panel { padding: 14px !important; }
+  .ai-learning-model-tabs { scrollbar-width: none; }
+  .ai-learning-model-tabs button { min-width: max-content !important; }
+  .aqea-footer-main { padding-inline: 8px !important; gap: 6px !important; overflow-x: auto; scrollbar-width: none; }
+  .aqea-footer-main .aqea-footer-left { flex-shrink: 0; }
+  .aqea-footer-main .aqea-footer-right { margin-left: 0 !important; flex-shrink: 0; }
+}

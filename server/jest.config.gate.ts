@@ -46,6 +46,8 @@ const config: Config = {
   ],
   collectCoverage: false,
   verbose: true,
+  // Keep the production gate independent of host Watchman permissions.
+  watchman: false,
   testTimeout: 30000,
 };
 

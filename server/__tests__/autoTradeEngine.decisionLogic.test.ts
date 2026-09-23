@@ -7,6 +7,15 @@
  * every input is plain data.
  */
 import { evaluateLongEntry, evaluateShortEntry, type EntryEvaluationInput } from "../src/services/autoTradeEngine.decisionLogic";
+import { UnifiedSizingEngine } from "../src/services/aqea/unifiedSizingEngine";
+
+describe("UnifiedSizingEngine loss-streak protection", () => {
+  test("never turns a non-positive Kelly edge into a minimum-risk trade", () => {
+    expect(UnifiedSizingEngine.effectiveRiskFromKelly(0)).toBe(0);
+    expect(UnifiedSizingEngine.effectiveRiskFromKelly(-0.1)).toBe(0);
+    expect(UnifiedSizingEngine.effectiveRiskFromKelly(0.02)).toBeGreaterThan(0);
+  });
+});
 
 function baseInput(overrides: Partial<EntryEvaluationInput> = {}): EntryEvaluationInput {
   return {
@@ -53,22 +62,14 @@ describe.each([
     if (!result.ok && !result.silent) expect(result.reason).toContain("Invalid size or leverage");
   });
 
-  // `riskProfile.positionSize || aqeaDecision.positionSize` (and the same
-  // pattern for leverage) uses JS's `||` fallback — 0 and NaN are FALSY,
-  // so they don't get rejected here at all; they silently fall through to
-  // aqeaDecision's value instead. Discovered while writing tests for this
-  // extraction (an incorrect test assumption caught a real, previously
-  // undocumented quirk in the original logic, which this extraction
-  // faithfully preserved rather than "fixed" — no production behavior
-  // change without evidence it's a genuine defect, per this mission's rule).
-  test("riskProfile.positionSize=0 or NaN falls through to aqeaDecision's value rather than being rejected (JS `||` treats 0/NaN as falsy)", () => {
+  test("riskProfile.positionSize=0 or NaN is an explicit rejection, never a fallback allocation", () => {
     const zeroResult = evaluate(baseInput({ riskProfile: { positionSize: 0, leverage: 5, sl: 1, tp1: 2 } }));
-    expect(zeroResult.ok).toBe(true);
-    if (zeroResult.ok) expect(zeroResult.allocUsdt).toBe(100); // aqeaDecision.positionSize from baseInput()
+    expect(zeroResult.ok).toBe(false);
+    if (!zeroResult.ok && !zeroResult.silent) expect(zeroResult.reason).toContain("Invalid size or leverage");
 
     const nanResult = evaluate(baseInput({ riskProfile: { positionSize: NaN, leverage: 5, sl: 1, tp1: 2 } }));
-    expect(nanResult.ok).toBe(true);
-    if (nanResult.ok) expect(nanResult.allocUsdt).toBe(100);
+    expect(nanResult.ok).toBe(false);
+    if (!nanResult.ok && !nanResult.silent) expect(nanResult.reason).toContain("Invalid size or leverage");
   });
 
   test.each([0, -100, NaN, Infinity])("blocks when currentPrice (%p) cannot be resolved", (close) => {
@@ -167,4 +168,3 @@ describe.each([
     }
   });
 });
-

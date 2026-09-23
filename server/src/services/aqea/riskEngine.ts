@@ -50,8 +50,20 @@ export class RiskEngine {
    */
   public static async validateTrade(ctx: TradeContext): Promise<RiskResponse> {
     // 1. Get Wallet Balance
-    const wallet = paper.getWallet(ctx.userId, ctx.mode, ctx.accountType);
-    const balance = wallet.get("USDT") ?? 0;
+    let balance = 0;
+    if (ctx.mode === "LIVE") {
+      try {
+        const { computeAccountBalance } = await import("../../routes/wallet.js");
+        const liveBal = await computeAccountBalance(ctx.userId, "LIVE", ctx.accountType, 95.72);
+        balance = liveBal.usdt ?? 0;
+      } catch (err) {
+        const wallet = paper.getWallet(ctx.userId, ctx.mode, ctx.accountType);
+        balance = wallet.get("USDT") ?? 0;
+      }
+    } else {
+      const wallet = paper.getWallet(ctx.userId, ctx.mode, ctx.accountType);
+      balance = wallet.get("USDT") ?? 0;
+    }
 
     if (balance <= 0) {
       return this.reject("BALANCE_ZERO");

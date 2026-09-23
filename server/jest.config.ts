@@ -47,6 +47,8 @@ const config: Config = {
   // to mean what it claims to mean.
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts"],
   verbose: true,
+  // CI and sandboxed hosts may not permit Watchman's state-directory writes.
+  watchman: false,
   testTimeout: 30000,
   maxWorkers: 2,
 };

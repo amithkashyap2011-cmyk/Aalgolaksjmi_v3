@@ -66,8 +66,10 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
     return { ok: false, silent: false, reason: `Counter-trend BUY rejected in BEARISH regime (${regime}) with sub-75% conviction (${Math.round(confNormalized * 100)}%)` };
   }
 
-  const allocUsdt = riskProfile.positionSize || aqeaDecision.positionSize;
-  const leverage = riskProfile.leverage || aqeaDecision.leverage || 10;
+  // Zero is an intentional no-trade instruction from the sizing engine, not
+  // a missing value.  Only an absent field may fall back to AQEA defaults.
+  const allocUsdt = riskProfile?.positionSize !== undefined ? riskProfile.positionSize : aqeaDecision.positionSize;
+  const leverage = riskProfile?.leverage !== undefined ? riskProfile.leverage : (aqeaDecision.leverage ?? 10);
 
   if (!allocUsdt || !Number.isFinite(allocUsdt) || allocUsdt <= 0 || !Number.isFinite(leverage) || leverage <= 0) {
     return { ok: false, silent: false, reason: `Invalid size or leverage configured` };
@@ -129,8 +131,10 @@ export function evaluateShortEntry(input: EntryEvaluationInput): EntryEvaluation
     return { ok: false, silent: false, reason: `Counter-trend SELL rejected in BULLISH regime (${regime}) with sub-75% conviction (${Math.round(confNormalized * 100)}%)` };
   }
 
-  const allocUsdt = riskProfile.positionSize || aqeaDecision.positionSize;
-  const leverage = riskProfile.leverage || aqeaDecision.leverage || 10;
+  // Keep the short path identical: never replace an intentional zero size
+  // with a fallback allocation.
+  const allocUsdt = riskProfile?.positionSize !== undefined ? riskProfile.positionSize : aqeaDecision.positionSize;
+  const leverage = riskProfile?.leverage !== undefined ? riskProfile.leverage : (aqeaDecision.leverage ?? 10);
 
   if (!allocUsdt || !Number.isFinite(allocUsdt) || allocUsdt <= 0 || !Number.isFinite(leverage) || leverage <= 0) {
     return { ok: false, silent: false, reason: `Invalid size or leverage configured` };

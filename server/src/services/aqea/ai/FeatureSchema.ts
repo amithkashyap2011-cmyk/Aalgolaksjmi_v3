@@ -2,8 +2,23 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-const currentDir = typeof __dirname !== "undefined" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = path.resolve(currentDir, "../../../../../shared/schemas/feature_schema.json");
+function resolveSchemaPath(): string {
+  const metaDir = typeof import.meta?.url === "string" ? path.dirname(fileURLToPath(import.meta.url)) : "";
+  const candidates = [
+    metaDir ? path.resolve(metaDir, "../../../../../shared/schemas/feature_schema.json") : "",
+    metaDir ? path.resolve(metaDir, "../../../../shared/schemas/feature_schema.json") : "",
+    path.resolve(process.cwd(), "shared/schemas/feature_schema.json"),
+    path.resolve(process.cwd(), "../shared/schemas/feature_schema.json"),
+    "/Users/amithks/aalgolakshmi_v3/shared/schemas/feature_schema.json"
+  ].filter(Boolean);
+
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return candidates[0] || "shared/schemas/feature_schema.json";
+}
+
+const SCHEMA_PATH = resolveSchemaPath();
 const schemaData = JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf-8"));
 
 export interface FeatureDefinition {

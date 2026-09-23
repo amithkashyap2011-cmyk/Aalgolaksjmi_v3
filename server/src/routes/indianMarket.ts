@@ -1155,7 +1155,15 @@ router.get("/funds", async (req, res) => {
 
     const wallet = paper.getWallet(userId, mode, "INDIAN_NSE" as any);
     let inr = wallet.get("INR");
-    if (inr === undefined || inr === null) {
+    if ((inr === undefined || inr === null || inr === 0) && mode === "LIVE") {
+      const paperWallet = paper.getWallet(userId, "PAPER", "INDIAN_NSE" as any);
+      const paperInr = paperWallet.get("INR");
+      if (paperInr && paperInr > 0) {
+        inr = paperInr;
+      } else if (inr === undefined || inr === null) {
+        inr = 0;
+      }
+    } else if (inr === undefined || inr === null) {
       inr = 0;
       wallet.set("INR", inr);
     }

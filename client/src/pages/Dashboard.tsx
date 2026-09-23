@@ -68,6 +68,14 @@ const AIDecisionTimelineItem = ({ log }: any) => (
 
 const Dashboard: React.FC = () => {
   const { summary, status, logs, fetchDashboard, fetchHeader, headerData, mode, setMode, positions, currencyMode } = useDashboardStore();
+
+  const fmtPrice = (p: number) => {
+    if (!p || isNaN(p)) return "0.00";
+    if (p >= 100) return p.toFixed(2);
+    if (p >= 1) return p.toFixed(4);
+    if (p >= 0.01) return p.toFixed(5);
+    return p.toFixed(8);
+  };
   const { userId, connected } = useAppStore();
   const [analytics, setAnalytics] = useState<any>(null);
   useSocket();
@@ -290,8 +298,8 @@ const Dashboard: React.FC = () => {
                                    <td className="px-4 py-2 font-bold text-dark dark:text-white">{pos.symbol}</td>
                                    <td className={clsx("px-4 py-2 font-bold", isLong ? "text-success" : "text-danger")}>{sideText}</td>
                                    <td className="px-4 py-2 text-dark dark:text-white">{pos.quantity}</td>
-                                   <td className="px-4 py-2 text-secondary">{pos.entryPrice.toFixed(2)}</td>
-                                   <td className="px-4 py-2 text-secondary">{markPrice.toFixed(2)}</td>
+                                   <td className="px-4 py-2 text-secondary">{fmtPrice(pos.entryPrice)}</td>
+                                   <td className="px-4 py-2 text-secondary">{fmtPrice(markPrice)}</td>
                                    <td className={clsx("px-4 py-2 font-bold", pnlVal >= 0 ? "text-success" : "text-danger")}>
                                       {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}
                                    </td>

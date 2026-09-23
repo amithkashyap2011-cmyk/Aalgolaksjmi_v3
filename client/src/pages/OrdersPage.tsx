@@ -118,9 +118,12 @@ export default function OrdersPage() {
   const formatPrice = (price: any, item?: any) => {
     if (price == null || isNaN(Number(price))) return "—";
     const num = parseFloat(price);
-    return isIndianItem(item)
-      ? `₹${num.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-      : `$${num.toFixed(2)}`;
+    if (num === 0) return "$0.00";
+    if (isIndianItem(item)) {
+      return `₹${num.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    const d = num >= 100 ? 2 : num >= 1 ? 4 : num >= 0.01 ? 5 : num >= 0.0001 ? 6 : 8;
+    return `$${num.toFixed(d)}`;
   };
 
   const formatItemPnl = (val: number, item?: any) => {
@@ -267,7 +270,7 @@ export default function OrdersPage() {
     } catch { flash("Clear failed"); }
   };
 
-  const handleClose = async (id: string) => {
+  const handleClose = async (id: string, force = false) => {
     setClosingId(id);
     try {
       if (market === "INDIA") {
@@ -279,12 +282,36 @@ export default function OrdersPage() {
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "close failed");
       } else {
-        await closePosition(id, "PAPER");
+        const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
+        await closePosition(id, mode, force);
       }
-      flash("Position closed");
+      flash(force ? "Position marked closed locally" : "Position closed");
       await load();
       refreshCounts();
-    } catch { flash("Close failed — is the server running?"); }
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      if ((errMsg.includes("Binance LIVE Close Error") || errMsg.includes("-2015") || errMsg.includes("401")) && !force) {
+        const confirmForce = window.confirm(
+          `${errMsg}\n\n` +
+          `Would you like to Force Close (mark as CLOSED locally)?\n\n` +
+          `• Click OK if you have already closed or sold this position directly on Binance.\n` +
+          `• Machine Public IP: 14.98.201.25 (whitelist this in Binance API Management if you want live orders).`
+        );
+        if (confirmForce) {
+          const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";
+          try {
+            await closePosition(id, mode, true);
+            flash("Position marked closed locally (Force Closed)");
+            await load();
+            refreshCounts();
+            return;
+          } catch (forceErr: any) {
+            flash("Force close failed: " + (forceErr?.message || forceErr));
+          }
+        }
+      }
+      flash("Close failed: " + errMsg);
+    }
     finally { setClosingId(null); }
   };
 

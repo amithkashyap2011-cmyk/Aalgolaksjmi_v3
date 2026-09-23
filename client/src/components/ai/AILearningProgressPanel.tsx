@@ -96,7 +96,7 @@ export default function AILearningProgressPanel() {
   const currentModel = models[activeModelIndex];
 
   return (
-    <div
+    <div className="ai-learning-panel"
       style={{
         background: "var(--ds-surface, #ffffff)",
         border: "1px solid var(--ds-border, #e2e8f0)",
@@ -256,7 +256,7 @@ export default function AILearningProgressPanel() {
       </div>
 
       {/* ── Interactive Model Selector Tabs ── */}
-      <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+      <div className="ai-learning-model-tabs" style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
         {models.map((m, idx) => {
           const isActive = idx === activeModelIndex;
           return (
@@ -264,6 +264,7 @@ export default function AILearningProgressPanel() {
               key={m.name}
               onClick={() => setActiveModelIndex(idx)}
               style={{
+                flex: "0 0 auto",
                 padding: "8px 16px",
                 borderRadius: 10,
                 fontSize: 12,

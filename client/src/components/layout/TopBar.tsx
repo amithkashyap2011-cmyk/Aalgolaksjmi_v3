@@ -101,7 +101,7 @@ export default function TopBar({ onMenuClick }: Props) {
   }, [userId, accountType]);
 
   useEffect(() => {
-    if (!isIndian) return;
+    if (!isIndian && !isGlobal) return;
     const fetchIndian = async () => {
       try {
         const query = new URLSearchParams();
@@ -115,12 +115,52 @@ export default function TopBar({ onMenuClick }: Props) {
     fetchIndian();
     const t = setInterval(fetchIndian, 6000);
     return () => clearInterval(t);
-  }, [isIndian, userId, mode]);
+  }, [isIndian, isGlobal, userId, mode]);
 
   const inrRate = summary.inrRate || 85.0;
   const activeMode = MODES.find((m) => m.value === mode) ?? MODES[0];
   const indianWinRate = indianFunds?.winRate ?? domains.indianStock.realizedWinRate ?? domains.indianStock.winRate ?? 0;
   const indianTradesCount = indianFunds?.closedTradesCount ?? domains.indianStock.closedTrades ?? 0;
+
+  // ── Profit & Loss Percentage Utility ──
+  const computePnLPct = (pnl: number, currentEquity: number): number => {
+    if (!pnl || !isFinite(pnl)) return 0;
+    const startingEquity = currentEquity - pnl;
+    const base = startingEquity > 0 ? startingEquity : (currentEquity > 0 ? currentEquity : 0);
+    if (base <= 0) return 0;
+    const pct = (pnl / base) * 100;
+    return Math.max(-100, Math.min(9999, pct));
+  };
+
+  // ── Crypto Market P&L Metrics ──
+  const cryptoNetPnL = accountType === "SPOT"
+    ? (domains.crypto.netPnL?.spot ?? domains.crypto.netPnL?.total ?? 0)
+    : accountType === "FUTURES"
+      ? (domains.crypto.netPnL?.futures ?? domains.crypto.netPnL?.total ?? 0)
+      : (domains.crypto.netPnL?.total ?? 0);
+  const cryptoDailyPnL = domains.crypto.dailyPnL || 0;
+  const cryptoEquity = domains.crypto.totalEquity || 0;
+  const cryptoNetPnLPct = computePnLPct(cryptoNetPnL, cryptoEquity);
+  const cryptoDailyPnLPct = computePnLPct(cryptoDailyPnL, cryptoEquity);
+
+  // ── Indian Market P&L Metrics ──
+  const indianEquity = (indianFunds?.accountEquityINR && indianFunds.accountEquityINR > 0)
+    ? indianFunds.accountEquityINR
+    : ((indianFunds?.totalEquityINR && indianFunds.totalEquityINR > 0)
+      ? indianFunds.totalEquityINR
+      : (domains.indianStock.totalEquity || indianFunds?.accountEquityINR || 0));
+  const indianTodayPnL = indianFunds?.todayNetPnlINR ?? indianFunds?.todayPnlINR ?? domains.indianStock.dailyPnL ?? 0;
+  const indianNetPnL = indianFunds?.cumulativeRealizedNetPnlINR ?? indianFunds?.cumulativeRealizedPnlINR ?? domains.indianStock.netPnL?.total ?? domains.indianStock.totalAllTimePnL ?? 0;
+  const indianTodayPnLPct = computePnLPct(indianTodayPnL, indianEquity);
+  const indianNetPnLPct = computePnLPct(indianNetPnL, indianEquity);
+
+  // ── Global Aggregated Market P&L Metrics ──
+  const globalEquity = cryptoEquity + (indianEquity / inrRate);
+  const globalDailyPnL = cryptoDailyPnL + (indianTodayPnL / inrRate);
+  const globalNetPnL = cryptoNetPnL + (indianNetPnL / inrRate);
+  const globalNetPnLPct = computePnLPct(globalNetPnL, globalEquity);
+  const globalDailyPnLPct = computePnLPct(globalDailyPnL, globalEquity);
+  const indianDailyPnLPct = computePnLPct(indianTodayPnL, indianEquity);
 
   const handleSwitchMarket = (target: "INDIA" | "CRYPTO" | "GLOBAL") => {
     setActiveMarket(target);
@@ -472,12 +512,12 @@ export default function TopBar({ onMenuClick }: Props) {
 
       {/* Metrics Bar */}
       {isIndian ? (
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 10, padding: "0 6px", flexShrink: 0 }} className="hidden lg:flex">
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 8, padding: "0 6px", flexShrink: 0 }} className="hidden lg:flex">
           <Metric
             label="Equity"
-            value={formatInrWithUsd(indianFunds?.accountEquityINR ?? indianFunds?.totalEquityINR ?? 0, inrRate, true)}
+            value={formatInrWithUsd(indianEquity, inrRate, true)}
             color="#38bdf8"
-            title={`Total Account Equity = ₹${(indianFunds?.accountEquityINR ?? indianFunds?.totalEquityINR ?? 0).toLocaleString("en-IN")} ($${(((indianFunds?.accountEquityINR ?? indianFunds?.totalEquityINR ?? 0) / inrRate)).toFixed(2)})`}
+            title={`Total Account Equity = ₹${indianEquity.toLocaleString("en-IN")} ($${(indianEquity / inrRate).toFixed(2)})`}
           />
           <Metric
             label="Cash"
@@ -492,10 +532,18 @@ export default function TopBar({ onMenuClick }: Props) {
             title={`Margin Locked: ₹${(indianFunds?.usedMarginINR ?? indianFunds?.investedAmountINR ?? 0).toLocaleString("en-IN")}`}
           />
           <Metric
+            label="Net P&L"
+            value={`${indianNetPnL >= 0 ? "+" : ""}${formatInrWithUsd(indianNetPnL, inrRate, true)}`}
+            pct={indianNetPnLPct}
+            color={indianNetPnL >= 0 ? "#10b981" : "#ef4444"}
+            title={`Cumulative Realized Net P&L: ₹${indianNetPnL.toLocaleString("en-IN")} (${indianNetPnLPct >= 0 ? "+" : ""}${indianNetPnLPct.toFixed(2)}%)`}
+          />
+          <Metric
             label="Today's P&L"
-            value={`${(indianFunds?.todayNetPnlINR ?? indianFunds?.todayPnlINR ?? 0) >= 0 ? "+" : ""}${formatInrWithUsd(indianFunds?.todayNetPnlINR ?? indianFunds?.todayPnlINR ?? 0, inrRate, true)}`}
-            color={(indianFunds?.todayNetPnlINR ?? indianFunds?.todayPnlINR ?? 0) >= 0 ? "#10b981" : "#ef4444"}
-            title="Today's Net Realized + Unrealized P&L in ₹ INR and $ USD"
+            value={`${indianTodayPnL >= 0 ? "+" : ""}${formatInrWithUsd(indianTodayPnL, inrRate, true)}`}
+            pct={indianTodayPnLPct}
+            color={indianTodayPnL >= 0 ? "#10b981" : "#ef4444"}
+            title={`Today's Net Realized + Unrealized P&L: ₹${indianTodayPnL.toLocaleString("en-IN")} (${indianTodayPnLPct >= 0 ? "+" : ""}${indianTodayPnLPct.toFixed(2)}%)`}
           />
           <Metric
             label="Win Rate"
@@ -538,7 +586,22 @@ export default function TopBar({ onMenuClick }: Props) {
             color="#22c55e"
             title={`Total Portfolio Equity = Free Cash + Locked Margin + Unrealized PnL\nSPOT: $${(domains.crypto.balances?.spot ?? 0).toFixed(2)} free + $${(domains.crypto.invested?.spot ?? 0).toFixed(2)} locked\nFUTURES: $${(domains.crypto.balances?.futures ?? 0).toFixed(2)} free + $${(domains.crypto.invested?.futures ?? 0).toFixed(2)} locked\nDeposited: $${((domains.crypto.balances?.spot ?? 0) + (domains.crypto.balances?.futures ?? 0) + (domains.crypto.invested?.spot ?? 0) + (domains.crypto.invested?.futures ?? 0)).toFixed(0)} | Total: $${(domains.crypto.totalEquity || 0).toFixed(2)}`}
           />
-          <DomainCard label="P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
+          {/* NET P&L with % badge */}
+          <DomainCard
+            label="NET P&L"
+            value={`${cryptoNetPnL >= 0 ? "+" : ""}${formatUsdWithInr(cryptoNetPnL, inrRate, true)}`}
+            pct={cryptoNetPnLPct}
+            color={cryptoNetPnL >= 0 ? "#10b981" : "#ef4444"}
+            title={`Crypto Net Realized P&L: $${cryptoNetPnL.toFixed(2)} (${cryptoNetPnLPct >= 0 ? "+" : ""}${cryptoNetPnLPct.toFixed(2)}%)`}
+          />
+          {/* TODAY P&L with % badge */}
+          <DomainCard
+            label="TODAY P&L"
+            value={`${cryptoDailyPnL >= 0 ? "+" : ""}${formatUsdWithInr(cryptoDailyPnL, inrRate, true)}`}
+            pct={cryptoDailyPnLPct}
+            color={cryptoDailyPnL >= 0 ? "#10b981" : "#ef4444"}
+            title={`Crypto Daily P&L: $${cryptoDailyPnL.toFixed(2)} (${cryptoDailyPnLPct >= 0 ? "+" : ""}${cryptoDailyPnLPct.toFixed(2)}%)`}
+          />
           <DomainCard label="WIN RATE" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
           {/* AI Agent running status */}
           <div
@@ -581,11 +644,30 @@ export default function TopBar({ onMenuClick }: Props) {
             title={`Crypto Total Equity (Cash + Locked Margin + Unrealized PnL) = $${(domains.crypto.totalEquity || 0).toFixed(2)}`}
           />
           {/* India side */}
-          <DomainCard label="INDIA EQUITY" value={`₹${(domains.indianStock.totalEquity || 0).toLocaleString("en-IN")}`} color="#f97316" title={`Indian Broker Wallet Equity: ₹${(domains.indianStock.totalEquity || 0).toLocaleString("en-IN")} ($${((domains.indianStock.totalEquity || 0) / inrRate).toFixed(2)})`} />
-          <DomainCard label="CRYPTO P&L" value={`${(domains.crypto.dailyPnL || 0) >= 0 ? "+" : ""}${formatUsdWithInr(domains.crypto.dailyPnL || 0, inrRate, true)}`} color={(domains.crypto.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Crypto Daily P&L: $${(domains.crypto.dailyPnL || 0).toFixed(2)} (₹${((domains.crypto.dailyPnL || 0) * inrRate).toLocaleString("en-IN")})`} />
-          <DomainCard label="INDIA P&L" value={`${(domains.indianStock.dailyPnL || 0) >= 0 ? "+" : ""}₹${(domains.indianStock.dailyPnL || 0).toFixed(0)}`} color={(domains.indianStock.dailyPnL || 0) >= 0 ? "#10b981" : "#ef4444"} title={`Indian Daily P&L: ₹${(domains.indianStock.dailyPnL || 0).toFixed(2)}`} />
+          <DomainCard label="INDIA EQUITY" value={`₹${indianEquity.toLocaleString("en-IN")}`} color="#f97316" title={`Indian Broker Wallet Equity: ₹${indianEquity.toLocaleString("en-IN")} ($${(indianEquity / inrRate).toFixed(2)})`} />
+          <DomainCard
+            label="GLOBAL NET P&L"
+            value={`${globalNetPnL >= 0 ? "+" : ""}${formatUsdWithInr(globalNetPnL, inrRate, true)}`}
+            pct={globalNetPnLPct}
+            color={globalNetPnL >= 0 ? "#10b981" : "#ef4444"}
+            title={`Global Combined Net Realized P&L: $${globalNetPnL.toFixed(2)} (${globalNetPnLPct >= 0 ? "+" : ""}${globalNetPnLPct.toFixed(2)}%)`}
+          />
+          <DomainCard
+            label="CRYPTO P&L"
+            value={`${cryptoDailyPnL >= 0 ? "+" : ""}${formatUsdWithInr(cryptoDailyPnL, inrRate, true)}`}
+            pct={cryptoDailyPnLPct}
+            color={cryptoDailyPnL >= 0 ? "#10b981" : "#ef4444"}
+            title={`Crypto Daily P&L: $${cryptoDailyPnL.toFixed(2)} (${cryptoDailyPnLPct >= 0 ? "+" : ""}${cryptoDailyPnLPct.toFixed(2)}%)`}
+          />
+          <DomainCard
+            label="INDIA P&L"
+            value={`${indianTodayPnL >= 0 ? "+" : "-"}₹${Math.abs(indianTodayPnL).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`}
+            pct={indianDailyPnLPct}
+            color={indianTodayPnL >= 0 ? "#10b981" : "#ef4444"}
+            title={`Indian Daily P&L: ₹${indianTodayPnL.toFixed(2)} (${indianDailyPnLPct >= 0 ? "+" : ""}${indianDailyPnLPct.toFixed(2)}%)`}
+          />
           <DomainCard label="CRYPTO WIN" value={`${(domains.crypto.realizedWinRate ?? domains.crypto.winRate ?? 0).toFixed(0)}%`} color="#38bdf8" title={`Crypto Realized Win Rate — ${domains.crypto.closedTrades || 0} closed trade(s)`} />
-          <DomainCard label="INDIA WIN" value={`${(domains.indianStock.realizedWinRate ?? domains.indianStock.winRate ?? 0).toFixed(0)}%`} color="#f97316" title={`India Realized Win Rate — ${domains.indianStock.closedTrades || 0} closed trade(s)`} />
+          <DomainCard label="INDIA WIN" value={`${indianWinRate.toFixed(0)}%`} color="#f97316" title={`India Realized Win Rate — ${indianTradesCount} closed trade(s)`} />
         </div>
       )}
 
@@ -779,7 +861,19 @@ export default function TopBar({ onMenuClick }: Props) {
   );
 }
 
-function DomainCard({ label, value, color = "#f1f5f9", title }: { label: string; value: string; color?: string; title?: string }) {
+function DomainCard({
+  label,
+  value,
+  color = "#f1f5f9",
+  title,
+  pct,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+  title?: string;
+  pct?: number;
+}) {
   const isLongValue = value.length > 14;
   return (
     <div
@@ -791,17 +885,67 @@ function DomainCard({ label, value, color = "#f1f5f9", title }: { label: string;
       title={title}
     >
       <span style={{ fontSize: 8.5, color: "#94a3b8", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</span>
-      <span style={{ fontSize: isLongValue ? 9.5 : 11, fontWeight: 800, color, fontFamily: "monospace", whiteSpace: "nowrap" }}>{value}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 3.5 }}>
+        <span style={{ fontSize: isLongValue ? 9.5 : 11, fontWeight: 800, color, fontFamily: "monospace", whiteSpace: "nowrap" }}>{value}</span>
+        {pct !== undefined && !Number.isNaN(pct) && (
+          <span
+            style={{
+              fontSize: 8.5,
+              fontWeight: 800,
+              fontFamily: "monospace",
+              padding: "0.5px 3.5px",
+              borderRadius: 3,
+              background: pct > 0 ? "rgba(16, 185, 129, 0.18)" : pct < 0 ? "rgba(239, 68, 68, 0.18)" : "rgba(148, 163, 184, 0.15)",
+              color: pct > 0 ? "#34d399" : pct < 0 ? "#f87171" : "#94a3b8",
+              border: `1px solid ${pct > 0 ? "rgba(16, 185, 129, 0.35)" : pct < 0 ? "rgba(239, 68, 68, 0.35)" : "rgba(148, 163, 184, 0.2)"}`,
+              whiteSpace: "nowrap"
+            }}
+          >
+            {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+          </span>
+        )}
+      </div>
     </div>
   );
 }
 
-function Metric({ label, value, color = "#f1f5f9", title }: { label: string; value: string; color?: string; title?: string }) {
+function Metric({
+  label,
+  value,
+  color = "#f1f5f9",
+  title,
+  pct,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+  title?: string;
+  pct?: number;
+}) {
   const isLongValue = value.length > 20;
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, flexShrink: 0 }} title={title}>
       <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{label}</span>
-      <span style={{ fontSize: isLongValue ? 10.5 : 12, fontWeight: 700, color, fontFamily: "monospace", whiteSpace: "nowrap" }}>{value}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <span style={{ fontSize: isLongValue ? 10.5 : 12, fontWeight: 700, color, fontFamily: "monospace", whiteSpace: "nowrap" }}>{value}</span>
+        {pct !== undefined && !Number.isNaN(pct) && (
+          <span
+            style={{
+              fontSize: 9,
+              fontWeight: 800,
+              fontFamily: "monospace",
+              padding: "0.5px 4px",
+              borderRadius: 3,
+              background: pct > 0 ? "rgba(16, 185, 129, 0.18)" : pct < 0 ? "rgba(239, 68, 68, 0.18)" : "rgba(148, 163, 184, 0.15)",
+              color: pct > 0 ? "#34d399" : pct < 0 ? "#f87171" : "#94a3b8",
+              border: `1px solid ${pct > 0 ? "rgba(16, 185, 129, 0.35)" : pct < 0 ? "rgba(239, 68, 68, 0.35)" : "rgba(148, 163, 184, 0.2)"}`,
+              whiteSpace: "nowrap"
+            }}
+          >
+            {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+          </span>
+        )}
+      </div>
     </div>
   );
 }

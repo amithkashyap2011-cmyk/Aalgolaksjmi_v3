@@ -736,7 +736,7 @@ export default function AIFooterTradeBar() {
         }}
       >
         {/* ── Main bar row — 55px ── */}
-        <div style={{
+        <div className="aqea-footer-main" style={{
           padding: `0 ${φ.sp.lg}px`,
           height: φ.barH,
           minHeight: φ.barH,
@@ -752,7 +752,7 @@ export default function AIFooterTradeBar() {
           <div style={{ position: "absolute", bottom: 0, left: 0, height: 3, width: `${progressPct}%`, background: "linear-gradient(90deg,#2563eb,#7c3aed)", transition: "width 1s linear", pointerEvents: "none" }} />
 
           {/* ── LEFT — symbol identity & signal badges (nowrap) ── */}
-            <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, minWidth: 0, flexShrink: 0 }}>
+            <div className="aqea-footer-left" style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, minWidth: 0, flexShrink: 0 }}>
               {/* Brain icon — 34×34 (Fibonacci) */}
               <div style={{ width: φ.sp.xl, height: φ.sp.xl, borderRadius: φ.r.sm, background: "rgba(37,99,235,.1)", border: "1px solid rgba(37,99,235,.2)", display: "flex", alignItems: "center", justifyContent: "center", color: "#2563eb", flexShrink: 0 }}>
                 <Brain size={φ.ic.sm} className="animate-pulse" />
@@ -902,7 +902,7 @@ export default function AIFooterTradeBar() {
             </div>
 
           {/* ── RIGHT — controls ── */}
-          <div style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, flexShrink: 0, marginLeft: "auto" }}>
+          <div className="aqea-footer-right" style={{ display: "flex", alignItems: "center", gap: φ.sp.sm, flexShrink: 0, marginLeft: "auto" }}>
             <button className="aqea-dismiss" onClick={dismiss} title="Hide permanently" style={{ background: "none", border: "none", color: "var(--ds-text-faint,#94a3b8)", cursor: "pointer", padding: `${φ.sp.xs}px`, borderRadius: φ.r.xs, display: "flex", alignItems: "center", gap: φ.sp.xs, fontSize: φ.fs.xxs, fontWeight: 700, transition: "color .15s" }}>
               <EyeOff size={φ.ic.sm} />
               <span className="hidden sm:inline">Hide</span>

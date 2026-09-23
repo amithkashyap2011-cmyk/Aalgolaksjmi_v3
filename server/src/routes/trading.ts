@@ -484,7 +484,16 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
 
     /* validate risk limits */
     const wallet = paper.getWallet(req.userId!, mode, accountType || "FUTURES");
-    const usdt = wallet.get("USDT") ?? 0;
+    let usdt = wallet.get("USDT") ?? 0;
+    if (mode === "LIVE") {
+      try {
+        const { computeAccountBalance } = await import("./wallet.js");
+        const liveBal = await computeAccountBalance(req.userId!, "LIVE", accountType || "SPOT", 95.72);
+        usdt = liveBal.usdt ?? 0;
+      } catch {
+        // fallback to paper wallet usdt
+      }
+    }
 
     /* position size check */
     let entryPrice: number;
@@ -514,9 +523,20 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
     if (mode === "PAPER") {
       const existingPos = paper.getPosition(req.userId!, symbol, mode, accountType || "FUTURES");
       if (existingPos) {
-        return res.status(400).json({
-          error: `You already have an open ${symbol} ${accountType || "FUTURES"} position (side: ${existingPos.side}). Close it first or use the manual close button.`,
+        const dbOpen = await Trade.findOne({
+          userId: toValidObjectId(req.userId),
+          symbol,
+          mode,
+          accountType: accountType || "FUTURES",
+          status: "OPEN"
         });
+        if (!dbOpen) {
+          paper.removePosition(req.userId!, symbol, mode, (accountType as any) || "FUTURES");
+        } else {
+          return res.status(400).json({
+            error: `You already have an open ${symbol} ${accountType || "FUTURES"} position (side: ${existingPos.side}). Close it first or use the manual close button.`,
+          });
+        }
       }
     }
 
@@ -536,7 +556,13 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
       // monthStart) plus in-memory filtering replaces 3 round-trips with 1.
       // Benchmarked against the real trades collection: ~27ms for 3 queries
       // vs ~3ms for 1 at current data volume.
-      const monthTrades = await Trade.find({ userId: toValidObjectId(req.userId), mode, openedAt: { $gte: monthStart } }).lean();
+      const targetAccountType = accountType || "SPOT";
+      const monthTrades = await Trade.find({
+        userId: toValidObjectId(req.userId),
+        mode,
+        accountType: targetAccountType,
+        openedAt: { $gte: monthStart }
+      }).lean();
       const todayTrades = monthTrades.filter(t => t.openedAt >= todayStart);
       const weekTrades = monthTrades.filter(t => t.openedAt >= weekStart);
       dailyPnl = todayTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
@@ -574,13 +600,17 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
         tpPrice = tpPrice !== undefined ? tpPrice : +(entryPrice - estAtr * 3.0).toFixed(8);
       }
     } else {
-        // If absolute prices provided (>= 50), use as-is; if % (< 50), compute
-        if (slPrice < 50) {
-            slPrice = side === "BUY" ? +(entryPrice * (1 - slPrice / 100)).toFixed(8) : +(entryPrice * (1 + slPrice / 100)).toFixed(8);
-        }
-        if (tpPrice < 50) {
-            tpPrice = side === "BUY" ? +(entryPrice * (1 + tpPrice / 100)).toFixed(8) : +(entryPrice * (1 - tpPrice / 100)).toFixed(8);
-        }
+      // Distinguish absolute price from percentage:
+      // If slPrice/tpPrice is within 50% of entryPrice, it is an absolute price level.
+      // Otherwise, if it is a small number (e.g. 2 for 2%), treat as percentage.
+      const isSlAbsolute = entryPrice > 0 && Math.abs(slPrice - entryPrice) / entryPrice < 0.5;
+      if (!isSlAbsolute) {
+        slPrice = side === "BUY" ? +(entryPrice * (1 - slPrice / 100)).toFixed(8) : +(entryPrice * (1 + slPrice / 100)).toFixed(8);
+      }
+      const isTpAbsolute = entryPrice > 0 && Math.abs(tpPrice - entryPrice) / entryPrice < 0.5;
+      if (!isTpAbsolute) {
+        tpPrice = side === "BUY" ? +(entryPrice * (1 + tpPrice / 100)).toFixed(8) : +(entryPrice * (1 - tpPrice / 100)).toFixed(8);
+      }
     }
 
     if (mode === "LIVE") {
@@ -605,7 +635,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
         : await binance.formatQuantity(symbol, quantity);
 
       let result;
-      const clientOrderId = binance.genClientOrderId("aalgo-manual");
+      const clientOrderId = binance.genClientOrderId("aalgo-ord");
       if (accountType === "FUTURES") {
         try {
           await binance.setFuturesLeverage(apiKey, apiSecret, symbol, finalLeverage);
@@ -616,9 +646,52 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
           symbol, side, type: "MARKET", quantity: finalQtyStr, clientOrderId,
         });
       } else {
-        result = await binance.placeOrder(apiKey, apiSecret, {
-          symbol, side, type: "MARKET", quantity: finalQtyStr, clientOrderId,
-        }) as any;
+        try {
+          result = await binance.placeOrder(apiKey, apiSecret, {
+            symbol, side, type: "MARKET", quantity: finalQtyStr, clientOrderId,
+          }) as any;
+        } catch (spotErr: any) {
+          console.log(`[trading] Spot order book failed (${spotErr.message}). Attempting Binance Convert fallback...`);
+          const baseAsset = symbol.replace("USDT", "");
+          const fromAsset = side === "BUY" ? "USDT" : baseAsset;
+          const toAsset = side === "BUY" ? baseAsset : "USDT";
+          const fromAmount = side === "BUY" ? (quantity * (entryPrice || 1)).toFixed(2) : finalQtyStr;
+
+          const crypto = await import("crypto");
+          const ts = Date.now();
+          const q = `fromAsset=${fromAsset}&toAsset=${toAsset}&fromAmount=${fromAmount}&timestamp=${ts}`;
+          const sig = crypto.createHmac("sha256", apiSecret).update(q).digest("hex");
+          const quoteRes = await fetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
+            method: "POST",
+            headers: { "X-MBX-APIKEY": apiKey }
+          });
+          const quoteData: any = await quoteRes.json();
+          if (quoteData?.quoteId) {
+            const tsA = Date.now();
+            const qA = `quoteId=${quoteData.quoteId}&timestamp=${tsA}`;
+            const sigA = crypto.createHmac("sha256", apiSecret).update(qA).digest("hex");
+            const acceptRes = await fetch(`https://api.binance.com/sapi/v1/convert/acceptQuote?${qA}&signature=${sigA}`, {
+              method: "POST",
+              headers: { "X-MBX-APIKEY": apiKey }
+            });
+            const acceptData: any = await acceptRes.json();
+            if (acceptData?.orderId || acceptData?.orderStatus === "SUCCESS") {
+              const execPrice = side === "BUY"
+                ? parseFloat(quoteData.fromAmount) / parseFloat(quoteData.toAmount)
+                : parseFloat(quoteData.toAmount) / parseFloat(quoteData.fromAmount);
+              result = {
+                avgPrice: execPrice.toString(),
+                executedQty: side === "BUY" ? quoteData.toAmount : quoteData.fromAmount,
+                cummulativeQuoteQty: side === "BUY" ? quoteData.fromAmount : quoteData.toAmount,
+                orderId: acceptData.orderId || `conv-${Date.now()}`
+              };
+            } else {
+              throw new Error(`Binance Convert entry failed: ${acceptData.msg || JSON.stringify(acceptData)} (Spot order error: ${spotErr.message})`);
+            }
+          } else {
+            throw new Error(`Binance Spot: ${spotErr.message} | Convert: ${quoteData.msg || JSON.stringify(quoteData)}`);
+          }
+        }
       }
 
       const actualEntryPrice = result.avgPrice 
@@ -1324,7 +1397,7 @@ router.post("/wallet/adjust", authGuard, async (req: AuthRequest, res) => {
 
 router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
   try {
-    const { tradeId, mode = "PAPER" } = req.body;
+    const { tradeId, mode = "PAPER", force = false } = req.body;
     if (!tradeId) return res.status(400).json({ error: "tradeId required" }) as any;
 
     const trade = await Trade.findOne({ _id: tradeId, userId: req.userId!, status: "OPEN" });
@@ -1334,6 +1407,47 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
     let pnl = 0;
 
     if (mode === "LIVE") {
+      if (force) {
+        // Force-close / sync: bypass Binance exchange order execution
+        // Used when a position has already been closed/sold directly on Binance,
+        // or when API key/IP restrictions block exchange order routing.
+        try {
+          exitPrice = await binance.getTickerPrice(trade.symbol, trade.accountType === "FUTURES");
+        } catch {
+          try {
+            const klines = await binance.getKlines(trade.symbol, "1m", undefined, undefined, 1);
+            if (klines.length) exitPrice = parseFloat(klines[0].close);
+          } catch { /* fallback to entryPrice */ }
+        }
+
+        const entryFee = trade.entryPrice * trade.quantity * TAKER_FEE;
+        const exitFee = exitPrice * trade.quantity * TAKER_FEE;
+        const grossPnl = trade.side === "BUY"
+          ? (exitPrice - trade.entryPrice) * trade.quantity
+          : (trade.entryPrice - exitPrice) * trade.quantity;
+        pnl = grossPnl - entryFee - exitFee;
+
+        await Trade.updateOne({ _id: tradeId }, {
+          $set: {
+            status: "CLOSED",
+            exitPrice,
+            pnl,
+            closedAt: new Date(),
+            "meta.closeReason": "MANUAL_LIVE_FORCE_SYNC"
+          }
+        });
+
+        return res.json({
+          success: true,
+          forced: true,
+          tradeId,
+          exitPrice,
+          pnl: +pnl.toFixed(4),
+          symbol: trade.symbol,
+          message: "Position marked as CLOSED locally (Force Close / Sync)."
+        });
+      }
+
       // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
       const barrier = LiveExecutionBarrier.verifyExecutionPermitted("LIVE");
       if (!barrier.permitted) {
@@ -1355,7 +1469,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
         : await binance.formatQuantity(trade.symbol, trade.quantity);
 
       let result;
-      const exitClientOrderId = binance.genClientOrderId("aalgo-manual-exit");
+      const exitClientOrderId = binance.genClientOrderId("aalgo-exit");
       try {
         if (trade.accountType === "FUTURES") {
           result = await binance.placeFuturesOrder(apiKey, apiSecret, {
@@ -1367,24 +1481,51 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
               symbol: trade.symbol, side: exitSide, type: "MARKET", quantity: formattedQty, clientOrderId: exitClientOrderId,
             }) as any;
           } catch (spotErr: any) {
-            const isConvertEligible = (spotErr.message && (spotErr.message.includes("-2010") || spotErr.message.includes("NOTIONAL"))) || ((trade as any).notes && (trade as any).notes.includes("Binance Convert"));
-            if (isConvertEligible) {
+            // For any Spot exit where standard order book rejects (e.g. MIN_NOTIONAL < $5.00, lot size, or permissions),
+            // seamlessly fall back to Binance Convert to execute the liquidation into USDT.
+            try {
               const baseAsset = trade.symbol.replace(/USDT$/, "");
               const fromAsset = exitSide === "SELL" ? baseAsset : "USDT";
               const toAsset = exitSide === "SELL" ? "USDT" : baseAsset;
-              const fromAmount = exitSide === "SELL" ? trade.quantity.toString() : (trade.quantity * trade.entryPrice).toFixed(4);
-              const ts = Date.now();
-              const q = `fromAsset=${fromAsset}&toAsset=${toAsset}&fromAmount=${fromAmount}&timestamp=${ts}`;
+              let fromAmount = exitSide === "SELL" ? trade.quantity.toString() : (trade.quantity * trade.entryPrice).toFixed(4);
               const crypto = await import("crypto");
-              const sig = crypto.createHmac("sha256", apiSecret).update(q).digest("hex");
-              const quoteRes = await fetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
-                method: "POST",
-                headers: { "X-MBX-APIKEY": apiKey }
-              });
-              const quoteData: any = await quoteRes.json();
+
+              const sendQuoteReq = async (amt: string) => {
+                const ts = Date.now();
+                const q = `fromAsset=${fromAsset}&toAsset=${toAsset}&fromAmount=${amt}&recvWindow=60000&timestamp=${ts}`;
+                const sig = crypto.createHmac("sha256", apiSecret).update(q).digest("hex");
+                const res = await fetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
+                  method: "POST",
+                  headers: { "X-MBX-APIKEY": apiKey }
+                });
+                return res.json();
+              };
+
+              let quoteData: any = await sendQuoteReq(fromAmount);
+
+              // If insufficient balance (e.g. fee deduction or minor dust discrepancy), query actual free balance
+              if (exitSide === "SELL" && (quoteData?.code === -20008 || (quoteData?.msg && quoteData.msg.toLowerCase().includes("balance")))) {
+                try {
+                  const capTs = Date.now();
+                  const capQ = `recvWindow=60000&timestamp=${capTs}`;
+                  const capSig = crypto.createHmac("sha256", apiSecret).update(capQ).digest("hex");
+                  const capRes = await fetch(`https://api.binance.com/sapi/v1/capital/config/getall?${capQ}&signature=${capSig}`, {
+                    headers: { "X-MBX-APIKEY": apiKey }
+                  });
+                  const capData: any = await capRes.json();
+                  if (Array.isArray(capData)) {
+                    const coinInfo = capData.find((c: any) => c.coin === fromAsset);
+                    if (coinInfo && parseFloat(coinInfo.free) > 0) {
+                      fromAmount = parseFloat(coinInfo.free).toString();
+                      quoteData = await sendQuoteReq(fromAmount);
+                    }
+                  }
+                } catch {}
+              }
+
               if (quoteData?.quoteId) {
                 const tsA = Date.now();
-                const qA = `quoteId=${quoteData.quoteId}&timestamp=${tsA}`;
+                const qA = `quoteId=${quoteData.quoteId}&recvWindow=60000&timestamp=${tsA}`;
                 const sigA = crypto.createHmac("sha256", apiSecret).update(qA).digest("hex");
                 const acceptRes = await fetch(`https://api.binance.com/sapi/v1/convert/acceptQuote?${qA}&signature=${sigA}`, {
                   method: "POST",
@@ -1397,17 +1538,17 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
                     : parseFloat(quoteData.fromAmount) / parseFloat(quoteData.toAmount);
                   result = {
                     avgPrice: execPrice.toString(),
-                    executedQty: trade.quantity.toString(),
+                    executedQty: fromAmount,
                     orderId: acceptData.orderId
                   };
                 } else {
                   throw new Error(`Binance Convert exit failed: ${acceptData.msg || JSON.stringify(acceptData)}`);
                 }
               } else {
-                throw new Error(`Binance Convert quote failed: ${quoteData.msg || JSON.stringify(quoteData)}`);
+                throw new Error(`Binance Convert quote failed: ${quoteData.msg || JSON.stringify(quoteData)} (Order book error: ${spotErr.message})`);
               }
-            } else {
-              throw spotErr;
+            } catch (convertErr: any) {
+              throw new Error(`Spot close failed: ${spotErr.message} | Convert fallback: ${convertErr.message}`);
             }
           }
         }
@@ -1445,7 +1586,17 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
           return res.json({ success: true, partial: true, executedQty: closedQty, remainingQty, exitPrice, pnl: +pnl.toFixed(4), symbol: trade.symbol });
         }
       } catch (err: any) {
-        return res.status(400).json({ error: `Binance LIVE Close Error: ${err.message}` }) as any;
+        const isIpOrAuth = err.message && (err.message.includes("-2015") || err.message.includes("401") || err.message.toLowerCase().includes("permission") || err.message.toLowerCase().includes("ip"));
+        let helpfulMsg = `Binance LIVE Close Error: ${err.message}`;
+        if (isIpOrAuth) {
+          helpfulMsg += " | IP / API Key restriction on Binance. Your current machine IP is 14.98.201.25. Add 14.98.201.25 to trusted IPs in Binance API Management, or choose Force Close if already closed on Binance.";
+        }
+        return res.status(400).json({
+          error: helpfulMsg,
+          canForceClose: true,
+          ip: "14.98.201.25",
+          code: -2015
+        }) as any;
       }
 
       // Update DB

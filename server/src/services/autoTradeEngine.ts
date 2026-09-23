@@ -382,8 +382,20 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
   // In PAPER mode, or for AQEA autonomous forward evidence accumulation, a zero balance
   // must NOT suppress market opportunity detection, feature generation, regime classification,
   // model inference, Bayesian fusion, economic EV, risk evaluation, and forward telemetry!
-  const wallet = paper.getWallet(userId, mode, accountType);
-  const balance = wallet.get("USDT") ?? 0;
+  let balance = 0;
+  if (mode === "LIVE") {
+    try {
+      const { computeAccountBalance } = await import("../routes/wallet.js");
+      const liveBal = await computeAccountBalance(userId, "LIVE", accountType, 95.72);
+      balance = liveBal.usdt ?? 0;
+    } catch {
+      const wallet = paper.getWallet(userId, mode, accountType);
+      balance = wallet.get("USDT") ?? 0;
+    }
+  } else {
+    const wallet = paper.getWallet(userId, mode, accountType);
+    balance = wallet.get("USDT") ?? 0;
+  }
 
   let currentHeat = 0;
   if (balance > 0) {
@@ -1105,8 +1117,20 @@ export async function handleLong(
     return;
   }
   const { allocUsdt, leverage, currentPrice, quantity, decisionPath, authorizedVotes, shadowVotes } = evaluation;
-  const wallet = paper.getWallet(userId, mode, accountType);
-  const walletBalance = wallet.get("USDT") ?? 0;
+  let walletBalance = 0;
+  if (mode === "LIVE") {
+    try {
+      const { computeAccountBalance } = await import("../routes/wallet.js");
+      const liveBal = await computeAccountBalance(userId, "LIVE", accountType, 95.72);
+      walletBalance = liveBal.usdt ?? 0;
+    } catch {
+      const wallet = paper.getWallet(userId, mode, accountType);
+      walletBalance = wallet.get("USDT") ?? 0;
+    }
+  } else {
+    const wallet = paper.getWallet(userId, mode, accountType);
+    walletBalance = wallet.get("USDT") ?? 0;
+  }
 
   // Agentic pre-trade gate: block entries whose regime/symbol bucket has
   // negative rolling expectancy, or whose TP1 edge can't clear fees.
@@ -1362,8 +1386,20 @@ export async function handleShort(
     return;
   }
   const { allocUsdt, leverage, currentPrice, quantity, decisionPath, authorizedVotes, shadowVotes } = evaluation;
-  const wallet = paper.getWallet(userId, mode, accountType);
-  const walletBalance = wallet.get("USDT") ?? 0;
+  let walletBalance = 0;
+  if (mode === "LIVE") {
+    try {
+      const { computeAccountBalance } = await import("../routes/wallet.js");
+      const liveBal = await computeAccountBalance(userId, "LIVE", accountType, 95.72);
+      walletBalance = liveBal.usdt ?? 0;
+    } catch {
+      const wallet = paper.getWallet(userId, mode, accountType);
+      walletBalance = wallet.get("USDT") ?? 0;
+    }
+  } else {
+    const wallet = paper.getWallet(userId, mode, accountType);
+    walletBalance = wallet.get("USDT") ?? 0;
+  }
 
   // Agentic pre-trade gate (same as LONG): expectancy + fee-edge check.
   const governorVerdict = await tradeGovernor.permit({
@@ -1443,7 +1479,7 @@ export async function handleShort(
       const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
       const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
 
-      const clientOrderId = binance.genClientOrderId("aalgo-short");
+      const clientOrderId = binance.genClientOrderId("aalgo-shrt");
       let result: any;
       if (accountType === "FUTURES") {
         await binance.setFuturesLeverage(apiKey, apiSecret, symbol, leverage);

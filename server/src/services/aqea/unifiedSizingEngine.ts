@@ -57,11 +57,7 @@ export class UnifiedSizingEngine {
     const kelly = await this.computeRollingKelly(userId, mode);
 
     // Half-Kelly for variance reduction; capped at MAX_RISK_PER_TRADE (1%)
-    const halfKelly = kelly * 0.5;
-    const effectiveRiskPct = Math.max(
-      AQEA_CONFIG.MAX_RISK_PER_TRADE * 0.25,          // floor: 0.25% (avoid sizing to zero on new accounts)
-      Math.min(halfKelly, AQEA_CONFIG.MAX_RISK_PER_TRADE)  // ceiling: 1%
-    );
+    const effectiveRiskPct = this.effectiveRiskFromKelly(kelly);
 
     // 2. SL distance as % of price — must match exitEngine SL = 1.5 ATR
     const effectiveAtr = Math.max(atr, price * 0.004); // same 0.4% ATR floor as exitEngine
@@ -147,6 +143,10 @@ export class UnifiedSizingEngine {
         .select("pnl")
         .lean();
 
+      // A fresh account gets conservative default risk, but five consecutive
+      // non-winning outcomes are sufficient evidence to pause entries.
+      if (trades.length >= 5 && trades.slice(0, 5).every(t => (t.pnl ?? 0) <= 0)) return 0;
+
       // Insufficient history — use conservative default (full 1% risk)
       if (!trades || trades.length < 10) return AQEA_CONFIG.MAX_RISK_PER_TRADE;
 
@@ -170,6 +170,15 @@ export class UnifiedSizingEngine {
     } catch {
       return AQEA_CONFIG.MAX_RISK_PER_TRADE;
     }
+  }
+
+  /** Pure, unit-testable conversion from estimated edge to risk budget. */
+  static effectiveRiskFromKelly(kelly: number): number {
+    if (!Number.isFinite(kelly) || kelly <= 0) return 0;
+    return Math.max(
+      AQEA_CONFIG.MAX_RISK_PER_TRADE * 0.25,
+      Math.min(kelly * 0.5, AQEA_CONFIG.MAX_RISK_PER_TRADE)
+    );
   }
 
   /**

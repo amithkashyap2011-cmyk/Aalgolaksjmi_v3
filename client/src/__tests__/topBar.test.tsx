@@ -177,6 +177,23 @@ describe("TopBar Unit Tests", () => {
     expect(screen.getByText("75%")).toBeInTheDocument();
   });
 
+  it("renders NET P&L and TODAY P&L with percentage badges in Crypto view", () => {
+    useAppStore.setState({ activeMarket: "CRYPTO" });
+    renderTopBar();
+    expect(screen.getByText("NET P&L")).toBeInTheDocument();
+    expect(screen.getByText("TODAY P&L")).toBeInTheDocument();
+    // 12.5 / (312.69 - 12.5) * 100 = +4.16%
+    const pctBadges = screen.getAllByText("+4.16%");
+    expect(pctBadges.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders Net P&L and Today's P&L in Indian market view", () => {
+    useAppStore.setState({ activeMarket: "INDIA" });
+    renderTopBar();
+    expect(screen.getByText("Net P&L")).toBeInTheDocument();
+    expect(screen.getByText("Today's P&L")).toBeInTheDocument();
+  });
+
   it("triggers onMenuClick when hamburger button is clicked", () => {
     const onMenuClick = vi.fn();
     const { container } = renderTopBar(onMenuClick);

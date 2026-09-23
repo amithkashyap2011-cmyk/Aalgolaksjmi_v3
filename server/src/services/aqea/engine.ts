@@ -1001,6 +1001,14 @@ export class AQEAEngine {
         passesGate: bayesianEvaluation.passesGate,
         firstBlockReason: !bayesianEvaluation.passesGate ? "BAYESIAN_POSTERIOR_BELOW_THRESHOLD" : "NONE"
       }));
+
+      // The Bayesian gate is an execution veto, not merely telemetry.  A
+      // directional signal that fails it must not reach the order path.
+      if (!bayesianEvaluation.passesGate) {
+        activeDecision = "HOLD";
+        finalPositionSize = 0;
+        reasons.push("BAYESIAN_GATE: POSTERIOR_BELOW_THRESHOLD");
+      }
     }
 
     console.log(`[FINAL_DECISION] Decision=${activeDecision}`);

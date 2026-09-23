@@ -253,10 +253,10 @@ export async function getAutoStatus() {
   return request<{ autoTrade: boolean; spot: boolean; futures: boolean }>("/agent/auto/status");
 }
 
-export async function closePosition(tradeId: string, mode = "PAPER") {
+export async function closePosition(tradeId: string, mode = "PAPER", force = false) {
   return request("/trading/close-position", {
     method: "POST",
-    body: JSON.stringify({ tradeId, mode }),
+    body: JSON.stringify({ tradeId, mode, force }),
   });
 }
 
