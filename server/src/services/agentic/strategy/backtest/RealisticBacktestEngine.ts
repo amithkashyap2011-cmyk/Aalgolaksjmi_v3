@@ -10,6 +10,7 @@
  *   - Lot size rounding and capital margin verification
  */
 
+import { optionContracts } from "../../../indianMarket/angelOne/optionContracts.js";
 import { OHLC } from "../../../indicatorService.js";
 import { IndianCostModel } from "../../../indianMarket/costModel.js";
 import { InstrumentType, OrderAction } from "../../../indianMarket/strategyTypes.js";
@@ -49,7 +50,21 @@ export class RealisticBacktestEngine {
     const initialCapital = config.initialCapital || 100_000;
     const slippageBps = config.slippageBps !== undefined ? config.slippageBps : 2.0; // 2 bps default
     const spreadBps = config.spreadBps !== undefined ? config.spreadBps : 1.0;
-    const lotSize = config.lotSize || this.resolveLotSize(dsl.underlying);
+    // Crypto has no exchange lot: size 10% of capital at the first price.
+    // It fell through to the NIFTY default of 25, i.e. 25 BTC (~$2.1M) per
+    // trade on a 100k account, so one stop-out erased ~45% of equity.
+    const isCrypto = /USDT$|^(BTC|ETH|SOL|BNB|XRP|DOGE|ADA)$/.test(String(dsl.underlying).toUpperCase());
+    const firstPx = Number(candles[0]?.close) || 1;
+    const lotSize = config.lotSize || (isCrypto
+      ? Number(((initialCapital * 0.1) / firstPx).toPrecision(4))
+      : this.resolveLotSize(dsl.underlying));
+    // Crypto pays the Binance taker fee (0.1% of notional), not Indian
+    // STT / stamp duty / SEBI / GST / ₹20-per-order brokerage.
+    const costOf = (o: Parameters<typeof IndianCostModel.calculateOrderCost>[0]) => {
+      if (!isCrypto) return IndianCostModel.calculateOrderCost(o);
+      const fee = Number((o.price * o.quantity * 0.001).toFixed(4));
+      return { ...IndianCostModel.calculateOrderCost(o), stt: 0, exchangeTxn: fee, sebi: 0, stampDuty: 0, gst: 0, brokerage: 0, totalCharges: fee };
+    };
     const slippageRatio = slippageBps / 10000;
     const spreadHalfRatio = (spreadBps / 10000) / 2;
 
@@ -167,7 +182,7 @@ export class RealisticBacktestEngine {
               : (activeTrade.entryPrice! - actualExitPrice) * qty;
 
           // Calculate exit charges via Indian Cost Model
-          const exitCosts = IndianCostModel.calculateOrderCost({
+          const exitCosts = costOf({
             instrumentType: (dsl.entry.instrumentType as InstrumentType) || "FUTURE",
             action: (activeTrade.direction === "BUY" ? "SELL" : "BUY") as OrderAction,
             price: actualExitPrice,
@@ -195,7 +210,7 @@ export class RealisticBacktestEngine {
             exitPrice: Number(actualExitPrice.toFixed(2)),
             quantity: qty,
             grossPnl: Number(grossPnl.toFixed(2)),
-            brokerage: 40.0, // ₹20 entry + ₹20 exit
+            brokerage: isCrypto ? 0 : 40.0, // ₹20 entry + ₹20 exit (none on Binance)
             stt: Number((exitCosts.stt + (activeTrade.stt || 0)).toFixed(2)),
             exchangeFee: Number((exitCosts.exchangeTxn + (activeTrade.exchangeFee || 0)).toFixed(2)),
             sebiFee: Number((exitCosts.sebi + (activeTrade.sebiFee || 0)).toFixed(2)),
@@ -233,7 +248,7 @@ export class RealisticBacktestEngine {
           const quantity = lotSize; // 1 lot standardized sizing
 
           // Calculate entry charges via IndianCostModel
-          const entryCosts = IndianCostModel.calculateOrderCost({
+          const entryCosts = costOf({
             instrumentType: (dsl.entry.instrumentType as InstrumentType) || "FUTURE",
             action: (entryEval.direction === "BUY" ? "BUY" : "SELL") as OrderAction,
             price: actualEntryPrice,
@@ -289,6 +304,10 @@ export class RealisticBacktestEngine {
 
   private static resolveLotSize(symbol: string): number {
     const clean = symbol.toUpperCase();
+    // Exchange lot from the loaded Angel One contracts (NIFTY 65, BANKNIFTY 30,
+    // FINNIFTY 60, SENSEX 20 as of Sep 2026); the table below is stale.
+    const real = optionContracts.getLotSize(clean);
+    if (real) return real;
     if (clean === "BANKNIFTY") return 15;
     if (clean === "FINNIFTY") return 25;
     if (clean === "MIDCPNIFTY") return 50;

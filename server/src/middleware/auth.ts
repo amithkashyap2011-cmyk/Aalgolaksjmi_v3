@@ -15,10 +15,26 @@ export interface AuthRequest extends Request {
 /** Seeded demo account used only outside production for anonymous access. */
 export const DEMO_USER_ID = "6a39c0e7a5e2995ed257ca68";
 
+/**
+ * The no-login demo-ADMIN fallback is for local development only. It used to
+ * apply to EVERY non-production request, and the server binds 0.0.0.0, so any
+ * device on the same network got ADMIN (incl. LIVE trading routes) with no
+ * token. Now it requires a loopback peer (this machine, e.g. the Vite proxy).
+ */
+export function devBypassAllowed(req: AuthRequest): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  const isLoop = (a: string) => a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+  if (!isLoop(String((req as any).socket?.remoteAddress || ""))) return false;
+  // Through the Vite dev proxy the peer is always loopback; the original
+  // client is in X-Forwarded-For (proxy sets xfwd) and must be local too.
+  const fwd = String(req.headers?.["x-forwarded-for"] || "").split(",").map((x) => x.trim()).filter(Boolean);
+  return fwd.every(isLoop);
+}
+
 export async function authGuard(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) {
-    if (process.env.NODE_ENV !== "production") {
+    if (devBypassAllowed(req)) {
       req.userId = DEMO_USER_ID;
       req.user = { id: DEMO_USER_ID, role: "ADMIN" };
       return next();
@@ -29,7 +45,7 @@ export async function authGuard(req: AuthRequest, res: Response, next: NextFunct
 
   const token = header.slice(7).trim();
   if (!token || token === "null" || token === "undefined") {
-    if (process.env.NODE_ENV !== "production") {
+    if (devBypassAllowed(req)) {
       req.userId = DEMO_USER_ID;
       req.user = { id: DEMO_USER_ID, role: "ADMIN" };
       return next();
@@ -47,14 +63,14 @@ export async function authGuard(req: AuthRequest, res: Response, next: NextFunct
       }
       return next();
     }
-    if (process.env.NODE_ENV !== "production") {
+    if (devBypassAllowed(req)) {
       req.userId = DEMO_USER_ID;
       req.user = { id: DEMO_USER_ID, role: "ADMIN" };
       return next();
     }
     res.status(401).json({ error: "Invalid token payload" });
   } catch {
-    if (process.env.NODE_ENV !== "production") {
+    if (devBypassAllowed(req)) {
       req.userId = DEMO_USER_ID;
       req.user = { id: DEMO_USER_ID, role: "ADMIN" };
       return next();

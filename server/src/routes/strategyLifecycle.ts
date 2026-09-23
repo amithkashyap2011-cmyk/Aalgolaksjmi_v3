@@ -26,35 +26,45 @@ const researchAgent = new StrategyResearchAgent();
 /**
  * Deterministic, realistic high-fidelity chronological candle generator for Indian/crypto underlyings
  */
-function generateChronologicalCandles(underlying: string, count = 300): ITimestampedCandle[] {
+/**
+ * Real historical candles for a strategy's underlying: Angel One for Indian
+ * indices/stocks, Binance for crypto. This used to fabricate a sine-wave
+ * series around hardcoded 2024 prices (NIFTY 24,500), so every "backtest" and
+ * robustness run — and the registry metrics it overwrote — measured noise.
+ * Throws rather than falling back to synthetic data.
+ */
+const ANGEL_INTERVAL: Record<string, { name: string; minutes: number }> = {
+  "1m": { name: "ONE_MINUTE", minutes: 1 }, "5m": { name: "FIVE_MINUTE", minutes: 5 },
+  "15m": { name: "FIFTEEN_MINUTE", minutes: 15 }, "30m": { name: "THIRTY_MINUTE", minutes: 30 },
+  "1h": { name: "ONE_HOUR", minutes: 60 }, "1d": { name: "ONE_DAY", minutes: 375 },
+};
+async function fetchRealCandles(underlying: string, timeframe = "5m", count = 300): Promise<ITimestampedCandle[]> {
   const sym = String(underlying || "").toUpperCase();
-  let basePrice = 24500;
-  if (sym.includes("BANKNIFTY")) basePrice = 52000;
-  else if (sym.includes("FINNIFTY")) basePrice = 23500;
-  else if (sym.includes("SENSEX")) basePrice = 80500;
-  else if (sym.includes("BTC")) basePrice = 65000;
-  else if (sym.includes("ETH")) basePrice = 3400;
-  else if (sym.includes("RELIANCE")) basePrice = 2950;
-
-  const candles: ITimestampedCandle[] = [];
-  let price = basePrice;
-  const baseTime = Date.now() - count * 5 * 60 * 1000;
-
-  for (let i = 0; i < count; i++) {
-    const wave = Math.sin(i / 12) * (basePrice * 0.0018);
-    const drift = (i / count) * (basePrice * 0.006);
-    const noise = (Math.random() - 0.48) * (basePrice * 0.002);
-    const open = Number(price.toFixed(2));
-    const close = Number(Math.max(10, price + wave + drift + noise).toFixed(2));
-    const spread = Math.random() * (basePrice * 0.0012) + 0.5;
-    const high = Number((Math.max(open, close) + spread).toFixed(2));
-    const low = Number((Math.min(open, close) - spread).toFixed(2));
-    const volume = Math.floor(2500 + Math.random() * 7500);
-    const timestamp = baseTime + i * 5 * 60 * 1000;
-
-    candles.push({ open, high, low, close, volume, timestamp });
-    price = close;
+  const { ANGEL_INSTRUMENTS } = await import("../services/indianMarket/angelOne/instrumentTokens.js");
+  const angelKey = sym === "NIFTY" ? "NIFTY50" : sym;
+  const inst = (ANGEL_INSTRUMENTS as any)[angelKey];
+  if (inst) {
+    const { smartApi } = await import("../services/indianMarket/angelOne/smartApiClient.js");
+    const iv = ANGEL_INTERVAL[timeframe] ?? ANGEL_INTERVAL["5m"];
+    // ~375 trading minutes/day; pad for weekends/holidays.
+    const days = Math.min(iv.name === "ONE_DAY" ? count * 1.6 : Math.ceil((count * iv.minutes) / 375) * 1.6 + 4, iv.name === "ONE_MINUTE" ? 30 : 2000);
+    const to = new Date();
+    const from = new Date(to.getTime() - days * 86400_000);
+    const ist = (d: Date) => new Date(d.getTime() + 5.5 * 3600_000).toISOString().slice(0, 16).replace("T", " ");
+    const rows = await smartApi.getCandles({ exchange: inst.exchange, symboltoken: inst.token, interval: iv.name, fromdate: ist(from), todate: ist(to) });
+    const candles = (rows || []).map((r: any[]) => ({
+      timestamp: new Date(r[0]).getTime(), open: Number(r[1]), high: Number(r[2]), low: Number(r[3]), close: Number(r[4]), volume: Number(r[5]) || 0,
+    }));
+    if (candles.length < 60) throw new Error(`Only ${candles.length} real ${timeframe} candles from Angel One for ${sym}`);
+    return candles.slice(-count);
   }
+  const pair = sym.endsWith("USDT") ? sym : `${sym}USDT`;
+  const { getKlines } = await import("../services/binanceService.js");
+  const klines = await getKlines(pair, timeframe, undefined, undefined, Math.min(count, 1000));
+  const candles = klines.map((k: any) => ({
+    timestamp: Number(k.openTime), open: parseFloat(k.open), high: parseFloat(k.high), low: parseFloat(k.low), close: parseFloat(k.close), volume: parseFloat(k.volume) || 0,
+  }));
+  if (candles.length < 60) throw new Error(`Only ${candles.length} real ${timeframe} candles from Binance for ${pair}`);
   return candles;
 }
 
@@ -110,7 +120,7 @@ router.post("/research/generate", authGuard, async (req: AuthRequest, res) => {
       dsl: output.dsl,
       parameterSchema: output.suggestedParameters,
       status: "RESEARCH",
-      healthScore: 85,
+      healthScore: 0, // untested until a real backtest runs
       createdBy: "StrategyResearchAgent",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -160,9 +170,14 @@ router.post("/backtest", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
-    // Auto-generate realistic candles if omitted
+    // Real exchange candles when none are supplied (never synthetic).
     if (!candles || !candles.length) {
-      candles = generateChronologicalCandles(dsl.underlying, 300);
+      try {
+        candles = await fetchRealCandles(dsl.underlying, dsl.entry?.timeframe || dsl.timeframe, 300);
+      } catch (e: any) {
+        res.status(503).json({ success: false, error: `REAL_DATA_UNAVAILABLE: ${e?.message || e}` });
+        return;
+      }
     }
 
     // Run data quality check first
@@ -182,8 +197,7 @@ router.post("/backtest", authGuard, async (req: AuthRequest, res) => {
     if (strategyId) {
       const strat = registry.getStrategy(strategyId);
       if (strat) {
-        strat.metrics = backtestResult.metrics;
-        await registry.registerStrategy(strat);
+        await registry.updateMetrics(strategyId, backtestResult.metrics);
       }
     }
 
@@ -212,7 +226,12 @@ router.post("/validation-suite", authGuard, async (req: AuthRequest, res) => {
     }
 
     if (!candles || !candles.length) {
-      candles = generateChronologicalCandles(dsl.underlying, 300);
+      try {
+        candles = await fetchRealCandles(dsl.underlying, dsl.entry?.timeframe || dsl.timeframe, 300);
+      } catch (e: any) {
+        res.status(503).json({ success: false, error: `REAL_DATA_UNAVAILABLE: ${e?.message || e}` });
+        return;
+      }
     }
 
     const comprehensive = StrategyValidationSuite.validateStrategyComprehensively(dsl, candles);
@@ -297,8 +316,8 @@ router.post("/challenger/generate", authGuard, async (req: AuthRequest, res) => 
       marketSegment: champion.marketSegment,
       dsl: challengerOutput.dsl,
       parameterSchema: challengerOutput.suggestedParameters || {},
-      status: "PAPER",
-      healthScore: 92,
+      status: "RESEARCH",
+      healthScore: 0,
       createdBy: "ChallengerSynthesizer",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -308,16 +327,22 @@ router.post("/challenger/generate", authGuard, async (req: AuthRequest, res) => 
       codeVersion: champion.codeVersion,
       explanation: challengerOutput.explanation,
       allocationCapital: 0,
-      metrics: champion.metrics ? {
-        ...champion.metrics,
-        sharpeRatio: Number((champion.metrics.sharpeRatio + 0.16).toFixed(2)),
-        profitFactor: Number((champion.metrics.profitFactor + 0.18).toFixed(2)),
-        maxDrawdownPct: Number(Math.max(1, champion.metrics.maxDrawdownPct - 0.5).toFixed(2)),
-        winRate: Number(Math.min(95, champion.metrics.winRate + 2.2).toFixed(1)),
-        netPnl: Math.round(champion.metrics.netPnl * 1.15),
-        totalTrades: Math.max(30, champion.metrics.totalTrades),
-      } : undefined,
+      // Real metrics: backtest challenger (and champion) on the SAME real
+      // candles below. It used to copy the champion's metrics with fixed
+      // bonuses (+0.16 Sharpe, +2.2% win, ×1.15 P&L, ≥30 trades), so every
+      // challenger "beat" its champion by construction.
+      metrics: undefined,
     };
+
+    let candles;
+    try {
+      candles = await fetchRealCandles(champion.dsl.underlying, champion.dsl.entry?.timeframe || champion.timeframe, 300);
+    } catch (e: any) {
+      res.status(503).json({ success: false, error: `REAL_DATA_UNAVAILABLE: ${e?.message || e}` });
+      return;
+    }
+    challengerRecord.metrics = RealisticBacktestEngine.runBacktest(challengerRecord.dsl, candles).metrics;
+    await registry.updateMetrics(champion.strategyId, RealisticBacktestEngine.runBacktest(champion.dsl, candles).metrics);
 
     await registry.registerStrategy(challengerRecord);
 
@@ -334,6 +359,21 @@ router.post("/challenger/duel", authGuard, async (req: AuthRequest, res) => {
     if (!championId || !challengerId) {
       res.status(400).json({ success: false, error: "championId and challengerId required" });
       return;
+    }
+    // Re-test both on the same fresh real candles so the comparison is
+    // apples-to-apples (stored metrics may come from different windows).
+    const registry = AutonomousStrategyRegistry.getInstance();
+    const champ = registry.getStrategy(championId);
+    const chal = registry.getStrategy(challengerId);
+    if (champ && chal) {
+      try {
+        const candles = await fetchRealCandles(champ.dsl.underlying, champ.dsl.entry?.timeframe || champ.timeframe, 300);
+        await registry.updateMetrics(championId, RealisticBacktestEngine.runBacktest(champ.dsl, candles).metrics);
+        await registry.updateMetrics(challengerId, RealisticBacktestEngine.runBacktest(chal.dsl, candles).metrics);
+      } catch (e: any) {
+        res.status(503).json({ success: false, error: `REAL_DATA_UNAVAILABLE: ${e?.message || e}` });
+        return;
+      }
     }
     const result = await ChampionChallengerManager.promoteChallenger(championId, challengerId);
     res.json({ success: result.success, result });

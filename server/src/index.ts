@@ -2,6 +2,7 @@
  * ─── AALGOLAKSHMI V2 — Server entry ───────────────────
  * Refreshed: Clean reload triggered. (Restarted after MongoDB recovery)
  */
+import jwt from "jsonwebtoken";
 import { config } from "dotenv";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -31,7 +32,7 @@ import { SecurityConfigValidator } from "./services/indianMarket/security/securi
 // 🛡️ Fail-closed production security configuration validation (Requirements 3, 43, 44)
 SecurityConfigValidator.validate();
 
-import { authGuard } from "./middleware/auth.js";
+import { devBypassAllowed, authGuard } from "./middleware/auth.js";
 import authRouter, { ensureDefaultDemoUser } from "./routes/auth.js";
 import settingsRouter from "./routes/settings.js";
 import apikeysRouter from "./routes/apikeys.js";
@@ -516,6 +517,19 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 const server = http.createServer(app);
 io = new IOServer(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 setIO(io);
+
+// Sockets broadcast alerts and TRADE_OPENED events account-wide, and the
+// server binds 0.0.0.0 — so connections need the same gate as the REST API:
+// this machine (incl. the Vite proxy with X-Forwarded-For) or a valid JWT.
+io.use((socket, next) => {
+  const req: any = socket.request;
+  if (devBypassAllowed(req)) return next();
+  const raw = String((socket.handshake.auth as any)?.token || req.headers?.authorization || "").replace(/^Bearer\s+/i, "");
+  try {
+    if (raw && jwt.verify(raw, process.env.JWT_SECRET!)) return next();
+  } catch { /* fall through */ }
+  next(new Error("unauthorized"));
+});
 
 // ── Socket Connection Handler ──────────────────────────
 io.on("connection", (socket) => {

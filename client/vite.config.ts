@@ -7,6 +7,9 @@ const backendTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:999
 const apiProxy = {
   target: backendTarget,
   changeOrigin: true,
+  // Forward the real client IP so the API's dev no-login fallback can
+  // refuse LAN devices (the proxy itself always connects from localhost).
+  xfwd: true,
   bypass: (req: any) => {
     const accept = req.headers?.accept || '';
     const dest = req.headers?.['sec-fetch-dest'] || '';
@@ -43,7 +46,7 @@ export default defineConfig({
       '/health':        apiProxy,
       '/api':           apiProxy,
       '/aqea-ui':       apiProxy,
-      '/socket.io':     { target: backendTarget, changeOrigin: true, ws: true },
+      '/socket.io':     { target: backendTarget, changeOrigin: true, xfwd: true, ws: true },
     },
   },
   build: {

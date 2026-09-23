@@ -70,7 +70,8 @@ export class StrategyPromotionPipeline {
         currentStatus: strategy.status,
         targetStatus: strategy.status,
         passedGates: ["FULL_LIVE_DEPLOYMENT_ACTIVE"],
-        failedGates: [],
+        // Explain why nothing happened (the UI showed no reason at all).
+        failedGates: [`ALREADY_AT_FINAL_STAGE: ${strategy.status} is the last lifecycle stage — nothing to promote to.`],
         recommendation: "HOLD",
       };
     }

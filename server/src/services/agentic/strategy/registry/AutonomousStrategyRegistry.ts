@@ -119,11 +119,28 @@ export class AutonomousStrategyRegistry {
    * Registers or updates a strategy in the registry.
    * If a strategy with the same name exists, it must have an incremented version!
    */
+  /** Records measured backtest metrics without touching definition/version (allowed for LIVE). */
+  public async updateMetrics(strategyId: string, metrics: IStrategyRecord["metrics"]): Promise<void> {
+    const strat = this.memoryCache.get(strategyId);
+    if (!strat) return;
+    strat.metrics = metrics;
+    strat.updatedAt = new Date();
+    if (mongoose.connection?.readyState === 1) {
+      try {
+        await AutonomousStrategy.updateOne({ strategyId }, { $set: { metrics, updatedAt: strat.updatedAt } });
+      } catch (err: any) {
+        console.warn(`[STRATEGY_REGISTRY] DB sync warning: ${err?.message}`);
+      }
+    }
+  }
+
   public async registerStrategy(record: IStrategyRecord): Promise<IStrategyRecord> {
     // Check if an existing version exists for this strategy
     const existing = this.memoryCache.get(record.strategyId);
-    const dslChanged = existing && JSON.stringify(existing.dsl) !== JSON.stringify(record.dsl);
-    if (existing && existing.status === "LIVE" && record.version === existing.version && dslChanged) {
+    // A LIVE version is immutable: ANY re-registration of the same version is
+    // refused (it only checked DSL changes, so description/params/risk edits
+    // slipped through). Measured metrics go through updateMetrics() instead.
+    if (existing && existing.status === "LIVE" && record.version === existing.version) {
       throw new Error(
         `IMMUTABLE_VERSION_VIOLATION: Cannot overwrite LIVE production strategy ${record.name} v${record.version}. Must increment version (e.g. v${this.incrementVersion(
           record.version
@@ -266,6 +283,10 @@ export class AutonomousStrategyRegistry {
     return IndianMarketHours.getSessionStatus().isOpen;
   }
 
+  // Seeds start at RESEARCH with empty metrics. They were registered as
+  // LIVE / SHADOW / PAPER with hardcoded results (e.g. 342 trades, 68.4% win,
+  // ₹1,48,500) that no backtest ever produced; a real backtest on NIFTY 5m
+  // came out 33% win / net loss. They must now earn each stage via the gates.
   private registerDefaultProductionStrategies(): void {
     const marketOpen = this.isIndianMarketOpen();
 
@@ -315,8 +336,8 @@ export class AutonomousStrategyRegistry {
           targetRegimes: ["TRENDING_BULL", "HIGH_VOLATILITY"],
         },
         parameterSchema: { emaFast: 9, emaSlow: 21, rsiPeriod: 14 },
-        status: "LIVE",
-        healthScore: 92,
+        status: "RESEARCH",
+        healthScore: 0,
         createdBy: "SystemArchitect",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -325,7 +346,7 @@ export class AutonomousStrategyRegistry {
         codeVersion: "c2.0.0",
         allocationCapital: 500000,
         activeStage: "STAGE_1",
-        metrics: createDefaultMetrics(342, 68.4, 2.18, 148500, 4.6, 1.92),
+        metrics: createDefaultMetrics(0, 0, 0, 0, 0, 0),
         explanation: createDefaultExplanation(
           "Captures sustained directional institutional momentum on NIFTY index futures when 9-period EMA cleanly breaks above 21-period EMA accompanied by RSI expanding above 52 with positive volume confirmation.",
           "Institutional trend continuation following 15-minute opening range breakout and VWAP pullbacks during morning and mid-day sessions.",
@@ -388,8 +409,8 @@ export class AutonomousStrategyRegistry {
           targetRegimes: ["RANGING", "LOW_VOLATILITY"],
         },
         parameterSchema: { rsiThreshold: 32, bollingerSigma: 2.0 },
-        status: "LIVE",
-        healthScore: 89,
+        status: "RESEARCH",
+        healthScore: 0,
         createdBy: "StrategyResearchAgent",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -398,7 +419,7 @@ export class AutonomousStrategyRegistry {
         codeVersion: "c2.0.0",
         allocationCapital: 750000,
         activeStage: "STAGE_2",
-        metrics: createDefaultMetrics(418, 72.1, 2.34, 226400, 3.8, 2.15),
+        metrics: createDefaultMetrics(0, 0, 0, 0, 0, 0),
         explanation: createDefaultExplanation(
           "Exploits statistical mean reversion back to VWAP when BANKNIFTY stretches beyond 2.2 standard deviations on 15m Bollinger Bands while RSI displays acute divergence.",
           "Exhaustion of intraday retail speculative thrusts at round-number strikes where institutional market makers accumulate mean-reverting gamma.",
@@ -460,8 +481,8 @@ export class AutonomousStrategyRegistry {
           targetRegimes: ["TRENDING_BULL", "BREAKOUT"],
         },
         parameterSchema: { emaFast: 20, emaSlow: 50, adxMin: 22 },
-        status: "PAPER",
-        healthScore: 86,
+        status: "RESEARCH",
+        healthScore: 0,
         createdBy: "SystemArchitect",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -470,7 +491,7 @@ export class AutonomousStrategyRegistry {
         codeVersion: "c2.0.0",
         allocationCapital: 250000,
         activeStage: "STAGE_1",
-        metrics: createDefaultMetrics(194, 65.5, 1.88, 87200, 4.9, 1.81),
+        metrics: createDefaultMetrics(0, 0, 0, 0, 0, 0),
         explanation: createDefaultExplanation(
           "Constructs defined-risk Bull Call Debit Spreads (Buy ATM CE + Sell OTM CE) when Financial Services index forms higher-low structures above 20 EMA.",
           "Capped-risk upside participation while mitigating theta decay and volatility crush through the short leg.",
@@ -531,8 +552,8 @@ export class AutonomousStrategyRegistry {
           targetRegimes: ["RANGING", "LOW_VOLATILITY"],
         },
         parameterSchema: { maxAdx: 20, rsiCenter: 50 },
-        status: "SHADOW",
-        healthScore: 91,
+        status: "RESEARCH",
+        healthScore: 0,
         createdBy: "StrategyResearchAgent",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -541,7 +562,7 @@ export class AutonomousStrategyRegistry {
         codeVersion: "c2.0.0",
         allocationCapital: 300000,
         activeStage: "STAGE_1",
-        metrics: createDefaultMetrics(265, 77.8, 2.45, 178900, 2.9, 2.38),
+        metrics: createDefaultMetrics(0, 0, 0, 0, 0, 0),
         explanation: createDefaultExplanation(
           "Non-directional delta-neutral 4-leg credit spread collecting rapid theta decay on SENSEX Friday expiries when India VIX remains below 16.",
           "Overpricing of far OTM options implied volatility relative to realized intraday standard deviation on expiry day.",
@@ -603,8 +624,8 @@ export class AutonomousStrategyRegistry {
           targetRegimes: ["TRENDING_BULL", "HIGH_VOLATILITY"],
         },
         parameterSchema: { emaFast: 9, emaSlow: 21, adxTrend: 25 },
-        status: "LIVE",
-        healthScore: 94,
+        status: "RESEARCH",
+        healthScore: 0,
         createdBy: "LakshmiMasterEngine",
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -613,7 +634,7 @@ export class AutonomousStrategyRegistry {
         codeVersion: "c3.0.0",
         allocationCapital: 1000000,
         activeStage: "FULL",
-        metrics: createDefaultMetrics(512, 70.3, 2.22, 342100, 5.2, 2.08),
+        metrics: createDefaultMetrics(0, 0, 0, 0, 0, 0),
         explanation: createDefaultExplanation(
           "Combines Lakshmi Master Router with Ohmkara octave harmonic frequency and multi-timeframe EMA alignment to capture regime breakout expansions.",
           "Cryptocurrency momentum clustering and cascade liquidations driving explosive continuation trends.",

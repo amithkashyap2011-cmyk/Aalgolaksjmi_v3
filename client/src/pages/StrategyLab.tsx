@@ -87,22 +87,6 @@ async function getAuthHeaders() {
   };
 }
 
-function generateSampleEquityCurve(strat?: StrategyRecord | null): number[] {
-  const base = 100000;
-  const target = base + (strat?.metrics?.netPnl || 148500);
-  const steps = 40;
-  const data: number[] = [base];
-  let curr = base;
-  for (let i = 1; i <= steps; i++) {
-    const progress = i / steps;
-    const trend = (target - base) * progress;
-    const noise = (Math.sin(i * 1.5) + (Math.random() - 0.45) * 1.2) * (base * 0.015);
-    curr = Math.round(base + trend + noise);
-    data.push(curr);
-  }
-  data[data.length - 1] = target;
-  return data;
-}
 
 export default function StrategyLab() {
   const [strategies, setStrategies] = useState<StrategyRecord[]>([]);
@@ -153,7 +137,7 @@ export default function StrategyLab() {
           setSelectedStrategy((prev) => {
             const found = prev ? data.strategies.find((s: StrategyRecord) => s.strategyId === prev.strategyId) : null;
             const chosen = found || data.strategies[0];
-            setEquityData(generateSampleEquityCurve(chosen));
+            setEquityData([]); // no fabricated curve — run a backtest
             return chosen;
           });
         }
@@ -203,7 +187,7 @@ export default function StrategyLab() {
         const btData = await btRes.json();
         if (btData.success && btData.backtestResult) {
           const rawCurve = btData.backtestResult.equityCurve?.map((p: any) => Math.round(Number(p.equity))) || [];
-          setEquityData(rawCurve.length > 5 ? rawCurve : generateSampleEquityCurve(strat));
+          setEquityData(rawCurve);
           if (btData.backtestResult.metrics) {
             const updatedMetrics = { ...strat.metrics, ...btData.backtestResult.metrics };
             setSelectedStrategy((prev) =>
@@ -215,7 +199,11 @@ export default function StrategyLab() {
           }
         }
       } else {
-        setEquityData(generateSampleEquityCurve(strat));
+        // Surface the real failure (e.g. REAL_DATA_UNAVAILABLE) instead of
+        // drawing a made-up curve and announcing success.
+        const err = await btRes.json().catch(() => ({}));
+        setNotification({ type: "error", message: `Backtest failed: ${err.error || `HTTP ${btRes.status}`}` });
+        return;
       }
 
       if (valRes.ok) {
@@ -232,10 +220,9 @@ export default function StrategyLab() {
         }
       }
 
-      setNotification({ type: "success", message: `Zero look-ahead backtest & walk-forward completed for ${strat.name}!` });
+      setNotification({ type: "success", message: `Backtest on real ${(strat as any).dsl?.timeframe || ""} candles completed for ${strat.name}.` });
     } catch (e: any) {
-      setEquityData(generateSampleEquityCurve(strat));
-      setNotification({ type: "error", message: `Backtest run note: ${e.message}` });
+      setNotification({ type: "error", message: `Backtest failed: ${e.message}` });
     } finally {
       setBacktesting(false);
     }
@@ -243,7 +230,7 @@ export default function StrategyLab() {
 
   const handleSelectStrategy = (s: StrategyRecord) => {
     setSelectedStrategy(s);
-    setEquityData(generateSampleEquityCurve(s));
+    setEquityData([]); // no fabricated curve — run a backtest
   };
 
   const handleGenerateResearch = async () => {
@@ -262,7 +249,7 @@ export default function StrategyLab() {
         await fetchRegistry();
         if (data.registeredStrategy) {
           setSelectedStrategy(data.registeredStrategy);
-          setEquityData(generateSampleEquityCurve(data.registeredStrategy));
+          setEquityData([]); // no fabricated curve — run a backtest
         }
       }
     } catch (e: any) {
