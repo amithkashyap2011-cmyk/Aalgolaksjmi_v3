@@ -102,13 +102,14 @@ export default function StrategyLab() {
   const [researchRegime, setResearchRegime] = useState("TRENDING_BULL");
 
   // Backtest / Walk-forward simulation data
-  const [equityData, setEquityData] = useState<number[]>([]);
-  const [walkForwardFolds, setWalkForwardFolds] = useState<any[]>([
-    { fold: 1, isSharpe: "1.95", oosSharpe: "1.82", wfe: "0.93", pnl: "37,125" },
-    { fold: 2, isSharpe: "2.10", oosSharpe: "1.88", wfe: "0.89", pnl: "42,800" },
-    { fold: 3, isSharpe: "1.78", oosSharpe: "1.65", wfe: "0.92", pnl: "31,450" },
-    { fold: 4, isSharpe: "2.05", oosSharpe: "1.91", wfe: "0.93", pnl: "37,125" },
-  ]);
+  const [equityData, setEquityData] = useState<[number, number][]>([]);
+  // Real candles + the backtest's trades, for the BUY/SELL price chart.
+  const [priceData, setPriceData] = useState<[number, number][]>([]);
+  const [btTrades, setBtTrades] = useState<any[]>([]);
+  // Real validation-suite output (walk-forward, Monte Carlo, robustness,
+  // verdict). The panels showed hardcoded folds and "PASS" badges before.
+  const [walkForwardFolds, setWalkForwardFolds] = useState<any[]>([]);
+  const [validation, setValidation] = useState<any | null>(null);
 
   // Champion vs Challenger state
   const [challenger, setChallenger] = useState<any | null>(null);
@@ -137,7 +138,7 @@ export default function StrategyLab() {
           setSelectedStrategy((prev) => {
             const found = prev ? data.strategies.find((s: StrategyRecord) => s.strategyId === prev.strategyId) : null;
             const chosen = found || data.strategies[0];
-            setEquityData([]); // no fabricated curve — run a backtest
+            setEquityData([]); setPriceData([]); setBtTrades([]); // no fabricated curve — run a backtest
             return chosen;
           });
         }
@@ -186,8 +187,10 @@ export default function StrategyLab() {
       if (btRes.ok) {
         const btData = await btRes.json();
         if (btData.success && btData.backtestResult) {
-          const rawCurve = btData.backtestResult.equityCurve?.map((p: any) => Math.round(Number(p.equity))) || [];
+          const rawCurve: [number, number][] = btData.backtestResult.equityCurve?.map((p: any) => [Number(p.time), Math.round(Number(p.equity))]) || [];
           setEquityData(rawCurve);
+          setPriceData(btData.priceSeries || []);
+          setBtTrades(btData.backtestResult.trades || []);
           if (btData.backtestResult.metrics) {
             const updatedMetrics = { ...strat.metrics, ...btData.backtestResult.metrics };
             setSelectedStrategy((prev) =>
@@ -208,16 +211,14 @@ export default function StrategyLab() {
 
       if (valRes.ok) {
         const valData = await valRes.json();
-        if (valData.success && valData.validation?.walkForwardFolds?.length > 0) {
-          const formatted = valData.validation.walkForwardFolds.map((f: any) => ({
-            fold: f.foldIndex,
-            isSharpe: Number(f.inSampleSharpe || 0).toFixed(2),
-            oosSharpe: Number(f.outOfSampleSharpe || 0).toFixed(2),
-            wfe: Number(f.walkForwardEfficiency || 0.72).toFixed(2),
-            pnl: Math.abs(Math.round(f.outOfSamplePnl || (strat.metrics?.netPnl || 50000) / 4)),
-          }));
-          setWalkForwardFolds(formatted);
-        }
+        setValidation(valData.success ? valData.validation : null);
+        setWalkForwardFolds((valData.validation?.walkForwardFolds || []).map((f: any) => ({
+          fold: f.foldIndex,
+          isSharpe: Number(f.inSampleSharpe || 0).toFixed(2),
+          oosSharpe: Number(f.outOfSampleSharpe || 0).toFixed(2),
+          wfe: Number(f.walkForwardEfficiency || 0).toFixed(2),
+          pnl: Math.round(Number(f.outOfSamplePnl || 0)),
+        })));
       }
 
       setNotification({ type: "success", message: `Backtest on real ${(strat as any).dsl?.timeframe || ""} candles completed for ${strat.name}.` });
@@ -230,7 +231,7 @@ export default function StrategyLab() {
 
   const handleSelectStrategy = (s: StrategyRecord) => {
     setSelectedStrategy(s);
-    setEquityData([]); // no fabricated curve — run a backtest
+    setEquityData([]); setPriceData([]); setBtTrades([]); // no fabricated curve — run a backtest
   };
 
   const handleGenerateResearch = async () => {
@@ -249,7 +250,7 @@ export default function StrategyLab() {
         await fetchRegistry();
         if (data.registeredStrategy) {
           setSelectedStrategy(data.registeredStrategy);
-          setEquityData([]); // no fabricated curve — run a backtest
+          setEquityData([]); setPriceData([]); setBtTrades([]); // no fabricated curve — run a backtest
         }
       }
     } catch (e: any) {
@@ -351,52 +352,118 @@ export default function StrategyLab() {
     return s.status === statusFilter;
   });
 
+  // Instrument currency + exchange time zone for the charts.
+  const underlying = String((selectedStrategy as any)?.dsl?.underlying || selectedStrategy?.instrument || "").toUpperCase();
+  const isCryptoStrat = /USDT$|^(BTC|ETH|SOL|BNB|XRP|DOGE|ADA)$/.test(underlying);
+  const cur = isCryptoStrat ? "$" : "₹";
+  const fmtMoney = (v: number) => cur + Number(v).toLocaleString(isCryptoStrat ? "en-US" : "en-IN", { maximumFractionDigits: 2 });
+  // Trading-time x axis: one step per candle, so nights/weekends (no candles)
+  // don't render as long flat lines. Labels/tooltips show the real time.
+  const candleTimes = priceData.map((p) => p[0]);
+  const toIdx = (t: number) => {
+    let lo = 0, hi = candleTimes.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (candleTimes[mid] < t) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  const tz = isCryptoStrat ? undefined : "Asia/Kolkata";
+  const fmtT = (idx: number, withDay = true) => {
+    const t = candleTimes[Math.max(0, Math.min(candleTimes.length - 1, Math.round(idx)))];
+    if (t === undefined) return "";
+    return new Date(t).toLocaleString("en-IN", { timeZone: tz, ...(withDay ? { day: "2-digit", month: "short" } : {}), hour: "2-digit", minute: "2-digit", hour12: false });
+  };
+  const baseChart = {
+    backgroundColor: "transparent",
+    style: { fontFamily: "inherit" },
+  };
+  const xAxisOpts: Highcharts.XAxisOptions = {
+    type: "linear",
+    tickPixelInterval: 110,
+    // Same range on both charts so signals line up with the equity steps.
+    min: 0,
+    max: Math.max(0, candleTimes.length - 1),
+    labels: { style: { color: S.muted, fontSize: "10px" }, formatter: function () { return fmtT(Number(this.value)); } },
+    lineColor: S.border,
+    tickColor: S.border,
+    crosshair: { color: "rgba(255,255,255,0.15)" },
+  };
+
   const chartOptions: Highcharts.Options = {
-    chart: {
-      backgroundColor: "transparent",
-      type: "area",
-      height: 240,
-    },
+    chart: { ...baseChart, type: "area", height: 200 },
     title: { text: undefined },
     credits: { enabled: false },
-    xAxis: {
-      labels: { style: { color: S.muted, fontSize: "10px" } },
-      lineColor: S.border,
-      tickColor: S.border,
-    },
+    xAxis: xAxisOpts,
     yAxis: {
       title: { text: undefined },
       gridLineColor: "rgba(255,255,255,0.04)",
-      labels: {
-        style: { color: S.muted, fontSize: "10px" },
-        formatter: function () {
-          return "₹" + Number(this.value).toLocaleString("en-IN");
-        },
-      },
+      // Scale to the data, not from 0 — a ±5% move looked flat on a 0-based axis.
+      startOnTick: false,
+      endOnTick: false,
+      labels: { style: { color: S.muted, fontSize: "10px" }, formatter: function () { return fmtMoney(Number(this.value)); } },
+      plotLines: equityData.length ? [{ value: equityData[0][1], color: "rgba(255,255,255,0.25)", dashStyle: "Dash", width: 1, label: { text: "Start", style: { color: S.muted, fontSize: "10px" } } }] : [],
     },
     legend: { enabled: false },
     tooltip: {
       backgroundColor: S.surface,
       borderColor: S.border,
       style: { color: S.text, fontSize: "12px" },
-      valuePrefix: "₹",
+      headerFormat: "",
+      pointFormatter: function () { return `${fmtT(Number(this.x))}<br/>Equity: <b>${fmtMoney(Number(this.y))}</b>`; },
     },
+    plotOptions: { area: { marker: { enabled: false }, threshold: null, lineWidth: 2 } },
     series: [
       {
         type: "area",
         name: "Backtest Equity",
-        data: equityData,
-        color: S.green,
-        fillColor: {
-          linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
-          stops: [
-            [0, "rgba(16, 185, 129, 0.25)"],
-            [1, "rgba(16, 185, 129, 0.00)"],
-          ],
-        },
+        data: equityData.map(([t, v]) => [toIdx(t), v]),
+        color: equityData.length && equityData[equityData.length - 1][1] < equityData[0][1] ? S.red : S.green,
+        negativeColor: undefined,
+        fillOpacity: 0.15,
       },
     ],
   };
+
+  // Price with the strategy's entries/exits. LONG: BUY at entry, SELL at exit.
+  // SHORT: SELL at entry, BUY (cover) at exit.
+  const buyPts: any[] = [];
+  const sellPts: any[] = [];
+  for (const t of btTrades) {
+    const long = t.direction === "BUY";
+    const win = Number(t.netPnl) >= 0;
+    const entry = { x: toIdx(Number(t.entryTimestamp)), y: Number(t.entryPrice), info: `${long ? "BUY" : "SELL (short)"} entry — ${t.regime || ""}` };
+    const exit = { x: toIdx(Number(t.exitTimestamp)), y: Number(t.exitPrice), info: `${long ? "SELL" : "BUY (cover)"} exit — ${t.exitReason} · ${win ? "+" : ""}${fmtMoney(Number(t.netPnl))}` };
+    (long ? buyPts : sellPts).push(entry);
+    (long ? sellPts : buyPts).push(exit);
+  }
+  const priceChartOptions: Highcharts.Options = {
+    chart: { ...baseChart, height: 240 },
+    title: { text: undefined },
+    credits: { enabled: false },
+    xAxis: xAxisOpts,
+    yAxis: {
+      title: { text: undefined },
+      gridLineColor: "rgba(255,255,255,0.04)",
+      startOnTick: false,
+      endOnTick: false,
+      labels: { style: { color: S.muted, fontSize: "10px" }, formatter: function () { return fmtMoney(Number(this.value)); } },
+    },
+    legend: { enabled: true, itemStyle: { color: S.muted, fontSize: "11px" }, itemHoverStyle: { color: S.text } },
+    tooltip: {
+      backgroundColor: S.surface,
+      borderColor: S.border,
+      style: { color: S.text, fontSize: "12px" },
+      headerFormat: "",
+      pointFormatter: function () {
+        const p: any = this;
+        return `${fmtT(p.x)}<br/>` + (p.info ? `<b>${p.info}</b><br/>@ ${fmtMoney(p.y)}` : `Price: <b>${fmtMoney(p.y)}</b>`);
+      },
+    },
+    series: [
+      { type: "line", name: `${underlying || "Price"} (close)`, data: priceData.map((p, i) => [i, p[1]]), color: "#94a3b8", lineWidth: 1.2, marker: { enabled: false }, enableMouseTracking: true },
+      { type: "scatter", name: "AI BUY", data: buyPts, color: S.green, marker: { symbol: "triangle", radius: 7, lineColor: "#000", lineWidth: 1 } },
+      { type: "scatter", name: "AI SELL", data: sellPts, color: S.red, marker: { symbol: "triangle-down", radius: 7, lineColor: "#000", lineWidth: 1 } },
+    ],
+  };
+
 
   return (
     <div style={{ padding: "20px", background: S.bg, minHeight: "100vh", color: S.text }}>
@@ -1030,10 +1097,10 @@ export default function StrategyLab() {
 
               <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                 <div style={{ display: "flex", gap: "16px", fontSize: "12px", fontFamily: "monospace" }}>
-                  <span>Sharpe: <strong style={{ color: S.green }}>{selectedStrategy?.metrics?.sharpeRatio ? selectedStrategy.metrics.sharpeRatio.toFixed(2) : "1.92"}</strong></span>
-                  <span>MaxDD: <strong style={{ color: S.red }}>{selectedStrategy?.metrics?.maxDrawdownPct ? `${selectedStrategy.metrics.maxDrawdownPct.toFixed(1)}%` : "4.6%"}</strong></span>
-                  <span>Win Rate: <strong style={{ color: S.green }}>{selectedStrategy?.metrics?.winRate ? `${selectedStrategy.metrics.winRate.toFixed(1)}%` : "68.4%"}</strong></span>
-                  <span>Trades: <strong style={{ color: S.text }}>{selectedStrategy?.metrics?.totalTrades || 342}</strong></span>
+                  <span>Sharpe: <strong style={{ color: (selectedStrategy?.metrics?.sharpeRatio ?? 0) >= 0 ? S.green : S.red }}>{selectedStrategy?.metrics?.totalTrades ? selectedStrategy.metrics.sharpeRatio.toFixed(2) : "—"}</strong></span>
+                  <span>MaxDD: <strong style={{ color: S.red }}>{selectedStrategy?.metrics?.totalTrades ? `${selectedStrategy.metrics.maxDrawdownPct.toFixed(1)}%` : "—"}</strong></span>
+                  <span>Win Rate: <strong style={{ color: (selectedStrategy?.metrics?.winRate ?? 0) >= 50 ? S.green : S.red }}>{selectedStrategy?.metrics?.totalTrades ? `${selectedStrategy.metrics.winRate.toFixed(1)}%` : "—"}</strong></span>
+                  <span>Trades: <strong style={{ color: S.text }}>{selectedStrategy?.metrics?.totalTrades ?? "—"}</strong></span>
                 </div>
 
                 <button
@@ -1059,7 +1126,20 @@ export default function StrategyLab() {
               </div>
             </div>
 
-            <HighchartsReact highcharts={Highcharts} options={chartOptions} />
+            {priceData.length > 0 ? (
+              <>
+                <div style={{ fontSize: "11px", color: S.muted, margin: "4px 0 2px" }}>
+                  Price with the strategy's signals — ▲ <span style={{ color: S.green }}>BUY</span> / ▼ <span style={{ color: S.red }}>SELL</span> (hover a marker for the reason and P&L)
+                </div>
+                <HighchartsReact highcharts={Highcharts} options={priceChartOptions} />
+                <div style={{ fontSize: "11px", color: S.muted, margin: "8px 0 2px" }}>Equity after each trade (net of charges)</div>
+                <HighchartsReact highcharts={Highcharts} options={chartOptions} />
+              </>
+            ) : (
+              <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: S.muted, fontSize: "12px", border: `1px dashed ${S.border}`, borderRadius: 8 }}>
+                Run a backtest to see real price, AI buy/sell signals and equity.
+              </div>
+            )}
           </div>
 
           {/* Walk-Forward & Monte Carlo Breakdown */}
@@ -1078,9 +1158,15 @@ export default function StrategyLab() {
                   <Gauge size={16} style={{ color: S.accent }} />
                   Walk-Forward Fold Efficiency (WFE &gt; 0.70 Target)
                 </h3>
-                <span style={{ fontSize: "10px", color: S.green, fontWeight: 700, background: "rgba(16,185,129,0.1)", padding: "2px 6px", borderRadius: "4px" }}>
-                  OUT-OF-SAMPLE VALIDATED
-                </span>
+                {validation && (() => {
+                  const wfe = Number(validation.walkForwardEfficiency || 0);
+                  const ok = wfe >= 0.4 && !validation.oosResult?.isOverfit;
+                  return (
+                    <span style={{ fontSize: "10px", color: ok ? S.green : S.red, fontWeight: 700, background: ok ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.12)", padding: "2px 6px", borderRadius: "4px" }}>
+                      {ok ? `OOS VALIDATED · WFE ${wfe.toFixed(2)}` : `FAILED · WFE ${wfe.toFixed(2)}${validation.oosResult?.isOverfit ? " · OVERFIT" : ""}`}
+                    </span>
+                  );
+                })()}
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                 <thead>
@@ -1097,9 +1183,9 @@ export default function StrategyLab() {
                     <tr key={f.fold} style={{ borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
                       <td style={{ padding: "8px" }}>Fold #{f.fold}</td>
                       <td style={{ padding: "8px", fontFamily: "monospace" }}>{f.isSharpe}</td>
-                      <td style={{ padding: "8px", fontFamily: "monospace", color: S.green }}>{f.oosSharpe}</td>
+                      <td style={{ padding: "8px", fontFamily: "monospace", color: Number(f.oosSharpe) >= 0 ? S.green : S.red }}>{f.oosSharpe}</td>
                       <td style={{ padding: "8px", fontFamily: "monospace", color: S.cyan }}>{f.wfe}</td>
-                      <td style={{ padding: "8px", fontFamily: "monospace", color: S.green }}>+₹{f.pnl}</td>
+                      <td style={{ padding: "8px", fontFamily: "monospace", color: f.pnl >= 0 ? S.green : S.red }}>{f.pnl >= 0 ? "+" : "−"}{fmtMoney(Math.abs(f.pnl))}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1118,33 +1204,44 @@ export default function StrategyLab() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
                 <h3 style={{ fontSize: "14px", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: "6px" }}>
                   <Shield size={16} style={{ color: S.green }} />
-                  Monte Carlo Robustness (1,000 Iterations)
+                  Monte Carlo Robustness{validation?.monteCarloResults ? ` (${validation.monteCarloResults.iterations} runs)` : ""}
                 </h3>
-                <span style={{ fontSize: "10px", color: S.green, fontWeight: 700, background: "rgba(16,185,129,0.1)", padding: "2px 6px", borderRadius: "4px" }}>
-                  PASS: ZERO RUIN
-                </span>
+                {validation?.monteCarloResults && (() => {
+                  const mc = validation.monteCarloResults;
+                  const ok = Number(mc.riskOfRuinPct) === 0 && Number(mc.p5NetPnl) > 0;
+                  return (
+                    <span style={{ fontSize: "10px", color: ok ? S.green : S.red, fontWeight: 700, background: ok ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.12)", padding: "2px 6px", borderRadius: "4px" }}>
+                      {ok ? "PASS" : "FAIL"} · {mc.iterations} runs
+                    </span>
+                  );
+                })()}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "10px", fontSize: "12px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${S.border}`, paddingBottom: "6px" }}>
-                  <span style={{ color: S.muted }}>Risk of Ruin (&gt;20% DD):</span>
-                  <strong style={{ color: S.green, fontFamily: "monospace" }}>0.00% (PASSED)</strong>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${S.border}`, paddingBottom: "6px" }}>
-                  <span style={{ color: S.muted }}>95th Percentile Max Drawdown:</span>
-                  <strong style={{ color: S.amber, fontFamily: "monospace" }}>
-                    {selectedStrategy?.metrics?.maxDrawdownPct != null ? `${selectedStrategy.metrics.maxDrawdownPct}%` : "4.6%"}
-                  </strong>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${S.border}`, paddingBottom: "6px" }}>
-                  <span style={{ color: S.muted }}>5th Percentile Net Profit:</span>
-                  <strong style={{ color: S.green, fontFamily: "monospace" }}>
-                    ₹{selectedStrategy?.metrics?.netPnl ? selectedStrategy.metrics.netPnl.toLocaleString("en-IN") : "148,500"}
-                  </strong>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: S.muted }}>Parameter Stability:</span>
-                  <strong style={{ color: S.cyan, fontFamily: "monospace" }}>Robust (96.4% Zone Stability)</strong>
-                </div>
+                {(() => {
+                  const mc = validation?.monteCarloResults;
+                  const pr = validation?.parameterRobustness;
+                  if (!mc) return <div style={{ color: S.muted }}>Run a backtest to see Monte Carlo results.</div>;
+                  const row = (label: string, val: string, color: string) => (
+                    <div key={label} style={{ display: "flex", justifyContent: "space-between", borderBottom: `1px solid ${S.border}`, paddingBottom: "6px" }}>
+                      <span style={{ color: S.muted }}>{label}</span>
+                      <strong style={{ color, fontFamily: "monospace" }}>{val}</strong>
+                    </div>
+                  );
+                  const signed = (v: number) => `${v >= 0 ? "+" : "−"}${fmtMoney(Math.abs(v))}`;
+                  return (
+                    <>
+                      {row("Risk of Ruin (>20% DD):", `${Number(mc.riskOfRuinPct).toFixed(2)}%`, Number(mc.riskOfRuinPct) === 0 ? S.green : S.red)}
+                      {row("95th Percentile Max Drawdown:", `${Number(mc.maxDrawdownP95).toFixed(2)}%`, S.amber)}
+                      {row("Net P&L — 5th / 50th / 95th pct:", `${signed(mc.p5NetPnl)} / ${signed(mc.p50NetPnl)} / ${signed(mc.p95NetPnl)}`, Number(mc.p50NetPnl) >= 0 ? S.green : S.red)}
+                      {pr && row("Parameter Stability:", `${pr.isFragile ? "Fragile" : "Robust"} (${pr.stableVariationsCount}/${pr.testedVariationsCount} variations stable)`, pr.isFragile ? S.red : S.cyan)}
+                      {validation?.blockerReasons?.length > 0 && (
+                        <div style={{ color: S.red, fontSize: "11px", lineHeight: 1.5 }}>
+                          {validation.blockerReasons.map((r: string) => <div key={r}>• {r}</div>)}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -1219,9 +1316,9 @@ export default function StrategyLab() {
                 {selectedStrategy?.name || "NIFTY_EMA_BREAKOUT"} v{selectedStrategy?.version || "1.0.0"}
               </div>
               <div style={{ marginTop: "12px", fontSize: "12px", display: "flex", flexDirection: "column", gap: "6px" }}>
-                <div>Sharpe Ratio: <strong>{selectedStrategy?.metrics?.sharpeRatio ? selectedStrategy.metrics.sharpeRatio.toFixed(2) : "1.92"}</strong></div>
-                <div>Profit Factor: <strong>{selectedStrategy?.metrics?.profitFactor ? selectedStrategy.metrics.profitFactor.toFixed(2) : "2.18"}</strong></div>
-                <div>Max Drawdown: <strong>{selectedStrategy?.metrics?.maxDrawdownPct ? `${selectedStrategy.metrics.maxDrawdownPct}%` : "4.6%"}</strong></div>
+                <div>Sharpe Ratio: <strong>{selectedStrategy?.metrics?.totalTrades ? selectedStrategy.metrics.sharpeRatio.toFixed(2) : "—"}</strong></div>
+                <div>Profit Factor: <strong>{selectedStrategy?.metrics?.totalTrades ? selectedStrategy.metrics.profitFactor.toFixed(2) : "—"}</strong></div>
+                <div>Max Drawdown: <strong>{selectedStrategy?.metrics?.totalTrades ? `${selectedStrategy.metrics.maxDrawdownPct}%` : "—"}</strong></div>
                 <div>Status: <span style={{ color: S.green }}>{selectedStrategy?.status || "LIVE"}</span></div>
               </div>
             </div>

@@ -201,7 +201,9 @@ router.post("/backtest", authGuard, async (req: AuthRequest, res) => {
       }
     }
 
-    res.json({ success: true, backtestResult, dataQualityReport: dq });
+    // Price series for the UI's buy/sell chart (same candles the backtest used).
+    const priceSeries = candles.map((c: any) => [Number(c.timestamp), Number(c.close)]);
+    res.json({ success: true, backtestResult, dataQualityReport: dq, priceSeries });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
