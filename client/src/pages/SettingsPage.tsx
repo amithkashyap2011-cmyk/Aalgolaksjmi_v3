@@ -300,14 +300,14 @@ export default function SettingsPage() {
         }
         api.getSettings().then((s: any) => {
           if (s) {
-            const hasKeys = !!(s.angelOneApiKey || s.angelOneClientCode);
+            // The server no longer returns Angel One secrets (API key / PIN /
+            // TOTP secret) — only "<field>Set" flags. Secret inputs stay empty;
+            // leaving one blank on save keeps the stored value.
+            const hasKeys = !!(s.angelOneApiKeySet || s.angelOneClientCode);
             setAngelSaved(hasKeys);
             setAngelEditing(!hasKeys);
             setAngelDisabled(!!s.angelOneDisabled);
-            if (s.angelOneApiKey) setAngelApiKey(s.angelOneApiKey);
             if (s.angelOneClientCode) setAngelClientCode(s.angelOneClientCode);
-            if (s.angelOnePin) setAngelPin(s.angelOnePin);
-            if (s.angelOneTotpSecret) setAngelTotp(s.angelOneTotpSecret);
           }
         }).catch(() => {});
       }).catch(() => {});
@@ -590,7 +590,9 @@ export default function SettingsPage() {
                             <button
                               disabled={angelSaving}
                               onClick={async () => {
-                                if (!angelApiKey || !angelClientCode) {
+                                // Only required when nothing is stored yet — a blank
+                                // field on update keeps the saved (encrypted) value.
+                                if ((!angelApiKey && !angelSaved) || !angelClientCode) {
                                   setAngelMsg({ ok: false, text: "PLEASE_ENTER_API_KEY_AND_CLIENT_CODE" });
                                   return;
                                 }
@@ -607,7 +609,6 @@ export default function SettingsPage() {
                                   setAngelSaved(true);
                                   setAngelEditing(false);
                                   setAngelApiKey("");
-                                  setAngelClientCode("");
                                   setAngelPin("");
                                   setAngelTotp("");
                                   setAngelMsg({ ok: true, text: "ANGEL_ONE_CREDENTIALS_STORED_SECURELY" });
@@ -675,12 +676,13 @@ export default function SettingsPage() {
                               <button
                                 onClick={async () => {
                                   if (!confirm("Delete Angel One credentials?")) return;
+                                  // null clears a secret; "" would mean "unchanged".
                                   await api.updateSettings({
-                                    angelOneApiKey: "",
+                                    angelOneApiKey: null,
                                     angelOneClientCode: "",
-                                    angelOnePin: "",
-                                    angelOneTotpSecret: "",
-                                  });
+                                    angelOnePin: null,
+                                    angelOneTotpSecret: null,
+                                  } as any);
                                   setAngelSaved(false);
                                   setAngelEditing(true);
                                   setAngelApiKey("");
