@@ -163,20 +163,36 @@ function getCacheKey(symbol: string, isFutures: boolean): string {
   return `${symbol.toUpperCase()}-${isFutures ? "FUTURES" : "SPOT"}`;
 }
 
+// Binance USDⓈ-M lists these as 1000-unit contracts (1000PEPEUSDT = 1000 PEPE,
+// priced 1000x). We keep prices/quantities in single-coin units everywhere and
+// convert only at the futures API edge. Only SHIB was mapped, so a futures
+// PEPE/BONK/FLOKI order went out as e.g. "PEPEUSDT" → -1121 Invalid symbol.
+const FUTURES_1000X: Record<string, string> = {
+  SHIBUSDT: "1000SHIBUSDT",
+  PEPEUSDT: "1000PEPEUSDT",
+  BONKUSDT: "1000BONKUSDT",
+  FLOKIUSDT: "1000FLOKIUSDT",
+};
+const FUTURES_1000X_REVERSE: Record<string, string> = Object.fromEntries(
+  Object.entries(FUTURES_1000X).map(([ours, binance]) => [binance, ours]),
+);
+
+/** True for a Binance futures symbol quoted per 1000 coins (e.g. 1000PEPEUSDT). */
+export function is1000xContract(binanceSymbol: string): boolean {
+  return binanceSymbol.toUpperCase() in FUTURES_1000X_REVERSE;
+}
+
 export function toBinanceSymbol(symbol: string, isFutures: boolean): string {
   const upper = symbol.toUpperCase();
-  if (isFutures && upper === "SHIBUSDT") {
-    return "1000SHIBUSDT";
+  if (isFutures && FUTURES_1000X[upper]) {
+    return FUTURES_1000X[upper];
   }
   return upper;
 }
 
 export function fromBinanceSymbol(symbol: string): string {
   const upper = symbol.toUpperCase();
-  if (upper === "1000SHIBUSDT") {
-    return "SHIBUSDT";
-  }
-  return upper;
+  return FUTURES_1000X_REVERSE[upper] ?? upper;
 }
 
 /* ── helpers ──────────────────────────────────────────── */
@@ -375,7 +391,7 @@ export async function formatFuturesQuantity(symbol: string, desiredQuantity: num
   if (!symInfo) return String(desiredQuantity);
 
   let qty = desiredQuantity;
-  if (binanceSymbol === "1000SHIBUSDT") {
+  if (is1000xContract(binanceSymbol)) {
     qty = desiredQuantity / 1000;
   }
 
@@ -391,7 +407,7 @@ export async function formatFuturesQuantity(symbol: string, desiredQuantity: num
 
   let formatted = stepSize >= 1 ? validQty.toFixed(0) : validQty.toFixed(precision);
   
-  if (binanceSymbol === "1000SHIBUSDT") {
+  if (is1000xContract(binanceSymbol)) {
     formatted = (parseFloat(formatted) * 1000).toString();
   }
   return formatted;
@@ -451,7 +467,7 @@ export async function placeFuturesOrder(
 
   const binanceSymbol = toBinanceSymbol(params.symbol, true);
   let finalQuantity = params.quantity;
-  if (binanceSymbol === "1000SHIBUSDT") {
+  if (is1000xContract(binanceSymbol)) {
     finalQuantity = (parseFloat(params.quantity) / 1000).toString();
   }
 
@@ -798,7 +814,7 @@ export async function getKlines(
 
     try {
       const raw: unknown[][] = await publicGet(`/api/v3/klines?${params}`);
-      const is1000Shib = binanceSymbol === "1000SHIBUSDT";
+      const is1000Shib = is1000xContract(binanceSymbol);
       const klines: Kline[] = raw.map((k) => {
         let open = parseFloat(k[1] as string);
         let high = parseFloat(k[2] as string);
@@ -970,10 +986,10 @@ export async function getFuturesPositions(apiKey: string, apiSecret: string): Pr
   return data
     .filter(p => parseFloat(p.positionAmt) !== 0)
     .map((pos) => {
-      if (pos.symbol === "1000SHIBUSDT") {
+      if (is1000xContract(pos.symbol)) {
         return {
           ...pos,
-          symbol: "SHIBUSDT",
+          symbol: fromBinanceSymbol(pos.symbol),
           positionAmt: (parseFloat(pos.positionAmt) * 1000).toString(),
           entryPrice: (parseFloat(pos.entryPrice) / 1000).toString(),
         };
@@ -1358,7 +1374,7 @@ export async function getTickerPrice(symbol: string, isFutures: boolean = false)
     }
     const data = (await res.json()) as { symbol: string; price: string };
     let price = parseFloat(data.price);
-    if (binanceSymbol === "1000SHIBUSDT") {
+    if (is1000xContract(binanceSymbol)) {
       price = price / 1000;
     }
     priceCache.set(getCacheKey(symbol, isFutures), price);
@@ -1419,7 +1435,7 @@ export async function get24hrTicker(symbol: string, isFutures: boolean = false):
     }
     const data = await res.json() as any;
     
-    if (binanceSymbol === "1000SHIBUSDT") {
+    if (is1000xContract(binanceSymbol)) {
       data.lastPrice = (parseFloat(data.lastPrice) / 1000).toString();
       data.openPrice = (parseFloat(data.openPrice) / 1000).toString();
       data.highPrice = (parseFloat(data.highPrice) / 1000).toString();
@@ -1503,9 +1519,9 @@ function handleMessage(cs: CombinedSocket, raw: Buffer | string): void {
     
     // Reverse-map from binance symbol to our symbol
     let ourSymbol = streamSymbolLower.toUpperCase();
-    if (ourSymbol === "1000SHIBUSDT") ourSymbol = "SHIBUSDT";
+    ourSymbol = fromBinanceSymbol(ourSymbol);
     const isFutures = cs.isFutures;
-    const is1000Shib = streamSymbolLower === "1000shibusdt";
+    const is1000Shib = is1000xContract(streamSymbolLower);
 
     // 1. Core Price Ticks
     if (stream.endsWith("@miniTicker")) {
