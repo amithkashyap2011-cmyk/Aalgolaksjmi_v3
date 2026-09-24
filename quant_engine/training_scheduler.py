@@ -67,54 +67,46 @@ def get_last_cycle_result() -> dict:
 
 
 def _run_training_cycle_blocking() -> dict:
-    """Runs synchronously — always call via an executor, never directly
-    on the event loop."""
+    """Runs the cycle in a separate, lower-priority process (training_worker.py)
+    so training can't starve live inference via the GIL, then hot-reloads any
+    promoted checkpoint here. Always call via an executor."""
+    import json as _json
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
     import validation_state
     from cnn_predictor import cnn_predictor
     from ppo_execution_agent import ppo_agent
-    from train_cnn import train_cnn
-    from train_ppo import train_ppo
+    from gbm_predictor import gbm_predictor
 
-    result = {"cnn": None, "ppo": None, "started_at": time.time()}
-
+    started = time.time()
     try:
-        cnn_result = train_cnn(warm_start=True)
-        result["cnn"] = cnn_result
-        if cnn_result.get("promoted"):
-            cnn_predictor.reload()
-            logger.info("[TrainingScheduler] CNN checkpoint hot-reloaded into the live predictor.")
+        proc = subprocess.run(
+            [_sys.executable, "training_worker.py"],
+            cwd=str(Path(__file__).resolve().parent),
+            stdout=subprocess.PIPE, stderr=None, text=True,
+            timeout=3 * 3600,
+        )
+        line = next((l for l in reversed(proc.stdout.splitlines()) if l.startswith("TRAINING_RESULT ")), None)
+        result = _json.loads(line[len("TRAINING_RESULT "):]) if line else {"error": f"worker exited {proc.returncode} without a result"}
     except Exception as e:
-        logger.error(f"[TrainingScheduler] CNN training cycle failed: {e}")
-        result["cnn"] = {"promoted": False, "error": str(e)}
+        logger.error(f"[TrainingScheduler] Training worker failed: {e}")
+        result = {"error": str(e)}
 
-    try:
-        ppo_result = train_ppo(warm_start=True)
-        result["ppo"] = ppo_result
-        if ppo_result.get("promoted"):
-            ppo_agent.reload()
-            logger.info("[TrainingScheduler] PPO checkpoint hot-reloaded into the live agent.")
-    except Exception as e:
-        logger.error(f"[TrainingScheduler] PPO training cycle failed: {e}")
-        result["ppo"] = {"promoted": False, "error": str(e)}
-
-    # Shadow gradient-boosted model: its failures never affect CNN/PPO.
-    try:
-        from gbm_predictor import gbm_predictor
-        from train_gbm import train_gbm
-        gbm_result = train_gbm()
-        result["gbm"] = gbm_result
-        if gbm_result.get("promoted"):
-            gbm_predictor.reload()
-            logger.info("[TrainingScheduler] GBM (shadow) checkpoint hot-reloaded.")
-    except Exception as e:
-        logger.error(f"[TrainingScheduler] GBM training cycle failed: {e}")
-        result["gbm"] = {"promoted": False, "error": str(e)}
+    for name, reload in (("cnn", cnn_predictor.reload), ("ppo", ppo_agent.reload), ("gbm", gbm_predictor.reload)):
+        if (result.get(name) or {}).get("promoted"):
+            try:
+                reload()
+                logger.info(f"[TrainingScheduler] {name.upper()} checkpoint hot-reloaded into the live predictor.")
+            except Exception as e:
+                logger.error(f"[TrainingScheduler] {name.upper()} reload failed: {e}")
 
     try:
         validation_state.refresh()
     except Exception as e:
         logger.error(f"[TrainingScheduler] Failed to refresh validation state: {e}")
 
+    result.setdefault("started_at", started)
     result["finished_at"] = time.time()
     return result
 
