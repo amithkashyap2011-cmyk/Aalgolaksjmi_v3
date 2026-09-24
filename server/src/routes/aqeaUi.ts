@@ -562,6 +562,7 @@ router.get("/trades", async (req, res) => {
     const cacheKey = `${objectId.toString()}_${limit}_${skip}_${showArchived}_${reqMarket}_${reqStatus}`;
     const cached = tradesCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < 3000) {
+      if ((cached as any).total !== undefined) res.set("X-Total-Count", String((cached as any).total));
       return res.json(cached.data);
     }
 
@@ -602,7 +603,12 @@ router.get("/trades", async (req, res) => {
       }
     }
 
-    const trades = await query;
+    // Total matching rows for page navigation (the body stays a plain array
+    // for existing callers; the count goes in X-Total-Count).
+    const [trades, total] = await Promise.all([
+      query,
+      Trade.countDocuments(filter).maxTimeMS(3000).catch(() => undefined),
+    ]);
     const openTrades = (trades || []).filter((t: any) => t.status === "OPEN");
     if (openTrades.length > 0) {
       try {
@@ -646,7 +652,8 @@ router.get("/trades", async (req, res) => {
       }
     }));
 
-    tradesCache.set(cacheKey, { data: sanitized, ts: Date.now() });
+    tradesCache.set(cacheKey, { data: sanitized, ts: Date.now(), total } as any);
+    if (total !== undefined) res.set("X-Total-Count", String(total));
 
     res.json(sanitized);
   } catch (err: any) {

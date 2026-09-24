@@ -109,6 +109,12 @@ export default function OrdersPage() {
   const [openOrdersCount, setOpenOrdersCount] = useState(0);
   const [holdingsCount, setHoldingsCount]     = useState(0);
   const [historyCount, setHistoryCount]       = useState(0);
+  // Server-side paging (was a single capped fetch of 100 rows).
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem("ordersPageSize")); return [25, 50, 100].includes(v) ? v : 25; } catch { return 25; }
+  });
+  const [total, setTotal] = useState<number | null>(null);
 
   const tabParam = searchParams.get("tab")?.toUpperCase() as Tab | null;
   const tab: Tab = tabParam || (holdingsCount === 0 && historyCount > 0 ? "HISTORY" : "HOLDINGS");
@@ -175,15 +181,18 @@ export default function OrdersPage() {
     const seq = ++loadSeq.current;
     setLoading(true);
     try {
+      const paging = `&limit=${pageSize}&skip=${(page - 1) * pageSize}`;
       const url =
-        tab === "OPEN"     ? `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=100&market=${market}&status=PENDING` :
+        tab === "OPEN"     ? `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}${paging}&market=${market}&status=PENDING` :
         tab === "HOLDINGS" ? `/aqea-ui/positions?userId=${encodeURIComponent(activeUserId)}&market=${market}` :
-                              `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=100&market=${market}&status=ALL${showArchived ? "&archived=true" : ""}`;
+                              `/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}${paging}&market=${market}&status=ALL${showArchived ? "&archived=true" : ""}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(25000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (seq !== loadSeq.current) return; // a newer load() has since started; drop this stale result
       setRows(Array.isArray(data) ? data : []);
+      const t = Number(res.headers.get("X-Total-Count"));
+      setTotal(tab !== "HOLDINGS" && Number.isFinite(t) && res.headers.has("X-Total-Count") ? t : null);
     } catch (err) {
       console.warn("[OrdersPage] Failed to fetch:", err);
       if (seq === loadSeq.current) setRows([]);
@@ -192,7 +201,9 @@ export default function OrdersPage() {
     }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userId, showArchived, tab, market]);
+  // New view → back to page 1; page changes reload.
+  useEffect(() => { setPage(1); }, [showArchived, tab, market, pageSize]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userId, showArchived, tab, market, page, pageSize]);
 
   const refreshCounts = () => {
     fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=PENDING`, { signal: AbortSignal.timeout(25000) })
@@ -205,9 +216,13 @@ export default function OrdersPage() {
       .then((d) => setHoldingsCount(Array.isArray(d) ? d.length : 0))
       .catch(() => setHoldingsCount(0));
 
-    fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=200&market=${market}&status=ALL`, { signal: AbortSignal.timeout(25000) })
-      .then((r) => r.json())
-      .then((d) => setHistoryCount(Array.isArray(d) ? d.length : 0))
+    fetch(`/aqea-ui/trades?userId=${encodeURIComponent(activeUserId)}&limit=1&market=${market}&status=ALL`, { signal: AbortSignal.timeout(25000) })
+      .then(async (r) => {
+        // Real total from the header (the row count of a 200-row fetch capped it).
+        const t = Number(r.headers.get("X-Total-Count"));
+        if (r.headers.has("X-Total-Count") && Number.isFinite(t)) setHistoryCount(t);
+        else { const d = await r.json(); setHistoryCount(Array.isArray(d) ? d.length : 0); }
+      })
       .catch(() => setHistoryCount(0));
   };
 
@@ -759,6 +774,49 @@ export default function OrdersPage() {
           )
         )}
       </div>
+
+      {tab !== "HOLDINGS" && total !== null && total > 0 && (() => {
+        const pages = Math.max(1, Math.ceil(total / pageSize));
+        const from = (page - 1) * pageSize + 1;
+        const to = Math.min(total, page * pageSize);
+        // Compact window: 1 … p-1 p p+1 … last
+        const nums: (number | "…")[] = [];
+        for (let i = 1; i <= pages; i++) {
+          if (i === 1 || i === pages || Math.abs(i - page) <= 1) nums.push(i);
+          else if (nums[nums.length - 1] !== "…") nums.push("…");
+        }
+        const btn = (active: boolean, disabled = false): React.CSSProperties => ({
+          minWidth: 30, height: 28, padding: "0 8px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+          border: `1px solid ${active ? marketColor : "var(--ds-border, rgba(255,255,255,0.12))"}`,
+          background: active ? `${marketColor}22` : "transparent",
+          color: disabled ? "var(--ds-text-faint, #64748b)" : active ? marketColor : "var(--ds-text, #e2e8f0)",
+          cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+        });
+        return (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 12 }}>
+            <span style={{ fontSize: 12, color: "var(--ds-text-faint, #94a3b8)" }}>
+              Showing {from}–{to} of {total} {tab === "TRADES" ? "orders (fills shown for these)" : "orders"}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+              <button style={btn(false, page <= 1)} disabled={page <= 1} onClick={() => setPage(1)} title="First page">«</button>
+              <button style={btn(false, page <= 1)} disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
+              {nums.map((n, i) => n === "…"
+                ? <span key={`e${i}`} style={{ padding: "0 4px", color: "var(--ds-text-faint, #64748b)" }}>…</span>
+                : <button key={n} style={btn(n === page)} onClick={() => setPage(n)}>{n}</button>)}
+              <button style={btn(false, page >= pages)} disabled={page >= pages} onClick={() => setPage((p) => Math.min(pages, p + 1))}>Next</button>
+              <button style={btn(false, page >= pages)} disabled={page >= pages} onClick={() => setPage(pages)} title="Last page">»</button>
+              <select
+                value={pageSize}
+                onChange={(e) => { const v = Number(e.target.value); setPageSize(v); try { localStorage.setItem("ordersPageSize", String(v)); } catch { /* ignore */ } }}
+                style={{ marginLeft: 8, height: 28, borderRadius: 6, fontSize: 12, background: "transparent", color: "var(--ds-text, #e2e8f0)", border: "1px solid var(--ds-border, rgba(255,255,255,0.12))" }}
+                title="Rows per page"
+              >
+                {[25, 50, 100].map((n) => <option key={n} value={n}>{n} / page</option>)}
+              </select>
+            </div>
+          </div>
+        );
+      })()}
 
       {confirm && (
         <ConfirmModal
