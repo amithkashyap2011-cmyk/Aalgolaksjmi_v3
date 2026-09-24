@@ -6,6 +6,7 @@
  *  Greeks, and connects directly to the modular Strategy Engine & Router.
  */
 
+import { hasFreshRealIndicators } from "./indianMarket/indianPricing.js";
 import { INDIAN_SYMBOLS, SUPPORTED_INDIAN_SYMBOLS, type IndianSymbolConfig } from "../config/indianSymbols.js";
 import { IndianMarketHours, type MarketSessionStatus } from "./indianMarketHours.js";
 import { OptionChainService } from "./indianMarket/optionChainService.js";
@@ -115,35 +116,46 @@ export class IndianMarketService {
     const strategySignals = StrategyEngine.evaluateAll(context);
     const topSignal = strategySignals[0];
 
-    // 2. Query AI Model Ensemble consensus (Transformer, Mamba, Deep Learning, Bayesian)
+    // 2. Rule-based signal consensus. These used to be presented as AI models
+    // ("TRANSFORMER_V8", "MAMBA_HYBRID", "MICROSTRUCTURE_NN") with invented
+    // confidences (55 + ADX×0.8…, a fixed 80%, a fallback 75%) and default
+    // RSI 55 / ADX 25 when data was missing. No neural model is trained on
+    // Indian data, so each vote now says what it is, only votes when its
+    // input is real, and its confidence reflects the signal's strength.
     const aiModelVotes: Record<string, { direction: "LONG" | "SHORT" | "HOLD"; confidence: number; weight: number }> = {};
-    const rsi = marketData.rsi14 ?? 55;
-    const adx = marketData.adx14 ?? 25;
+    const rsi = marketData.rsi14;
+    const adx = marketData.adx14;
+    const realIndicators = hasFreshRealIndicators(symbol) && Number.isFinite(rsi) && Number.isFinite(adx);
+    const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 
-    // AI Model 1: Transformer Attention Head
-    const transformerBias = rsi > 52 && regimeAnalysis.regime.includes("BULL") ? "LONG" : rsi < 48 && regimeAnalysis.regime.includes("BEAR") ? "SHORT" : "HOLD";
-    const transformerConf = Math.min(94, Math.round(55 + (adx * 0.8) + (Math.abs(rsi - 50) * 0.5)));
-    aiModelVotes["TRANSFORMER_V8"] = { direction: transformerBias, confidence: transformerConf, weight: 0.30 };
-
-    // AI Model 2: Mamba State-Space Sequence Model
-    const mambaBias = regimeAnalysis.vwapRelationship === "ABOVE" ? "LONG" : regimeAnalysis.vwapRelationship === "BELOW" ? "SHORT" : "HOLD";
-    const mambaConf = Math.min(92, Math.round(60 + (regimeAnalysis.confidence * 0.35)));
-    aiModelVotes["MAMBA_HYBRID"] = { direction: mambaBias, confidence: mambaConf, weight: 0.25 };
-
-    // AI Model 3: Deep Momentum & Microstructure Neural Net
-    const microBias = (optionChain?.pcr ?? 1.0) >= 1.05 ? "LONG" : (optionChain?.pcr ?? 1.0) <= 0.85 ? "SHORT" : "HOLD";
-    aiModelVotes["MICROSTRUCTURE_NN"] = { direction: microBias, confidence: 80, weight: 0.20 };
-
-    // AI Model 4: Quant Strategy Signal
+    if (realIndicators) {
+      // Trend + RSI: direction only when the regime and RSI agree; strength ∝ ADX.
+      const dir = rsi! > 52 && regimeAnalysis.regime.includes("BULL") ? "LONG" : rsi! < 48 && regimeAnalysis.regime.includes("BEAR") ? "SHORT" : "HOLD";
+      aiModelVotes["RULE_TREND_RSI"] = { direction: dir, confidence: dir === "HOLD" ? 0 : Math.round(clamp(adx! * 1.5, 20, 90)), weight: 0.30 };
+    }
+    if (Number.isFinite(marketData.open) && (marketData.open ?? 0) > 0) {
+      // Price vs today's open: strength ∝ size of the move (1% ≈ 60%).
+      const move = (close - marketData.open!) / marketData.open!;
+      const dir = move > 0.0015 ? "LONG" : move < -0.0015 ? "SHORT" : "HOLD";
+      aiModelVotes["RULE_PRICE_VS_OPEN"] = { direction: dir, confidence: dir === "HOLD" ? 0 : Math.round(clamp(Math.abs(move) * 6000, 20, 90)), weight: 0.25 };
+    }
+    if (optionChain && optionChain.source === "ANGEL_ONE") {
+      // Put/call ratio from real open interest (indices only).
+      const pcr = optionChain.pcr;
+      const dir = pcr >= 1.05 ? "LONG" : pcr <= 0.85 ? "SHORT" : "HOLD";
+      aiModelVotes["RULE_OPTION_PCR"] = { direction: dir, confidence: dir === "HOLD" ? 0 : Math.round(clamp(Math.abs(pcr - 1) * 200, 20, 80)), weight: 0.20 };
+    }
     const quantBias = topSignal ? (topSignal.signal.direction === "BULLISH" ? "LONG" : topSignal.signal.direction === "BEARISH" ? "SHORT" : "HOLD") : "HOLD";
-    aiModelVotes["QUANT_STRATEGY_ENGINE"] = { direction: quantBias, confidence: topSignal?.signal.confidence || 75, weight: 0.25 };
+    if (topSignal) {
+      aiModelVotes["STRATEGY_ENGINE"] = { direction: quantBias, confidence: Number(topSignal.signal.confidence) || 0, weight: 0.25 };
+    }
 
-    // 3. Compute weighted ensemble decision & AI consensus
+    // 3. Weighted consensus over the votes that exist.
     let weightedLongScore = 0;
     let weightedShortScore = 0;
     let totalWeight = 0;
 
-    for (const [modelName, vote] of Object.entries(aiModelVotes)) {
+    for (const vote of Object.values(aiModelVotes)) {
       totalWeight += vote.weight;
       if (vote.direction === "LONG") {
         weightedLongScore += vote.weight * (vote.confidence / 100);
@@ -152,11 +164,11 @@ export class IndianMarketService {
       }
     }
 
-    const netLongProb = totalWeight > 0 ? weightedLongScore / totalWeight : 0.5;
-    const netShortProb = totalWeight > 0 ? weightedShortScore / totalWeight : 0.5;
+    const netLongProb = totalWeight > 0 ? weightedLongScore / totalWeight : 0;
+    const netShortProb = totalWeight > 0 ? weightedShortScore / totalWeight : 0;
 
     let finalAiDirection: "LONG" | "SHORT" | "HOLD" = "HOLD";
-    let finalAiConfidence = 50;
+    let finalAiConfidence = 0;
 
     if (netLongProb > 0.55 && netLongProb > netShortProb) {
       finalAiDirection = "LONG";
@@ -165,8 +177,9 @@ export class IndianMarketService {
       finalAiDirection = "SHORT";
       finalAiConfidence = Math.min(98, Math.round(netShortProb * 100));
     } else {
-      finalAiDirection = quantBias;
-      finalAiConfidence = topSignal?.signal.confidence || 65;
+      // No consensus: HOLD, with the strongest side's actual score (was a
+      // made-up 65% or the strategy's direction).
+      finalAiConfidence = Math.round(Math.max(netLongProb, netShortProb) * 100);
     }
 
     const decision = {
@@ -174,11 +187,11 @@ export class IndianMarketService {
       confidence: finalAiConfidence,
       reasons: [
         ...(topSignal?.signal.entryReason || ["Market within expected volatility"]),
-        `AI Ensemble Consensus: ${Object.keys(aiModelVotes).length} models voted with ${finalAiConfidence}% confidence (${finalAiDirection})`,
+        `Rule-based consensus: ${Object.keys(aiModelVotes).length} signals → ${finalAiDirection} (${finalAiConfidence}%)${realIndicators ? "" : " · RSI/ADX not live, trend vote skipped"}`,
       ],
       strategy: topSignal?.strategy.id || "REGIME_ROUTER",
       regime: regimeAnalysis.regime,
-      tradeScore: Math.round((finalAiConfidence + (topSignal?.signal.tradeScore || 75)) / 2),
+      tradeScore: Math.round((finalAiConfidence + (Number(topSignal?.signal.tradeScore) || 0)) / 2),
       aiModelVotes,
     };
 

@@ -412,10 +412,11 @@ export class IndianMarketAutoTrader {
         decisionPath: ["AI_ENSEMBLE_PIPELINE", trade.strategy, regimeAnalysis.regime],
         authorizedVotes: {
           strategy: trade.strategy,
-          transformer: "TRANSFORMER_V8_LONG",
-          mamba: "MAMBA_HYBRID_LONG",
-          microstructure: "MICROSTRUCTURE_NN_LONG",
-          consensus: "AI_CONSENSUS_AGREED",
+          // Real facts about this entry only. It recorded hardcoded
+          // "TRANSFORMER_V8_LONG / MAMBA_HYBRID_LONG / MICROSTRUCTURE_NN_LONG /
+          // AI_CONSENSUS_AGREED" on every trade — models that never voted.
+          regime: regimeAnalysis.regime,
+          priceSource: priced.source,
         },
         shadowVotes: {},
         coreScore: trade.tradeScore,
