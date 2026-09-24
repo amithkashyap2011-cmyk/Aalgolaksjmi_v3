@@ -98,7 +98,18 @@ const COUNTDOWN_TOTAL = 15;
 // RADAR preferences, per browser (a convenience — safe if storage is blocked).
 const RADAR_SPEEDS = [5, 15, 30, 60] as const;
 const RADAR_PREFS_KEY = "aiFooterRadarPrefs";
-type RadarPrefs = { autoRotate?: boolean; speedSec?: number; symbol?: { crypto?: string; india?: string } };
+type RadarPrefs = { autoRotate?: boolean; speedSec?: number; band?: string; symbol?: { crypto?: string; india?: string } };
+// Confidence filter for the AI recommendation (LONG/SHORT only; HOLD is not a
+// recommendation). Confidence is 0–100.
+const CONF_BANDS = [
+  { id: "ALL", label: "All signals", min: -1, max: 1000 },
+  { id: "90+", label: "> 90%", min: 90, max: 1000 },
+  { id: "80-90", label: "80–90%", min: 80, max: 90 },
+  { id: "70-80", label: "70–80%", min: 70, max: 80 },
+  { id: "50-70", label: "50–70%", min: 50, max: 70 },
+  { id: "<50", label: "< 50%", min: -1, max: 50 },
+] as const;
+const bandOf = (id?: string) => CONF_BANDS.find((b) => b.id === id) ?? CONF_BANDS[0];
 const readRadarPrefs = (): RadarPrefs => {
   try { return JSON.parse(localStorage.getItem(RADAR_PREFS_KEY) || "{}") || {}; } catch { return {}; }
 };
@@ -261,7 +272,8 @@ async function fetchRealIndianPrediction(
 
   const direction: "LONG" | "SHORT" | "HOLD" =
     stock.aiSignal === "LONG" ? "LONG" : stock.aiSignal === "SHORT" ? "SHORT" : "HOLD";
-  const confidence = stock.aiConfidence || 75;
+  // No AI confidence means none — not a made-up 75% (it skewed filters/ranking).
+  const confidence = Number(stock.aiConfidence) || 0;
   const price = stock.price || 0;
 
   const tpMult = direction === "SHORT" ? 0.98 : 1.025;
@@ -445,7 +457,8 @@ export default function AIFooterTradeBar() {
     const v = Number(readRadarPrefs().speedSec);
     return (RADAR_SPEEDS as readonly number[]).includes(v) ? v : COUNTDOWN_TOTAL;
   });
-  useEffect(() => { writeRadarPrefs({ autoRotate, speedSec }); }, [autoRotate, speedSec]);
+  const [confBand, setConfBand] = useState<string>(() => bandOf(readRadarPrefs().band).id);
+  useEffect(() => { writeRadarPrefs({ autoRotate, speedSec, band: confBand }); }, [autoRotate, speedSec, confBand]);
   useEffect(() => { writeRadarPrefs({ symbol: { [isIndianRoute ? "india" : "crypto"]: activeSymbol } }); }, [activeSymbol, isIndianRoute]);
   // Latest direction/confidence per symbol, kept longer than the 20s display
   // cache so RADAR can rank symbols it has already looked at.
@@ -605,6 +618,18 @@ export default function AIFooterTradeBar() {
       const x = signalMap.current.get(s);
       return x && now - x.time < SIGNAL_TTL_MS ? x : undefined;
     };
+    if (confBand !== "ALL") {
+      // Filtered: known matches (strongest first), then symbols not yet
+      // evaluated or stale — they must be scanned to know if they match.
+      // Known non-matching symbols are skipped.
+      const b = bandOf(confBand);
+      const universe = Array.from(new Set([...openSymbols, ...candidateSymbols]));
+      const matches = universe.filter((s) => {
+        const x = fresh(s);
+        return x && x.direction !== "HOLD" && x.confidence >= b.min && x.confidence < b.max;
+      }).sort((a, c) => fresh(c)!.confidence - fresh(a)!.confidence);
+      return [...matches, ...universe.filter((s) => !fresh(s))];
+    }
     const open = openSymbols.filter((s) => candidateSymbols.includes(s) || isIndianRoute);
     const rest = candidateSymbols.filter((s) => !open.includes(s));
     const active = rest.filter((s) => fresh(s) && fresh(s)!.direction !== "HOLD")
@@ -612,7 +637,7 @@ export default function AIFooterTradeBar() {
     const unknown = rest.filter((s) => !fresh(s));
     const holds = rest.filter((s) => fresh(s)?.direction === "HOLD");
     return [...open, ...active, ...unknown, ...holds];
-  }, [candidateSymbols, openSymbols, isIndianRoute]);
+  }, [candidateSymbols, openSymbols, isIndianRoute, confBand]);
 
   const rotateToNext = useCallback(() => {
     const order = radarOrder();
@@ -1004,6 +1029,34 @@ export default function AIFooterTradeBar() {
                   >
                     {RADAR_SPEEDS.map((v) => <option key={v} value={v}>{v}s</option>)}
                   </select>
+                  {/* Filter RADAR to AI recommendations in a confidence band. */}
+                  <select
+                    value={confBand}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { setConfBand(e.target.value); setCountdown(Math.min(countdown, 2)); }}
+                    title="Show only LONG/SHORT recommendations in this confidence range"
+                    style={{ fontSize: 9, fontWeight: 700, padding: "1px 2px", borderRadius: φ.r.xs, background: confBand === "ALL" ? "transparent" : "rgba(37,99,235,0.08)", color: confBand === "ALL" ? "var(--ds-text-faint, #94a3b8)" : "#2563eb", border: `1px solid ${confBand === "ALL" ? "var(--ds-border, #cbd5e1)" : "rgba(37,99,235,0.35)"}`, cursor: "pointer" }}
+                  >
+                    {CONF_BANDS.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+                  </select>
+                  {confBand !== "ALL" && (() => {
+                    const b = bandOf(confBand);
+                    const now = Date.now();
+                    let n = 0;
+                    let scanning = 0;
+                    for (const sym of new Set([...openSymbols, ...candidateSymbols])) {
+                      const x = signalMap.current.get(sym);
+                      if (!x || now - x.time >= SIGNAL_TTL_MS) { scanning++; continue; }
+                      if (x.direction !== "HOLD" && x.confidence >= b.min && x.confidence < b.max) n++;
+                    }
+                    const cur = signalMap.current.get(activeSymbol);
+                    const curMatches = !!cur && cur.direction !== "HOLD" && cur.confidence >= b.min && cur.confidence < b.max;
+                    return (
+                      <span title={`${n} symbol(s) currently in ${b.label}; ${scanning} not yet scanned`} style={{ fontSize: 9, fontWeight: 800, padding: "2px 5px", borderRadius: φ.r.xs, color: n ? "#2563eb" : "var(--ds-text-faint, #94a3b8)", border: "1px solid var(--ds-border, #cbd5e1)" }}>
+                        {n} match{curMatches ? "" : scanning ? " · scanning" : " · none in range"}
+                      </span>
+                    );
+                  })()}
                   {openSymbols.includes(activeSymbol) && (
                     <span title="You hold this position — RADAR checks open positions first" style={{ fontSize: 9, fontWeight: 800, padding: "2px 5px", borderRadius: φ.r.xs, color: "#059669", background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)" }}>
                       OPEN
