@@ -1285,6 +1285,10 @@ router.get("/funds", async (req, res) => {
       todayChargesINR: ledger.charges_today,
       todayPnlINR: ledger.net_today_pnl,
       totalDepositsINR: mode === "LIVE" ? 0 : totalDepositsINR,
+      // Capital actually put into trades (sum of entry cost; cash is reused
+      // across trades), excluding pre-feed simulated trades.
+      capitalDeployedINR: roundTo2([...openTrades, ...closedTrades].reduce((a: number, t: any) => a + (Number(t.entryPrice) || 0) * (Number(t.origQty ?? t.quantity) || 0), 0)),
+      tradesCountINR: openTrades.length + closedTrades.length,
       liveFundsError,
       todayNetPnlINR: ledger.net_today_pnl,
       netAccountPnlINR: ledger.net_account_pnl,

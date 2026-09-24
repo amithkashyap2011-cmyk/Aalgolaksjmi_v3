@@ -821,6 +821,8 @@ export default function IndianMarketPage() {
           netPnl={(Number((funds as any).cumulativeRealizedNetPnlINR) || 0) + (Number((funds as any).unrealizedPnlINR) || 0)}
           inOpenTrades={Number((funds as any).investedAmountINR) || 0}
           openCount={Number((funds as any).openTradesCount) || 0}
+          deployed={Number((funds as any).capitalDeployedINR) || 0}
+          tradeCount={Number((funds as any).tradesCountINR) || 0}
           note={executionMode === "LIVE" ? "LIVE — Angel One account" : "PAPER account"}
         />
 

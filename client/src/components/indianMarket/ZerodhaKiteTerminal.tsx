@@ -1200,6 +1200,8 @@ export default function ZerodhaKiteTerminal({
             netPnl={(Number(funds.cumulativeRealizedNetPnlINR) || 0) + (Number(funds.unrealizedPnlINR) || 0)}
             inOpenTrades={Number(funds.investedAmountINR) || 0}
             openCount={Number(funds.openTradesCount) || 0}
+            deployed={Number(funds.capitalDeployedINR) || 0}
+            tradeCount={Number(funds.tradesCountINR) || 0}
           />
 
           {activeTab === "WATCHLIST" && (

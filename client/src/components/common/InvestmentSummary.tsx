@@ -3,10 +3,12 @@ import type { ReactNode } from "react";
 /**
  * "How much did I put in, and what's my net result?" — one strip used by the
  * Indian and crypto dashboards so both answer it the same way.
- *   Invested    = money deposited into the account
- *   Current     = invested + net P/L
- *   Net P/L     = current − invested (amount and % of invested)
- *   In trades   = capital currently tied up in open positions
+ *   Deposited        = money put into the account (mostly sits as cash)
+ *   Current value    = deposited + net P/L
+ *   Net P/L          = current − deposited (amount and % of deposited)
+ *   In market now    = capital currently tied up in open positions
+ *   Put into trades  = sum of every trade's entry cost (cash is reused, so
+ *                      this can exceed the deposit)
  */
 interface Props {
   currency: "₹" | "$";
@@ -14,20 +16,26 @@ interface Props {
   netPnl: number;
   inOpenTrades: number;
   openCount?: number;
+  /** Sum of every trade's entry cost, and how many trades. */
+  deployed?: number;
+  tradeCount?: number;
   /** Optional secondary currency line, e.g. INR for a USD account. */
   secondary?: { symbol: string; rate: number };
   note?: string;
   hidden?: boolean;
+  /** Data not loaded yet — show dashes instead of a misleading −100%. */
+  loading?: boolean;
 }
 
 const fmt = (cur: string, v: number) =>
   `${v < 0 ? "−" : ""}${cur}${Math.abs(v).toLocaleString(cur === "₹" ? "en-IN" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function InvestmentSummary({ currency, invested, netPnl, inOpenTrades, openCount, secondary, note, hidden }: Props) {
+export default function InvestmentSummary({ currency, invested, netPnl, inOpenTrades, openCount, deployed, tradeCount, secondary, note, hidden: hiddenProp, loading }: Props) {
+  const hidden = hiddenProp || loading;
   const current = invested + netPnl;
   const pct = invested > 0 ? (netPnl / invested) * 100 : 0;
   const up = netPnl >= 0;
-  const mask = "••••••";
+  const mask = loading ? "—" : "••••••";
   const sub = (v: number) =>
     secondary && !hidden ? <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{fmt(secondary.symbol, v * secondary.rate)}</div> : null;
 
@@ -42,8 +50,8 @@ export default function InvestmentSummary({ currency, invested, netPnl, inOpenTr
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-        {cell("Invested", hidden ? mask : fmt(currency, invested), "#f8fafc", sub(invested), "Total money deposited into this account")}
-        {cell("Current value", hidden ? mask : fmt(currency, current), "#f8fafc", sub(current), "Invested + net P/L")}
+        {cell("Deposited", hidden ? mask : fmt(currency, invested), "#f8fafc", sub(invested), "Money you put into this account — most of it stays as cash until a trade uses it")}
+        {cell("Current value", hidden ? mask : fmt(currency, current), "#f8fafc", sub(current), "Deposited + net P/L")}
         {cell(
           "Net P/L",
           hidden ? mask : `${up ? "+" : ""}${fmt(currency, netPnl)}`,
@@ -51,9 +59,12 @@ export default function InvestmentSummary({ currency, invested, netPnl, inOpenTr
           <div style={{ fontSize: 11, fontWeight: 800, color: up ? "#34d399" : "#f87171", marginTop: 2 }}>{hidden ? "" : `${up ? "+" : ""}${pct.toFixed(2)}%`}</div>,
           "After charges; realized + open positions",
         )}
-        {cell("In open trades", hidden ? mask : fmt(currency, inOpenTrades), "#fbbf24",
+        {cell("In market now", hidden ? mask : fmt(currency, inOpenTrades), "#fbbf24",
           <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{openCount ?? 0} position{openCount === 1 ? "" : "s"}</div>,
           "Capital currently tied up in open positions")}
+        {deployed !== undefined && cell("Put into trades", hidden ? mask : fmt(currency, deployed), "#93c5fd",
+          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{tradeCount ?? 0} trade{tradeCount === 1 ? "" : "s"}{tradeCount ? ` · avg ${hidden ? mask : fmt(currency, deployed / tradeCount)}` : ""}</div>,
+          "Sum of every trade's entry cost. The same cash is reused trade after trade, so this can exceed the deposit.")}
       </div>
       {note && <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>{note}</div>}
     </div>

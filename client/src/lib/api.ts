@@ -193,6 +193,10 @@ export async function getKlines(symbol: string, interval = "1h", limit = 100) {
   return request<any[]>(`/trading/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
 }
 
+export async function getCapitalUsage(mode: string, accountType: string) {
+  return request<{ deployed: number; trades: number; openDeployed: number }>(`/trading/capital-usage?mode=${mode}&accountType=${accountType}`);
+}
+
 export async function getEnsembleReport(symbol: string, interval = "5m", limit = 200) {
   return request<any>(`/trading/ensemble-report?symbol=${symbol}&interval=${interval}&limit=${limit}`, {}, 30000);
 }

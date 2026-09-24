@@ -49,6 +49,10 @@ socket.on("disconnect", () => {
 const DEMO_EMAIL = "demo@aalgo.local";
 const DEMO_PASSWORD = "123456";
 
+let bootRetryMs = 3_000;
+// Whether the last boot actually authenticated (a live socket can make
+// `connected` true while auth failed and userId is still the mock).
+let lastBootAuthed = false;
 let isBooting = false;
 let alertTimer: ReturnType<typeof setInterval> | null = null;
 let demoAuthBootstrap: Promise<void> | null = null;
@@ -817,6 +821,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
+    lastBootAuthed = connected;
     const finalConnected = connected || (typeof socket !== "undefined" && socket.connected);
     set({ ready: true, connected: finalConnected, userId, userEmail });
     if (typeof window !== "undefined") {
@@ -830,6 +835,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Invariant: UI must ALWAYS become ready after boot completes to avoid infinite loaders
       set({ ready: true });
       isBooting = false;
+      // Server unreachable at boot (e.g. mid-restart): the store fell back to
+      // "mock-user-001" and never retried, so dashboards showed $0 until a
+      // manual reload. Retry with backoff until the real session is back.
+      if (!lastBootAuthed && typeof window !== "undefined") {
+        const delay = bootRetryMs;
+        bootRetryMs = Math.min(bootRetryMs * 2, 30_000);
+        setTimeout(() => {
+          if (lastBootAuthed) return;
+          set({ ready: false });
+          get().boot();
+        }, delay);
+      } else {
+        bootRetryMs = 3_000;
+      }
     }
   },
 

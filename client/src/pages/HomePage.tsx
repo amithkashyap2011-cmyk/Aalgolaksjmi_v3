@@ -69,6 +69,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   const [showValues, setShowValues]     = useState(true);
   // Per-tab wallet: holds totalDeposited specific to SPOT / FUTURES / combined
   const [tabWallet, setTabWallet]       = useState<{ totalDeposited: number } | null>(null);
+  const appConnected = useAppStore((s) => s.connected);
+  const [capitalUsage, setCapitalUsage] = useState<{ deployed: number; trades: number } | null>(null);
 
   // Quick Order Station state
   const [orderQty, setOrderQty]         = useState<string>("100");
@@ -111,6 +113,8 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     if (!silent) setLoading(true);
     try {
       const activeAcct = terminalTab === 'spot' ? "SPOT" : terminalTab === 'futures' ? "FUTURES" : useAppStore.getState().accountType;
+      // Capital actually put into trades for this tab (Spot / Futures / both).
+      api.getCapitalUsage(useAppStore.getState().mode || "PAPER", terminalTab === 'all' ? "BOTH" : activeAcct).then((u) => setCapitalUsage(u)).catch(() => {});
       await fetchDashboard(userId, activeAcct);
       // LIVE/PAPER is owned by the app store. The dashboard store's own `mode`
       // is never synced to the toggle, so reading it here loaded PAPER positions
@@ -763,8 +767,11 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
           netPnl={terminalEquity - terminalCapitalDeposited}
           inOpenTrades={terminalInvested}
           openCount={displayPositions.length}
+          deployed={capitalUsage?.deployed}
+          tradeCount={capitalUsage?.trades}
           secondary={{ symbol: "₹", rate: inrRate }}
           hidden={!showValues}
+          loading={!appConnected || !userId || userId === "mock-user-001"}
           note={terminalTab === "all" ? "Spot + Futures combined" : undefined}
         />
 

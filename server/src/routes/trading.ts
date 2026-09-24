@@ -342,6 +342,35 @@ router.get("/market-check", optionalAuth, async (req: AuthRequest, res) => {
  * symbol (what it will or won't trade), as opposed to /ensemble-report, which
  * is a separate analysis and can disagree with the engine.
  */
+/**
+ * GET /trading/capital-usage?mode=PAPER&accountType=SPOT|FUTURES|BOTH
+ * How much capital was actually put into trades since the latest deposit
+ * (sum of per-trade entry cost: notional for Spot, margin for Futures).
+ */
+router.get("/capital-usage", authGuard, async (req: AuthRequest, res) => {
+  try {
+    const mode = String(req.query.mode || "PAPER");
+    const acct = String(req.query.accountType || "BOTH");
+    const types = acct === "BOTH" ? ["SPOT", "FUTURES"] : [acct];
+    const out = { deployed: 0, trades: 0, openDeployed: 0 };
+    for (const a of types) {
+      const dep = await WalletTransaction.findOne({ userId: req.userId, accountType: a, type: "DEPOSIT" }).sort({ createdAt: 1 }).lean();
+      const since = (dep as any)?.createdAt ?? new Date(0);
+      const trades = await Trade.find({ userId: req.userId, mode, accountType: a, openedAt: { $gte: since } }, { entryPrice: 1, quantity: 1, origQty: 1, leverage: 1, status: 1 }).lean();
+      for (const t of trades as any[]) {
+        const qty = Number(t.origQty ?? t.quantity) || 0;
+        const cost = (Number(t.entryPrice) || 0) * qty / (a === "FUTURES" ? (Number(t.leverage) || 1) : 1);
+        out.deployed += cost;
+        out.trades += 1;
+        if (t.status === "OPEN") out.openDeployed += cost;
+      }
+    }
+    res.json({ ...out, deployed: Number(out.deployed.toFixed(2)), openDeployed: Number(out.openDeployed.toFixed(2)) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/live-decisions", optionalAuth, (_req, res) => {
   res.json({ decisions: UITelemetryService.getLatestDecisions(), now: Date.now() });
 });
