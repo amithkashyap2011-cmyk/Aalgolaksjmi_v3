@@ -88,7 +88,9 @@ export class IndianMarketService {
 
     const isIndex = normSym === "NIFTY" || normSym === "BANKNIFTY" || normSym === "FINNIFTY" || normSym === "SENSEX";
     const optionChain = isIndex ? OptionChainService.generateOptionChain(normSym, close) : undefined;
-    const regimeAnalysis = StrategyRouter.classifyRegime(close, marketData.bars || [], optionChain?.pcr || 1.0);
+    // Real ADX + direction vs open (it passed no indicators, so every symbol
+    // showed the default "RANGING · ADX 22 · 75%").
+    const regimeAnalysis = StrategyRouter.classifyRegime(close, marketData.bars || [], optionChain?.pcr || 1.0, { adx14: marketData.adx14, open: marketData.open });
 
     const context = {
       underlying: normSym,

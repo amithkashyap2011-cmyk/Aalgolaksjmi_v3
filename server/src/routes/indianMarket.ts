@@ -4,6 +4,8 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { InstrumentMaster } from "../services/indianMarket/instrumentMaster.js";
+import { optionContracts } from "../services/indianMarket/angelOne/optionContracts.js";
 import { peakConcurrentCapital } from "../services/capitalPeak.js";
 import { chargesAtClose } from "../services/indianMarket/tradeCharges.js";
 import express from "express";
@@ -179,7 +181,9 @@ router.get("/scan", async (req, res) => {
           aiConfidence: evalResult.decision.confidence,
           strategy: evalResult.decision.strategy,
           regime: evalResult.decision.regime,
-          lotSize: config?.lotSize || 1,
+          // Exchange lot from Angel One contracts (config table is stale:
+          // NIFTY 75 / BANKNIFTY 15 vs real 65 / 30).
+          lotSize: optionContracts.getLotSize(InstrumentMaster.normalizeUnderlying(symbol)) || config?.lotSize || 1,
           volume: `${(data.volume / 1000000).toFixed(1)}M`,
           reasons: evalResult.decision.reasons,
           optionChainSummary: evalResult.optionChainSummary,
@@ -252,9 +256,16 @@ router.post("/strategy/toggle", (req, res) => {
 router.get("/strategy-router", (req, res) => {
   try {
     const underlying = (req.query.underlying as string) || "NIFTY";
-    const ticker = MOCK_LIVE_INDIAN_TIKERS[underlying] || MOCK_LIVE_INDIAN_TIKERS["NIFTY50"] || { ltp: 24530.20 };
-    const analysis = StrategyRouter.classifyRegime(ticker.ltp, []);
-    res.json({ success: true, underlying, analysis });
+    const key = underlying === "NIFTY" ? "NIFTY50" : underlying;
+    const ticker: any = MOCK_LIVE_INDIAN_TIKERS[key] || MOCK_LIVE_INDIAN_TIKERS["NIFTY50"];
+    // Real ADX, direction vs open and the chain's PCR. It passed nothing, so
+    // the card always read "RANGING · ADX 22 · Bandwidth 1.8% · 75%".
+    const norm = InstrumentMaster.normalizeUnderlying(underlying);
+    const isIndex = norm === "NIFTY" || norm === "BANKNIFTY" || norm === "FINNIFTY" || norm === "SENSEX";
+    const pcr = isIndex ? OptionChainService.getCachedOptionChain(norm as any, ticker.ltp)?.pcr || 1.0 : 1.0;
+    const realIndicators = hasFreshRealIndicators(key);
+    const analysis = StrategyRouter.classifyRegime(ticker.ltp, [], pcr, realIndicators ? { adx14: ticker.adx14, open: ticker.open } : undefined);
+    res.json({ success: true, underlying, analysis, realIndicators });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

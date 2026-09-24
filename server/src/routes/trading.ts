@@ -6,6 +6,7 @@
  * GET  /trading/history
  * GET  /trading/wallet
  */
+import { requirePermission } from "../middleware/rbac.js";
 import { peakConcurrentCapital } from "../services/capitalPeak.js";
 import { UITelemetryService } from "../services/uiTelemetry.js";
 import { Router } from "express";
@@ -27,7 +28,7 @@ import * as paper from "../services/paperState.js";
 import { enrichOpenTrades, TAKER_FEE } from "../services/pnlService.js";
 import { toValidObjectId } from "../utils/mongoUtils.js";
 import * as autoTradeEngine from "../services/autoTradeEngine.js";
-import { getTradingControlStatus, setTradingControlStatus } from "../services/tradingControlStatus.js";
+import { getTradingControlStatus, setTradingControlStatus, getTradingControlChangedAt } from "../services/tradingControlStatus.js";
 import * as ensemble from "../services/ensembleService.js";
 import { computeSnapshot, StreamingVWAP, computeSupertrend, type OHLCVol } from "../services/indicatorService.js";
 import mongoose from "mongoose";
@@ -377,6 +378,70 @@ router.get("/capital-usage", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
+/**
+ * GET /trading/performance?mode=PAPER&accountType=SPOT|FUTURES|BOTH
+ * P&L history (daily / weekly / monthly) and performance stats over all
+ * closed crypto trades for this user.
+ */
+router.get("/performance", authGuard, async (req: AuthRequest, res) => {
+  try {
+    const mode = String(req.query.mode || "PAPER");
+    const acct = String(req.query.accountType || "BOTH");
+    const types = acct === "BOTH" ? ["SPOT", "FUTURES"] : [acct];
+    const trades = await Trade.find(
+      { userId: req.userId, mode, accountType: { $in: types }, status: "CLOSED", closedAt: { $ne: null } },
+      { symbol: 1, pnl: 1, closedAt: 1, openedAt: 1, accountType: 1, entrySource: 1, strategy: 1 },
+    ).sort({ closedAt: 1 }).lean();
+
+    const ist = (d: any) => new Date(new Date(d).getTime() + 5.5 * 3600_000);
+    const dayKey = (d: any) => ist(d).toISOString().slice(0, 10);
+    const weekKey = (d: any) => { const x = ist(d); const day = (x.getUTCDay() + 6) % 7; x.setUTCDate(x.getUTCDate() - day); return x.toISOString().slice(0, 10); };
+    const monthKey = (d: any) => ist(d).toISOString().slice(0, 7);
+    const bucket = (keyFn: (d: any) => string) => {
+      const m = new Map<string, { period: string; pnl: number; trades: number; wins: number }>();
+      for (const t of trades as any[]) {
+        const k = keyFn(t.closedAt); const b = m.get(k) ?? { period: k, pnl: 0, trades: 0, wins: 0 };
+        b.pnl += Number(t.pnl) || 0; b.trades++; if ((Number(t.pnl) || 0) > 0) b.wins++; m.set(k, b);
+      }
+      return [...m.values()].map((b) => ({ ...b, pnl: Number(b.pnl.toFixed(4)) })).reverse();
+    };
+
+    let wins = 0, losses = 0, grossWin = 0, grossLoss = 0, cum = 0, peak = 0, maxDd = 0;
+    let best: any = null, worst: any = null;
+    const bySource = new Map<string, { source: string; trades: number; pnl: number; wins: number }>();
+    for (const t of trades as any[]) {
+      const p = Number(t.pnl) || 0;
+      if (p > 0) { wins++; grossWin += p; } else if (p < 0) { losses++; grossLoss += -p; }
+      cum += p; peak = Math.max(peak, cum); maxDd = Math.max(maxDd, peak - cum);
+      if (!best || p > best.pnl) best = { symbol: t.symbol, pnl: p, closedAt: t.closedAt };
+      if (!worst || p < worst.pnl) worst = { symbol: t.symbol, pnl: p, closedAt: t.closedAt };
+      const src = t.entrySource === "MANUAL" ? "Manual" : "AI auto-trader";
+      const b = bySource.get(src) ?? { source: src, trades: 0, pnl: 0, wins: 0 };
+      b.trades++; b.pnl += p; if (p > 0) b.wins++; bySource.set(src, b);
+    }
+    const n = trades.length;
+    res.json({
+      stats: {
+        trades: n, wins, losses,
+        winRate: n ? Number(((wins / n) * 100).toFixed(1)) : 0,
+        net: Number(cum.toFixed(4)),
+        avgWin: wins ? Number((grossWin / wins).toFixed(4)) : 0,
+        avgLoss: losses ? Number((-grossLoss / losses).toFixed(4)) : 0,
+        profitFactor: grossLoss > 0 ? Number((grossWin / grossLoss).toFixed(2)) : null,
+        expectancy: n ? Number((cum / n).toFixed(4)) : 0,
+        maxDrawdown: Number(maxDd.toFixed(4)),
+        best, worst,
+      },
+      bySource: [...bySource.values()].map((b) => ({ ...b, pnl: Number(b.pnl.toFixed(4)), winRate: Number(((b.wins / b.trades) * 100).toFixed(1)) })),
+      daily: bucket(dayKey).slice(0, 30),
+      weekly: bucket(weekKey).slice(0, 12),
+      monthly: bucket(monthKey).slice(0, 12),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/live-decisions", optionalAuth, (_req, res) => {
   res.json({ decisions: UITelemetryService.getLatestDecisions(), now: Date.now() });
 });
@@ -396,7 +461,9 @@ router.get("/ensemble-report", optionalAuth, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/control/pause", authGuard, adminGuard, async (req, res) => {
+// The account owner (TRADER) may stop/start their own auto-trader, as on the
+// Indian page; these were admin-only, so the dashboard buttons got 403.
+router.post("/control/pause", authGuard, requirePermission("DISABLE_AUTONOMOUS"), async (req, res) => {
   try {
     console.log("[control] pause route triggered");
     setTradingControlStatus("PAUSED");
@@ -407,7 +474,7 @@ router.post("/control/pause", authGuard, adminGuard, async (req, res) => {
   }
 });
 
-router.post("/control/resume", authGuard, adminGuard, async (req, res) => {
+router.post("/control/resume", authGuard, requirePermission("ENABLE_AUTONOMOUS"), async (req, res) => {
   try {
     console.log("[control] resume route triggered");
     setTradingControlStatus("RUNNING");
@@ -418,7 +485,7 @@ router.post("/control/resume", authGuard, adminGuard, async (req, res) => {
   }
 });
 
-router.post("/control/kill", authGuard, adminGuard, async (req, res) => {
+router.post("/control/kill", authGuard, requirePermission("EMERGENCY_STOP"), async (req, res) => {
   try {
     console.log("[control] kill route triggered");
     setTradingControlStatus("KILLED");
@@ -430,7 +497,7 @@ router.post("/control/kill", authGuard, adminGuard, async (req, res) => {
 });
 
 router.get("/control/status", async (req, res) => {
-  res.json({ status: getTradingControlStatus() });
+  res.json({ status: getTradingControlStatus(), changedAt: getTradingControlChangedAt() });
 });
 
 /* ── get alerts ───────────────────────────────────────── */

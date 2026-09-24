@@ -26,6 +26,16 @@ export function isInternalRequest(req: Request): boolean {
 }
 
 /**
+ * A browser on this machine: loopback peer and, via the dev proxy, a loopback
+ * X-Forwarded-For (same test the auth dev fallback uses).
+ */
+export function isLocalClient(req: Request): boolean {
+  if (!LOOPBACK_IPS.has(req.socket.remoteAddress || "")) return false;
+  const fwd = String(req.headers["x-forwarded-for"] || "").split(",").map((x) => x.trim()).filter(Boolean);
+  return fwd.every((a) => LOOPBACK_IPS.has(a));
+}
+
+/**
  * Detects if the request originates from a trusted broker webhook or exchange event.
  */
 export function isBrokerEventRequest(req: Request): boolean {
@@ -118,7 +128,11 @@ export const generalApiLimiter = rateLimit({
   limit: Number(process.env.RATE_LIMIT_MAX_OVERRIDE) || 300,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => isInternalRequest(req) || isBrokerEventRequest(req),
+  // Requests from this machine (every local tab + the Vite proxy share one
+  // key) are the operator's own UI: two open tabs polling pushed past 300/min
+  // and got 429s on real actions like Pause. LAN/remote clients (which must
+  // authenticate) stay limited.
+  skip: (req) => isInternalRequest(req) || isBrokerEventRequest(req) || isLocalClient(req),
   message: {
     success: false,
     error: "RATE_LIMIT_EXCEEDED",

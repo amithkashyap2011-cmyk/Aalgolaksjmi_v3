@@ -824,6 +824,7 @@ export default function IndianMarketPage() {
           deployed={Number((funds as any).capitalDeployedINR) || 0}
           tradeCount={Number((funds as any).tradesCountINR) || 0}
           peak={Number((funds as any).peakDeployedINR) || 0}
+          loading={(funds as any).totalDepositsINR === undefined}
           note={executionMode === "LIVE" ? "LIVE — Angel One account" : "PAPER account"}
         />
 

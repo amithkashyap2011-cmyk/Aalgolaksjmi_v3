@@ -481,7 +481,15 @@ export async function killSwitch() {
 }
 
 export async function getTradingStatus() {
-  return request<{ status: string }>("/trading/control/status");
+  return request<{ status: string; changedAt?: string }>("/trading/control/status");
+}
+
+export async function getPerformance(mode: string, accountType: string) {
+  return request<any>(`/trading/performance?mode=${mode}&accountType=${accountType}`);
+}
+
+export async function getLiveDecisions() {
+  return request<{ decisions: Record<string, any>; now: number }>("/trading/live-decisions");
 }
 
 export async function getCurrentTickerPrices(symbols: string[] = []) {

@@ -85,10 +85,6 @@ const DEFAULT_INDIAN_WATCHLIST: StockItem[] = [
   { symbol: "BANKNIFTY", name: "NIFTY BANK Index", exchange: "NSE", category: "INDEX", price: 52140.50, change: 425.10, changePct: 0.82, lotSize: 15, aiSignal: "BUY", aiConfidence: 92, aiRegime: "High Conviction Long" },
   { symbol: "FINNIFTY", name: "NIFTY Fin Services", exchange: "NSE", category: "INDEX", price: 23150.00, change: -45.20, changePct: -0.19, lotSize: 25, aiSignal: "HOLD", aiConfidence: 65, aiRegime: "Mean Reverting" },
   { symbol: "SENSEX", name: "BSE SENSEX", exchange: "BSE", category: "INDEX", price: 80519.30, change: 432.50, changePct: 0.54, lotSize: 10, aiSignal: "BUY", aiConfidence: 84, aiRegime: "Momentum Breakout" },
-  { symbol: "NIFTY 24500 CE", name: "NIFTY Weekly 24500 Call", exchange: "NFO", category: "OPTIONS", price: 142.50, change: 24.10, changePct: 20.35, lotSize: 25, aiSignal: "BUY", aiConfidence: 91, aiRegime: "Option Gamma Surge" },
-  { symbol: "NIFTY 24500 PE", name: "NIFTY Weekly 24500 Put", exchange: "NFO", category: "OPTIONS", price: 98.20, change: -18.40, changePct: -15.78, lotSize: 25, aiSignal: "SELL", aiConfidence: 85, aiRegime: "Theta Decay" },
-  { symbol: "BANKNIFTY 52100 CE", name: "BANKNIFTY Weekly 52100 Call", exchange: "NFO", category: "OPTIONS", price: 285.00, change: 45.00, changePct: 18.75, lotSize: 15, aiSignal: "BUY", aiConfidence: 94, aiRegime: "Institutional Call Buy" },
-  { symbol: "BANKNIFTY 52100 PE", name: "BANKNIFTY Weekly 52100 Put", exchange: "NFO", category: "OPTIONS", price: 195.40, change: -32.60, changePct: -14.30, lotSize: 15, aiSignal: "SELL", aiConfidence: 88, aiRegime: "Volatility Crush" },
   { symbol: "RELIANCE", name: "Reliance Industries", exchange: "NSE", category: "EQUITY", price: 2985.40, change: 35.60, changePct: 1.21, lotSize: 1, aiSignal: "BUY", aiConfidence: 87, aiRegime: "Volume Expansion" },
   { symbol: "HDFCBANK", name: "HDFC Bank Ltd", exchange: "NSE", category: "EQUITY", price: 1642.10, change: 12.80, changePct: 0.79, lotSize: 1, aiSignal: "BUY", aiConfidence: 86, aiRegime: "Trend Continuation" },
   { symbol: "INFY", name: "Infosys Ltd", exchange: "NSE", category: "EQUITY", price: 1845.50, change: -8.40, changePct: -0.45, lotSize: 1, aiSignal: "HOLD", aiConfidence: 70, aiRegime: "Consolidation" },
@@ -387,6 +383,30 @@ export default function ZerodhaKiteTerminal({
   }, [historyTimeframe]);
 
   // Open Order Modal for a stock with Dynamic AI Calculations
+  // Quick-buy: the real at-the-money contract from the live option chain
+  // (these buttons used to open made-up rows like "NIFTY 24500 CE @ ₹142.50").
+  const openAtmOption = async (underlying: "NIFTY" | "BANKNIFTY", type: "CE" | "PE") => {
+    try {
+      const d = await (await fetch(`/api/indian-market/option-chain?underlying=${underlying}`)).json();
+      const c = d?.chain;
+      const row = c?.strikes?.find((s: any) => s.isATM) ?? c?.strikes?.find((s: any) => s.strike === c?.atmStrike);
+      const leg = row?.[type === "CE" ? "call" : "put"];
+      if (!row || !(Number(leg?.ltp) > 0)) {
+        showToast(`No live ${underlying} ${type} quote right now`, "error");
+        return;
+      }
+      const lot = Number(liveScan[underlying === "NIFTY" ? "NIFTY50" : underlying]?.lotSize) || 1;
+      handleOpenOrder({
+        symbol: `${underlying} ${row.strike} ${type}`,
+        name: leg.tradingSymbol || `${underlying} ${row.strike} ${type}`,
+        exchange: "NFO", category: "OPTIONS",
+        price: Number(leg.ltp), change: 0, changePct: 0, lotSize: lot,
+      } as StockItem, "BUY");
+    } catch {
+      showToast("Option chain unavailable", "error");
+    }
+  };
+
   const handleOpenOrder = (stock: StockItem, side: "BUY" | "SELL") => {
     setSelectedStock(stock);
     setOrderSide(side);
@@ -570,7 +590,8 @@ export default function ZerodhaKiteTerminal({
     if (!live) {
       // No live source (FINNIFTY, the sample option contracts): keep the row
       // but never show a made-up AI call for it.
-      return { ...s, aiSignal: undefined, aiConfidence: undefined };
+      // …and no made-up price either: 0 renders as "—" until live data arrives.
+      return { ...s, price: 0, change: 0, changePct: 0, aiSignal: undefined, aiConfidence: undefined };
     }
     const sig = live.aiSignal === "LONG" ? "BUY" : live.aiSignal === "SHORT" ? "SELL" : "HOLD";
     return {
@@ -609,9 +630,12 @@ export default function ZerodhaKiteTerminal({
   const currentRiskReward = totalMaxRiskINR > 0 ? (totalTargetProfitINR / totalMaxRiskINR).toFixed(2) : "2.0";
 
   // Spot Index Prices for Kite Header
-  const niftySpot = watchlist.find((s) => s.symbol === "NIFTY50") || { price: 24530.20, change: 158.40, changePct: 0.65 };
-  const bankNiftySpot = watchlist.find((s) => s.symbol === "BANKNIFTY") || { price: 52140.50, change: 425.10, changePct: 0.82 };
-  const sensexSpot = watchlist.find((s) => s.symbol === "SENSEX") || { price: 80519.30, change: 432.50, changePct: 0.54 };
+  // Live USD/INR from the app store (was a hardcoded 85.0).
+  const usdInr = useAppStore((st) => (st as any).inrRate) || 95;
+  const noQuote = { price: 0, change: 0, changePct: 0 };
+  const niftySpot = watchlist.find((s) => s.symbol === "NIFTY50") || noQuote;
+  const bankNiftySpot = watchlist.find((s) => s.symbol === "BANKNIFTY") || noQuote;
+  const sensexSpot = watchlist.find((s) => s.symbol === "SENSEX") || noQuote;
 
   // Holdings Summary
   const totalInvested = holdings.reduce((sum, h) => sum + h.invested, 0);
@@ -932,7 +956,7 @@ export default function ZerodhaKiteTerminal({
               {marketSession && !marketSession.isOpen && (
                 <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: "rgba(245, 158, 11, 0.2)", color: "#f59e0b" }}>CLOSE</span>
               )}
-              <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{niftySpot.price.toLocaleString("en-IN")}</span>
+              <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{niftySpot.price > 0 ? niftySpot.price.toLocaleString("en-IN") : "—"}</span>
               <span style={{ color: niftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
                 {niftySpot.change >= 0 ? "+" : ""}{niftySpot.changePct}%
               </span>
@@ -943,7 +967,7 @@ export default function ZerodhaKiteTerminal({
               {marketSession && !marketSession.isOpen && (
                 <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: "rgba(245, 158, 11, 0.2)", color: "#f59e0b" }}>CLOSE</span>
               )}
-              <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{bankNiftySpot.price.toLocaleString("en-IN")}</span>
+              <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{bankNiftySpot.price > 0 ? bankNiftySpot.price.toLocaleString("en-IN") : "—"}</span>
               <span style={{ color: bankNiftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
                 {bankNiftySpot.change >= 0 ? "+" : ""}{bankNiftySpot.changePct}%
               </span>
@@ -1087,7 +1111,7 @@ export default function ZerodhaKiteTerminal({
                   {/* Right: LTP & Change */}
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontWeight: 700, fontSize: 13, color: "#fff" }}>
-                      ₹{stock.price.toLocaleString("en-IN")} <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>(${((stock.price / 85.0)).toFixed(2)})</span>
+                      {stock.price > 0 ? <>₹{stock.price.toLocaleString("en-IN")} <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>(${((stock.price / usdInr)).toFixed(2)})</span></> : "—"}
                     </div>
                     <div style={{ fontSize: 11, fontWeight: 600, color: isUp ? "#10b981" : "#ef4444", marginTop: 2 }}>
                       {isUp ? "+" : ""}{stock.change.toFixed(2)} ({isUp ? "+" : ""}{stock.changePct}%)
@@ -1203,6 +1227,7 @@ export default function ZerodhaKiteTerminal({
             deployed={Number(funds.capitalDeployedINR) || 0}
             tradeCount={Number(funds.tradesCountINR) || 0}
             peak={Number(funds.peakDeployedINR) || 0}
+            loading={funds.totalDepositsINR === undefined}
           />
 
           {activeTab === "WATCHLIST" && (
@@ -1251,8 +1276,7 @@ export default function ZerodhaKiteTerminal({
                 <div style={{ display: "flex", gap: 12 }}>
                   <button
                     onClick={() => {
-                      const niftyCE = DEFAULT_INDIAN_WATCHLIST.find((s) => s.symbol === "NIFTY 24500 CE");
-                      if (niftyCE) handleOpenOrder(niftyCE, "BUY");
+                      openAtmOption("NIFTY", "CE");
                     }}
                     style={{
                       background: "#387ed1",
@@ -1274,8 +1298,7 @@ export default function ZerodhaKiteTerminal({
 
                   <button
                     onClick={() => {
-                      const bankPE = DEFAULT_INDIAN_WATCHLIST.find((s) => s.symbol === "BANKNIFTY 52100 PE");
-                      if (bankPE) handleOpenOrder(bankPE, "BUY");
+                      openAtmOption("BANKNIFTY", "PE");
                     }}
                     style={{
                       background: "#ff5722",

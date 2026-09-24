@@ -1,3 +1,4 @@
+import CryptoControlCenter from "../components/dashboard/CryptoControlCenter";
 import InvestmentSummary from "../components/common/InvestmentSummary";
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -775,6 +776,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
           loading={!appConnected || !userId || userId === "mock-user-001"}
           note={terminalTab === "all" ? "Spot + Futures combined" : undefined}
         />
+
+        {/* Controls, why-no-trade, P&L history and performance (parity with the Indian page). */}
+        <CryptoControlCenter mode={mode} accountType={terminalTab === "all" ? "BOTH" : terminalTab === "futures" ? "FUTURES" : "SPOT"} />
 
         {/* Balance Allocation Strip */}
         <div className="crypto-balance-allocation" style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "12px 14px", border: "1px solid rgba(255,255,255,0.06)" }}>
