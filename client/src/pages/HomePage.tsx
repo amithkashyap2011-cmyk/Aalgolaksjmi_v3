@@ -1,3 +1,4 @@
+import InvestmentSummary from "../components/common/InvestmentSummary";
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { INITIAL_SUMMARY, useDashboardStore, type DomainMetrics, INITIAL_DOMAIN_METRICS } from '../store/useDashboardStore';
@@ -754,6 +755,18 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
             </div>
           </div>
         </div>
+
+        {/* Invested vs net result (current value − money deposited). */}
+        <InvestmentSummary
+          currency="$"
+          invested={terminalCapitalDeposited}
+          netPnl={terminalEquity - terminalCapitalDeposited}
+          inOpenTrades={terminalInvested}
+          openCount={displayPositions.length}
+          secondary={{ symbol: "₹", rate: inrRate }}
+          hidden={!showValues}
+          note={terminalTab === "all" ? "Spot + Futures combined" : undefined}
+        />
 
         {/* Balance Allocation Strip */}
         <div className="crypto-balance-allocation" style={{ background: "rgba(0,0,0,0.2)", borderRadius: 10, padding: "12px 14px", border: "1px solid rgba(255,255,255,0.06)" }}>

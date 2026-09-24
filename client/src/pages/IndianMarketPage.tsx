@@ -1,3 +1,4 @@
+import InvestmentSummary from "../components/common/InvestmentSummary";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
@@ -811,6 +812,17 @@ export default function IndianMarketPage() {
             RECONCILED
           </span>
         </div>
+
+        {/* Invested vs net result. Net P/L is after charges (realized net +
+            open P/L); current value = invested + net P/L. */}
+        <InvestmentSummary
+          currency="₹"
+          invested={Number((funds as any).totalDepositsINR) || 0}
+          netPnl={(Number((funds as any).cumulativeRealizedNetPnlINR) || 0) + (Number((funds as any).unrealizedPnlINR) || 0)}
+          inOpenTrades={Number((funds as any).investedAmountINR) || 0}
+          openCount={Number((funds as any).openTradesCount) || 0}
+          note={executionMode === "LIVE" ? "LIVE — Angel One account" : "PAPER account"}
+        />
 
         {/* Top 4 Financial Metric Cards */}
         {(() => {
