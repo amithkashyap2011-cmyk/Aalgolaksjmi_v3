@@ -6,6 +6,7 @@
  *  automatically closes all open Intraday (MIS) positions on NSE & BSE.
  */
 
+import { chargesAtClose } from "./indianMarket/tradeCharges.js";
 import mongoose from "mongoose";
 import * as paper from "./paperState.js";
 import { log } from "../utils/logger.js";
@@ -132,7 +133,8 @@ export class IntradaySquareOffService {
         const wallet = paper.getWallet(userIdStr, "PAPER", accType as any);
         const currentInr = wallet.get("INR") ?? 0;
         // No floor at zero — the full loss is charged (see autoPilotStateMachine).
-        const newBalance = roundTo2(currentInr + marginReleased + realizedPnl);
+        const chargesPaid = chargesAtClose({ ...(typeof (trade as any).toObject === "function" ? (trade as any).toObject() : trade), exitPrice, pnl: realizedPnl });
+        const newBalance = roundTo2(currentInr + marginReleased + realizedPnl - chargesPaid);
         wallet.set("INR", newBalance);
         await paper.setWalletBalance(userIdStr, "PAPER", "INR", newBalance, accType);
       });

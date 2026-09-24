@@ -4,6 +4,7 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { chargesAtClose } from "../services/indianMarket/tradeCharges.js";
 import express from "express";
 import mongoose from "mongoose";
 import { Trade } from "../models/Trade.js";
@@ -1030,7 +1031,11 @@ router.post("/close-position", requirePermission("CANCEL_ORDER"), async (req: Au
     const accType = trade.accountType || "INDIAN_NSE";
     const wallet = paper.getWallet(userId, trade.mode as any, accType as any);
     const currentBal = wallet.get("INR") || 0;
-    const nextBal = roundTo2(currentBal + marginReturned + realizedPnl);
+    const chargesPaid = chargesAtClose(trade);
+    trade.meta.chargesDeducted = chargesPaid;
+    trade.markModified?.("meta");
+    await trade.save();
+    const nextBal = roundTo2(currentBal + marginReturned + realizedPnl - chargesPaid);
     wallet.set("INR", nextBal);
     if (trade.mode === "PAPER") {
       await paper.setWalletBalance(userId, trade.mode, "INR", nextBal, accType);

@@ -21,3 +21,11 @@ test("exit release uses the recorded debit (legacy shape without legs)", () => {
   const m = IndianRiskManager.computeRequiredMargin({ risk: { riskAmount: 11508.9 }, entryPrice: 383.63, quantity: 30 } as any);
   expect(m).toBe(11508.9);
 });
+
+import { chargesAtClose } from "../src/services/indianMarket/tradeCharges.js";
+
+test("exits deduct the ledger's charges from cash (wallet agrees with net P/L)", () => {
+  const c = chargesAtClose({ symbol: "NIFTY29SEP2623100PE", side: "BUY", quantity: 65, entryPrice: 153.7, exitPrice: 110.59, status: "OPEN", pnl: -2802.15, openedAt: new Date(), closedAt: new Date(), legs: [{ instrumentType: "PE", action: "BUY", strike: 23100 }] });
+  expect(c).toBeGreaterThan(0);
+  expect(c).toBeLessThan(200); // brokerage + taxes on one lot, not a notional-sized number
+});

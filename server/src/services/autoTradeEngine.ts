@@ -1361,7 +1361,10 @@ export async function handleLong(
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
-        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId },
+        // walletDebited: exactly what left the paper wallet, so every trade's
+        // cash flow can be audited against its P&L (a ~$27 Spot gap could not
+        // be traced after logs rotated).
+        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId, walletDebited: marginRequired },
       }], { session }).then((docs) => docs[0]),
     );
 
@@ -1629,7 +1632,10 @@ export async function handleShort(
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
-        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId },
+        // walletDebited: exactly what left the paper wallet, so every trade's
+        // cash flow can be audited against its P&L (a ~$27 Spot gap could not
+        // be traced after logs rotated).
+        meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId, walletDebited: marginRequired },
       }], { session }).then((docs) => docs[0]),
     );
 
@@ -1883,6 +1889,7 @@ async function executeExit(
   if (mode === "PAPER") {
     const marginReturned = (pos.quantity * pos.entryPrice) / (pos.leverage || 1);
     const creditAmount = (Number.isFinite(marginReturned) ? marginReturned : 0) + safeNetPnl;
+    closeFields.meta = { ...closeFields.meta, walletCredited: creditAmount };
     claimed = Number.isFinite(creditAmount)
       ? await paper.creditWalletAndCloseTrade(
           userId, mode, accountType, creditAmount,

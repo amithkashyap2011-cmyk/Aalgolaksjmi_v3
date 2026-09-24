@@ -12,6 +12,7 @@
  *   - Complete audit logging and crash/restart recovery
  */
 
+import { chargesAtClose } from "./tradeCharges.js";
 import {
   AuthoritativePosition,
   AuthoritativeLedger,
@@ -546,7 +547,10 @@ export class AutoPilotStateMachine {
         const marginReleased = roundTo2(debitedTotal * fillFraction);
         // No floor at zero: a loss larger than the margin locked at open must
         // still be charged (the floor minted cash on every such loss).
-        const cashReturned = exactAdd(marginReleased, filledRealizedPnl);
+        // Charges are paid from cash (proportional to the filled quantity).
+        const chargesPaid = Math.round(chargesAtClose(tradeDoc) * fillFraction * 100) / 100;
+        tradeDoc.meta.chargesDeducted = exactAdd(Number(tradeDoc.meta.chargesDeducted) || 0, chargesPaid);
+        const cashReturned = exactAdd(marginReleased, filledRealizedPnl - chargesPaid);
         const balance = exactAdd(currentCash, cashReturned);
         wallet.set("INR", balance);
         if (tradeDoc.mode === "PAPER") {

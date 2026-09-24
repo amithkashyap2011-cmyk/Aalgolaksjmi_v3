@@ -737,21 +737,21 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
 
             {/* 4. Total All-Time P&L */}
             <div style={{
-              background: ((terminalRealized + terminalOpenPnl) >= 0) ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)",
-              border: `1px solid ${((terminalRealized + terminalOpenPnl) >= 0) ? "#10b981" : "#ef4444"}`,
+              background: ((terminalEquity - terminalCapitalDeposited) >= 0) ? "rgba(16,185,129,0.2)" : "rgba(239,68,68,0.2)",
+              border: `1px solid ${((terminalEquity - terminalCapitalDeposited) >= 0) ? "#10b981" : "#ef4444"}`,
               padding: "8px 14px",
               borderRadius: 10,
-              boxShadow: ((terminalRealized + terminalOpenPnl) >= 0) ? "0 0 12px rgba(16,185,129,0.2)" : "0 0 12px rgba(239,68,68,0.2)"
-            }} title="Overall Net P&L: Realized Booked P&L + Live Floating P&L combined">
+              boxShadow: ((terminalEquity - terminalCapitalDeposited) >= 0) ? "0 0 12px rgba(16,185,129,0.2)" : "0 0 12px rgba(239,68,68,0.2)"
+            }} title="Overall Net P&L: current value − money deposited (what your balance actually shows). Booked trade P&L is in the Realized card.">
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
                 <span style={{ fontSize: 9, fontWeight: 900, color: "#f8fafc", textTransform: "uppercase" }}>
                   🔥 OVERALL TOTAL
                 </span>
               </div>
-              <span style={{ fontSize: 13, fontWeight: 900, color: (terminalRealized + terminalOpenPnl) >= 0 ? "#34d399" : "#f87171", fontFamily: "monospace" }}>
-                {formatVal(terminalRealized + terminalOpenPnl)}
+              <span style={{ fontSize: 13, fontWeight: 900, color: (terminalEquity - terminalCapitalDeposited) >= 0 ? "#34d399" : "#f87171", fontFamily: "monospace" }}>
+                {formatVal(terminalEquity - terminalCapitalDeposited)}
               </span>
-              <div style={{ fontSize: 8.5, color: "#cbd5e1", fontWeight: 600, marginTop: 1 }}>Realized + Live combined</div>
+              <div style={{ fontSize: 8.5, color: "#cbd5e1", fontWeight: 600, marginTop: 1 }}>Current value − invested</div>
             </div>
           </div>
         </div>
