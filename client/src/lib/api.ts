@@ -194,7 +194,7 @@ export async function getKlines(symbol: string, interval = "1h", limit = 100) {
 }
 
 export async function getCapitalUsage(mode: string, accountType: string) {
-  return request<{ deployed: number; trades: number; openDeployed: number }>(`/trading/capital-usage?mode=${mode}&accountType=${accountType}`);
+  return request<{ deployed: number; trades: number; openDeployed: number; peak: number }>(`/trading/capital-usage?mode=${mode}&accountType=${accountType}`);
 }
 
 export async function getEnsembleReport(symbol: string, interval = "5m", limit = 200) {

@@ -6,6 +6,7 @@
  * GET  /trading/history
  * GET  /trading/wallet
  */
+import { peakConcurrentCapital } from "../services/capitalPeak.js";
 import { UITelemetryService } from "../services/uiTelemetry.js";
 import { Router } from "express";
 import { authGuard, adminGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
@@ -345,26 +346,31 @@ router.get("/market-check", optionalAuth, async (req: AuthRequest, res) => {
 /**
  * GET /trading/capital-usage?mode=PAPER&accountType=SPOT|FUTURES|BOTH
  * How much capital was actually put into trades since the latest deposit
- * (sum of per-trade entry cost: notional for Spot, margin for Futures).
+ * (sum of per-trade cash debited: notional ÷ leverage).
  */
 router.get("/capital-usage", authGuard, async (req: AuthRequest, res) => {
   try {
     const mode = String(req.query.mode || "PAPER");
     const acct = String(req.query.accountType || "BOTH");
     const types = acct === "BOTH" ? ["SPOT", "FUTURES"] : [acct];
-    const out = { deployed: 0, trades: 0, openDeployed: 0 };
+    const out = { deployed: 0, trades: 0, openDeployed: 0, peak: 0 };
+    const spans: Array<{ openedAt?: any; closedAt?: any; cost: number }> = [];
     for (const a of types) {
       const dep = await WalletTransaction.findOne({ userId: req.userId, accountType: a, type: "DEPOSIT" }).sort({ createdAt: 1 }).lean();
       const since = (dep as any)?.createdAt ?? new Date(0);
-      const trades = await Trade.find({ userId: req.userId, mode, accountType: a, openedAt: { $gte: since } }, { entryPrice: 1, quantity: 1, origQty: 1, leverage: 1, status: 1 }).lean();
+      const trades = await Trade.find({ userId: req.userId, mode, accountType: a, openedAt: { $gte: since } }, { entryPrice: 1, quantity: 1, origQty: 1, leverage: 1, status: 1, openedAt: 1, closedAt: 1 }).lean();
       for (const t of trades as any[]) {
         const qty = Number(t.origQty ?? t.quantity) || 0;
-        const cost = (Number(t.entryPrice) || 0) * qty / (a === "FUTURES" ? (Number(t.leverage) || 1) : 1);
+        // Cash the wallet actually debited: notional ÷ leverage for both legs
+        // (paper Spot trades carry leverage too — the debit was alloc/leverage).
+        const cost = (Number(t.entryPrice) || 0) * qty / (Number(t.leverage) || 1);
         out.deployed += cost;
         out.trades += 1;
         if (t.status === "OPEN") out.openDeployed += cost;
+        spans.push({ openedAt: t.openedAt, closedAt: t.status === "OPEN" ? undefined : t.closedAt, cost });
       }
     }
+    out.peak = peakConcurrentCapital(spans);
     res.json({ ...out, deployed: Number(out.deployed.toFixed(2)), openDeployed: Number(out.openDeployed.toFixed(2)) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

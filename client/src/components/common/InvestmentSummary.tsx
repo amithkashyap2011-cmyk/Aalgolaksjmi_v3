@@ -9,6 +9,8 @@ import type { ReactNode } from "react";
  *   In market now    = capital currently tied up in open positions
  *   Put into trades  = sum of every trade's entry cost (cash is reused, so
  *                      this can exceed the deposit)
+ *   Peak in market   = most capital in open trades at the same time, with
+ *                      net P/L as a % of it (return on money actually used)
  */
 interface Props {
   currency: "₹" | "$";
@@ -19,6 +21,8 @@ interface Props {
   /** Sum of every trade's entry cost, and how many trades. */
   deployed?: number;
   tradeCount?: number;
+  /** Most capital in open trades at once. */
+  peak?: number;
   /** Optional secondary currency line, e.g. INR for a USD account. */
   secondary?: { symbol: string; rate: number };
   note?: string;
@@ -30,7 +34,7 @@ interface Props {
 const fmt = (cur: string, v: number) =>
   `${v < 0 ? "−" : ""}${cur}${Math.abs(v).toLocaleString(cur === "₹" ? "en-IN" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function InvestmentSummary({ currency, invested, netPnl, inOpenTrades, openCount, deployed, tradeCount, secondary, note, hidden: hiddenProp, loading }: Props) {
+export default function InvestmentSummary({ currency, invested, netPnl, inOpenTrades, openCount, deployed, tradeCount, peak, secondary, note, hidden: hiddenProp, loading }: Props) {
   const hidden = hiddenProp || loading;
   const current = invested + netPnl;
   const pct = invested > 0 ? (netPnl / invested) * 100 : 0;
@@ -65,6 +69,13 @@ export default function InvestmentSummary({ currency, invested, netPnl, inOpenTr
         {deployed !== undefined && cell("Put into trades", hidden ? mask : fmt(currency, deployed), "#93c5fd",
           <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{tradeCount ?? 0} trade{tradeCount === 1 ? "" : "s"}{tradeCount ? ` · avg ${hidden ? mask : fmt(currency, deployed / tradeCount)}` : ""}</div>,
           "Sum of every trade's entry cost. The same cash is reused trade after trade, so this can exceed the deposit.")}
+        {peak !== undefined && peak > 0 && (() => {
+          const r = (netPnl / peak) * 100;
+          const c = r >= 0 ? "#34d399" : "#f87171";
+          return cell("Peak in market", hidden ? mask : fmt(currency, peak), "#c4b5fd",
+            <div style={{ fontSize: 11, fontWeight: 800, color: c, marginTop: 2 }}>{hidden ? "" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}% return on it`}</div>,
+            "Most money you had in open trades at the same time. Net P/L as a % of this is the return on capital you actually used.");
+        })()}
       </div>
       {note && <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>{note}</div>}
     </div>

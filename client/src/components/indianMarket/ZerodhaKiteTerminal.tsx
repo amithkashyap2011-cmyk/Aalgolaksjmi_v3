@@ -1202,6 +1202,7 @@ export default function ZerodhaKiteTerminal({
             openCount={Number(funds.openTradesCount) || 0}
             deployed={Number(funds.capitalDeployedINR) || 0}
             tradeCount={Number(funds.tradesCountINR) || 0}
+            peak={Number(funds.peakDeployedINR) || 0}
           />
 
           {activeTab === "WATCHLIST" && (

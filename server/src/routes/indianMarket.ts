@@ -4,6 +4,7 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { peakConcurrentCapital } from "../services/capitalPeak.js";
 import { chargesAtClose } from "../services/indianMarket/tradeCharges.js";
 import express from "express";
 import mongoose from "mongoose";
@@ -1289,6 +1290,10 @@ router.get("/funds", async (req, res) => {
       // across trades), excluding pre-feed simulated trades.
       capitalDeployedINR: roundTo2([...openTrades, ...closedTrades].reduce((a: number, t: any) => a + (Number(t.entryPrice) || 0) * (Number(t.origQty ?? t.quantity) || 0), 0)),
       tradesCountINR: openTrades.length + closedTrades.length,
+      peakDeployedINR: peakConcurrentCapital([...openTrades, ...closedTrades].map((t: any) => ({
+        openedAt: t.openedAt, closedAt: t.closedAt,
+        cost: (Number(t.entryPrice) || 0) * (Number(t.origQty ?? t.quantity) || 0),
+      }))),
       liveFundsError,
       todayNetPnlINR: ledger.net_today_pnl,
       netAccountPnlINR: ledger.net_account_pnl,

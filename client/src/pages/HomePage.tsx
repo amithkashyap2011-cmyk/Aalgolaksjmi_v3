@@ -70,7 +70,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   // Per-tab wallet: holds totalDeposited specific to SPOT / FUTURES / combined
   const [tabWallet, setTabWallet]       = useState<{ totalDeposited: number } | null>(null);
   const appConnected = useAppStore((s) => s.connected);
-  const [capitalUsage, setCapitalUsage] = useState<{ deployed: number; trades: number } | null>(null);
+  const [capitalUsage, setCapitalUsage] = useState<{ deployed: number; trades: number; peak?: number } | null>(null);
 
   // Quick Order Station state
   const [orderQty, setOrderQty]         = useState<string>("100");
@@ -769,6 +769,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
           openCount={displayPositions.length}
           deployed={capitalUsage?.deployed}
           tradeCount={capitalUsage?.trades}
+          peak={capitalUsage?.peak}
           secondary={{ symbol: "₹", rate: inrRate }}
           hidden={!showValues}
           loading={!appConnected || !userId || userId === "mock-user-001"}
