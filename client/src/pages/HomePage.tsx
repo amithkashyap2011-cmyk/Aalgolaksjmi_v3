@@ -48,10 +48,14 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
     if (location.hash === "#all") {
       return 'all';
     }
-    if (defaultTerminal === "SPOT" || location.pathname === "/spot" || location.pathname === "/crypto" || location.hash === "#spot") {
+    if (defaultTerminal === "SPOT" || location.pathname === "/spot" || location.hash === "#spot") {
       return 'spot';
     }
+    // "/" and "/crypto" follow the saved SPOT / FUTURES / BOTH choice. Both
+    // routes used to force SPOT, so opening the crypto dashboard from any
+    // other page silently reset the user's selection.
     if (accountType === "FUTURES") return 'futures';
+    if (accountType === "BOTH") return 'all';
     return 'spot';
   };
 

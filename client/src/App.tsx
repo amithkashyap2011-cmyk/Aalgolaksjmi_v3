@@ -120,8 +120,8 @@ export default function App() {
                 <Routes>
                   {/* Primary Market Routes */}
                   <Route path="/global" element={<GlobalDashboard />} />
-                  <Route path="/" element={<HomePage defaultTerminal="SPOT" />} />
-                  <Route path="/crypto" element={<HomePage defaultTerminal="SPOT" />} />
+                  <Route path="/" element={<HomePage />} />
+                  <Route path="/crypto" element={<HomePage />} />
                   <Route path="/spot" element={<HomePage defaultTerminal="SPOT" />} />
                   <Route path="/crypto/spot" element={<Navigate to="/spot" replace />} />
                   <Route path="/futures" element={<HomePage defaultTerminal="FUTURES" />} />
