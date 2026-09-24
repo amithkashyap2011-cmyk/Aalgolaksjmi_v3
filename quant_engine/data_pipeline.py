@@ -130,11 +130,51 @@ def get_live_klines(symbol: str, interval: str = INTERVAL, limit: int = KLINE_LI
     return df
 
 
+_PAGED_CACHE: dict = {}   # (symbol, interval, total_bars) -> (fetched_at, df)
+_PAGED_TTL_SECONDS = 30 * 60
+
+
+def _get_with_retry(client, url: str, params: dict, attempts: int = 4):
+    """GET with Binance-aware retries: 429/418 wait for Retry-After (and set
+    the shared backoff so live inference also pauses); network/DNS errors
+    retry with exponential backoff. A 6h training cycle that started while
+    the IP was rate limited failed every symbol and skipped the CNN
+    entirely ("Insufficient windows (train=0, val=0)")."""
+    global _BACKOFF_UNTIL
+    for attempt in range(attempts):
+        wait_live = _BACKOFF_UNTIL - _time.time()
+        if wait_live > 0:
+            _time.sleep(min(wait_live, 300))
+        try:
+            resp = client.get(url, params=params)
+            if resp.status_code in (418, 429):
+                retry = resp.headers.get("Retry-After")
+                wait = float(retry) if retry and retry.isdigit() else (300.0 if resp.status_code == 418 else 60.0)
+                with _LIVE_LOCK:
+                    _BACKOFF_UNTIL = max(_BACKOFF_UNTIL, _time.time() + wait)
+                if attempt == attempts - 1:
+                    resp.raise_for_status()
+                continue
+            resp.raise_for_status()
+            return resp
+        except (httpx.TransportError, OSError):
+            if attempt == attempts - 1:
+                raise
+            _time.sleep(2 ** attempt * 2)
+    raise RuntimeError("unreachable")
+
+
 def fetch_klines_paginated(symbol: str, interval: str = INTERVAL,
                            total_bars: int = 6000) -> pd.DataFrame:
     """Fetch more history than one request allows by paging backwards with
     endTime. Spot /api/v3/klines silently caps limit at 1000, so a single
-    limit=1500 request never returned more than 1000 bars anyway."""
+    limit=1500 request never returned more than 1000 bars anyway.
+    Memoised for 30 min so CNN and GBM training in the same cycle share one
+    download, with Binance-aware retries per page."""
+    key = (symbol, interval, total_bars)
+    hit = _PAGED_CACHE.get(key)
+    if hit and _time.time() - hit[0] < _PAGED_TTL_SECONDS:
+        return hit[1].copy()
     per_request = 1000
     frames: List[pd.DataFrame] = []
     end_time: int | None = None
@@ -143,8 +183,7 @@ def fetch_klines_paginated(symbol: str, interval: str = INTERVAL,
             params: dict = {"symbol": symbol, "interval": interval, "limit": per_request}
             if end_time is not None:
                 params["endTime"] = end_time
-            resp = client.get(f"{BINANCE_BASE}/api/v3/klines", params=params)
-            resp.raise_for_status()
+            resp = _get_with_retry(client, f"{BINANCE_BASE}/api/v3/klines", params)
             raw = resp.json()
             if not raw:
                 break
@@ -153,7 +192,7 @@ def fetch_klines_paginated(symbol: str, interval: str = INTERVAL,
             end_time = int(page["open_time"].iloc[0]) - 1
             if len(raw) < per_request:
                 break  # reached the start of the symbol's history
-            time.sleep(0.15)  # stay well under public rate limits
+            time.sleep(0.3)  # stay well under public rate limits
 
     if not frames:
         return pd.DataFrame(columns=["symbol", "timestamp", "open", "high", "low", "close", "volume"])
@@ -164,7 +203,9 @@ def fetch_klines_paginated(symbol: str, interval: str = INTERVAL,
         df[col] = df[col].astype(np.float64)
     df["timestamp"] = pd.to_datetime(df["open_time"], unit="ms")
     df["symbol"] = symbol
-    return df[["symbol", "timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+    out = df[["symbol", "timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+    _PAGED_CACHE[key] = (_time.time(), out)
+    return out.copy()
 
 
 def stationarize_windows(windows: np.ndarray) -> np.ndarray:
