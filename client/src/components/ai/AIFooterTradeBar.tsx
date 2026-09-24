@@ -95,6 +95,21 @@ export const DEFAULT_INDIAN_SYMBOLS = [
 /* ─── Constants ──────────────────────────────────────────────────────── */
 
 const COUNTDOWN_TOTAL = 15;
+// RADAR preferences, per browser (a convenience — safe if storage is blocked).
+const RADAR_SPEEDS = [5, 15, 30, 60] as const;
+const RADAR_PREFS_KEY = "aiFooterRadarPrefs";
+type RadarPrefs = { autoRotate?: boolean; speedSec?: number; symbol?: { crypto?: string; india?: string } };
+const readRadarPrefs = (): RadarPrefs => {
+  try { return JSON.parse(localStorage.getItem(RADAR_PREFS_KEY) || "{}") || {}; } catch { return {}; }
+};
+const writeRadarPrefs = (patch: RadarPrefs) => {
+  try {
+    const cur = readRadarPrefs();
+    localStorage.setItem(RADAR_PREFS_KEY, JSON.stringify({ ...cur, ...patch, symbol: { ...cur.symbol, ...patch.symbol } }));
+  } catch { /* storage unavailable — prefs just don't persist */ }
+};
+// How long a signal counts for ranking (the display cache is only 20s).
+const SIGNAL_TTL_MS = 10 * 60_000;
 const DISMISS_STORAGE_KEY = "aqea_footer_bar_dismissed";
 
 /* φ-scale helpers */
@@ -372,7 +387,10 @@ export default function AIFooterTradeBar() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
   const [execSuccess, setExecSuccess] = useState(false);
-  const [countdown, setCountdown] = useState(COUNTDOWN_TOTAL);
+  const [countdown, setCountdown] = useState(() => {
+    const v = Number(readRadarPrefs().speedSec);
+    return (RADAR_SPEEDS as readonly number[]).includes(v) ? v : COUNTDOWN_TOTAL;
+  });
   const [customMargin, setCustomMargin] = useState("");
   const [customLeverage, setCustomLeverage] = useState("");
 
@@ -415,12 +433,46 @@ export default function AIFooterTradeBar() {
 
   /* Active Symbol & Dynamic Rotation */
   const [activeSymbol, setActiveSymbol] = useState<string>(() => {
+    const saved = readRadarPrefs().symbol?.[isIndianRoute ? "india" : "crypto"];
+    if (saved) return saved;
     if (selectedSymbol && (isIndianRoute ? DEFAULT_INDIAN_SYMBOLS.includes(selectedSymbol) : true)) {
       return selectedSymbol;
     }
     return isIndianRoute ? DEFAULT_INDIAN_SYMBOLS[0] : (allowedSymbols?.[0] || DEFAULT_CRYPTO_SYMBOLS[0]);
   });
-  const [autoRotate, setAutoRotate] = useState<boolean>(true);
+  const [autoRotate, setAutoRotate] = useState<boolean>(() => readRadarPrefs().autoRotate ?? true);
+  const [speedSec, setSpeedSec] = useState<number>(() => {
+    const v = Number(readRadarPrefs().speedSec);
+    return (RADAR_SPEEDS as readonly number[]).includes(v) ? v : COUNTDOWN_TOTAL;
+  });
+  useEffect(() => { writeRadarPrefs({ autoRotate, speedSec }); }, [autoRotate, speedSec]);
+  useEffect(() => { writeRadarPrefs({ symbol: { [isIndianRoute ? "india" : "crypto"]: activeSymbol } }); }, [activeSymbol, isIndianRoute]);
+  // Latest direction/confidence per symbol, kept longer than the 20s display
+  // cache so RADAR can rank symbols it has already looked at.
+  const signalMap = useRef<Map<string, { direction: string; confidence: number; time: number }>>(new Map());
+
+  // Open positions come first in the rotation. Crypto: the app store.
+  // Indian: polled from the positions endpoint while on an Indian page.
+  const cryptoPositions = useAppStore((s) => s.positions);
+  const [indianOpen, setIndianOpen] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isIndianRoute) return;
+    let alive = true;
+    const load = () => fetch("/api/indian-market/positions")
+      .then((r) => r.json())
+      .then((d) => {
+        const list = (d?.positions ?? d?.data ?? []) as any[];
+        if (alive) setIndianOpen(Array.from(new Set(list.map((p) => String(p.underlying || p.symbol)).filter(Boolean))));
+      })
+      .catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [isIndianRoute]);
+  const openSymbols = useMemo(
+    () => (isIndianRoute ? indianOpen : Array.from(new Set((cryptoPositions || []).map((p) => p.symbol)))),
+    [isIndianRoute, indianOpen, cryptoPositions],
+  );
   const [isLoadingPrediction, setIsLoadingPrediction] = useState<boolean>(false);
   const predictionCache = useRef<Map<string, { pred: UpcomingTradePrediction; time: number }>>(new Map());
 
@@ -443,7 +495,7 @@ export default function AIFooterTradeBar() {
     if (selectedSymbol && selectedSymbol !== prevSelectedSymbolRef.current && candidateSymbols.includes(selectedSymbol)) {
       prevSelectedSymbolRef.current = selectedSymbol;
       setActiveSymbol(selectedSymbol);
-      setCountdown(COUNTDOWN_TOTAL);
+      setCountdown(speedSec);
     }
   }, [selectedSymbol, candidateSymbols]);
 
@@ -473,6 +525,7 @@ export default function AIFooterTradeBar() {
   );
 
   const applyPrediction = useCallback((p: UpcomingTradePrediction) => {
+    if (p?.symbol) signalMap.current.set(p.symbol, { direction: p.direction, confidence: Number(p.confidence) || 0, time: Date.now() });
     setPrediction(p);
     setCustomMargin(String(p.allocatedMargin));
     setCustomLeverage(String(p.estimatedLeverage));
@@ -543,21 +596,41 @@ export default function AIFooterTradeBar() {
     }
   }, [fetchedPrice, activeSymbol]);
 
+  // Rotation order: open positions → fresh LONG/SHORT signals (strongest
+  // first) → symbols not yet evaluated or stale → recent HOLDs last. HOLDs are
+  // still revisited once their signal goes stale, so new setups get found.
+  const radarOrder = useCallback((): string[] => {
+    const now = Date.now();
+    const fresh = (s: string) => {
+      const x = signalMap.current.get(s);
+      return x && now - x.time < SIGNAL_TTL_MS ? x : undefined;
+    };
+    const open = openSymbols.filter((s) => candidateSymbols.includes(s) || isIndianRoute);
+    const rest = candidateSymbols.filter((s) => !open.includes(s));
+    const active = rest.filter((s) => fresh(s) && fresh(s)!.direction !== "HOLD")
+      .sort((a, b) => fresh(b)!.confidence - fresh(a)!.confidence);
+    const unknown = rest.filter((s) => !fresh(s));
+    const holds = rest.filter((s) => fresh(s)?.direction === "HOLD");
+    return [...open, ...active, ...unknown, ...holds];
+  }, [candidateSymbols, openSymbols, isIndianRoute]);
+
   const rotateToNext = useCallback(() => {
+    const order = radarOrder();
     setActiveSymbol((curr) => {
-      const idx = candidateSymbols.indexOf(curr);
-      return idx >= 0 ? candidateSymbols[(idx + 1) % candidateSymbols.length] : candidateSymbols[0];
+      const idx = order.indexOf(curr);
+      return order.length ? order[(idx + 1) % order.length] : curr;
     });
-    setCountdown(COUNTDOWN_TOTAL);
-  }, [candidateSymbols]);
+    setCountdown(speedSec);
+  }, [radarOrder, speedSec]);
 
   const rotateToPrev = useCallback(() => {
+    const order = radarOrder();
     setActiveSymbol((curr) => {
-      const idx = candidateSymbols.indexOf(curr);
-      return idx > 0 ? candidateSymbols[idx - 1] : candidateSymbols[candidateSymbols.length - 1];
+      const idx = order.indexOf(curr);
+      return order.length ? order[idx > 0 ? idx - 1 : order.length - 1] : curr;
     });
-    setCountdown(COUNTDOWN_TOTAL);
-  }, [candidateSymbols]);
+    setCountdown(speedSec);
+  }, [radarOrder, speedSec]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -568,13 +641,13 @@ export default function AIFooterTradeBar() {
           } else {
             loadPrediction(activeSymbol, true);
           }
-          return COUNTDOWN_TOTAL;
+          return speedSec;
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [autoRotate, isExpanded, rotateToNext, activeSymbol, loadPrediction]);
+  }, [autoRotate, isExpanded, rotateToNext, activeSymbol, loadPrediction, speedSec]);
 
   useEffect(() => { setCustomMargin(String(prediction.allocatedMargin)); setCustomLeverage(String(prediction.estimatedLeverage)); }, []); // eslint-disable-line
 
@@ -622,7 +695,7 @@ export default function AIFooterTradeBar() {
       ? (blinkPhase === "SPOT" ? SPOT_COLOR : FUTURES_COLOR)
       : undefined;
 
-  const progressPct = ((COUNTDOWN_TOTAL - countdown) / COUNTDOWN_TOTAL) * 100;
+  const progressPct = ((speedSec - countdown) / speedSec) * 100;
   const dc = dirColor(prediction.direction);
   const mc = modeColor(mode);
   const isSpotLocked = isIndianAsset || resolvedAT === "SPOT";
@@ -815,7 +888,7 @@ export default function AIFooterTradeBar() {
                       value={activeSymbol}
                       onChange={(e) => {
                         setActiveSymbol(e.target.value);
-                        setCountdown(COUNTDOWN_TOTAL);
+                        setCountdown(speedSec);
                       }}
                       style={{
                         fontSize: φ.fs.md,
@@ -902,7 +975,7 @@ export default function AIFooterTradeBar() {
                   {/* Auto-cycle indicator badge / button */}
                   <button
                     onClick={(e) => { e.stopPropagation(); setAutoRotate(r => !r); }}
-                    title={autoRotate ? "Auto-cycling every 15s across market opportunities (Click to pause)" : "Auto-cycle paused (Click to resume)"}
+                    title={autoRotate ? `Auto-cycling every ${speedSec}s: open positions first, then the strongest LONG/SHORT signals, HOLDs last (click to pause)` : "Auto-cycle paused (click to resume)"}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -921,6 +994,21 @@ export default function AIFooterTradeBar() {
                     <RotateCw size={10} className={autoRotate ? "animate-spin" : ""} style={{ animationDuration: "6s" }} />
                     <span className="hidden lg:inline">{autoRotate ? "RADAR" : "PAUSED"}</span>
                   </button>
+                  {/* Time per symbol; saved per browser. */}
+                  <select
+                    value={speedSec}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { const v = Number(e.target.value); setSpeedSec(v); setCountdown(v); }}
+                    title="Seconds per symbol"
+                    style={{ fontSize: 9, fontWeight: 700, padding: "1px 2px", borderRadius: φ.r.xs, background: "transparent", color: "var(--ds-text-faint, #94a3b8)", border: "1px solid var(--ds-border, #cbd5e1)", cursor: "pointer" }}
+                  >
+                    {RADAR_SPEEDS.map((v) => <option key={v} value={v}>{v}s</option>)}
+                  </select>
+                  {openSymbols.includes(activeSymbol) && (
+                    <span title="You hold this position — RADAR checks open positions first" style={{ fontSize: 9, fontWeight: 800, padding: "2px 5px", borderRadius: φ.r.xs, color: "#059669", background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)" }}>
+                      OPEN
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
