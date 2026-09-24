@@ -29,12 +29,24 @@ export class StrategyRouter {
   public static classifyRegime(
     spotPrice: number,
     bars15m: any[],
-    pcr: number = 1.0
+    pcr: number = 1.0,
+    live?: { adx14?: number; open?: number }
   ): RegimeAnalysis {
     let adx = 22;
     let atrPct = 1.1;
     let bollingerBandwidthPct = 1.8;
     let vwapRelationship: "ABOVE" | "BELOW" | "AT_VWAP" = "ABOVE";
+
+    // Real indicators when available: ADX(14) from exchange candles and the
+    // session's direction vs today's open (±0.15% counts as flat).
+    if (live && Number.isFinite(live.adx14)) {
+      adx = Number(live.adx14);
+      const o = Number(live.open);
+      if (o > 0) {
+        const d = (spotPrice - o) / o;
+        vwapRelationship = d > 0.0015 ? "ABOVE" : d < -0.0015 ? "BELOW" : "AT_VWAP";
+      }
+    }
 
     if (bars15m && bars15m.length >= 10) {
       const recentCloses = bars15m.slice(-10).map((b) => b.close ?? b.ltp ?? spotPrice);
@@ -90,6 +102,17 @@ export class StrategyRouter {
         "SUPERTREND",
         "SHORT_FUTURE"
       );
+    }
+    // 2b. Strong trend without PCR confirmation (stock options have no chain,
+    // so pcr defaults to 1.0 and a clear downtrend used to fall through to
+    // RANGING). A trend is a trend; the PCR disagreement only lowers confidence.
+    else if (adx >= 25 && vwapRelationship !== "AT_VWAP") {
+      regime = vwapRelationship === "ABOVE" ? "TRENDING_BULL" : "TRENDING_BEAR";
+      confidence = 70;
+      rationale.push(`Trend by ADX ${adx.toFixed(1)} and price ${vwapRelationship === "ABOVE" ? "above" : "below"} the open (PCR ${pcr.toFixed(2)} not confirming)`);
+      recommendedStrategies.push(...(regime === "TRENDING_BULL"
+        ? (["LONG_CALL", "BULL_CALL_SPREAD", "EMA_TREND", "SUPERTREND"] as StrategyId[])
+        : (["LONG_PUT", "BEAR_PUT_SPREAD", "EMA_TREND", "SUPERTREND"] as StrategyId[])));
     }
     // 3. Volatility Breakout
     else if (bollingerBandwidthPct > 2.2 || atrPct > 1.4) {

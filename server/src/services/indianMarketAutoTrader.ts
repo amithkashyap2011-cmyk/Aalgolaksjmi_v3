@@ -9,6 +9,7 @@
  *  for Trailing SL, Target hits, and Signal Reversals.
  */
 
+import { priceTradeFromRealQuotes, isOptionTrade, realOptionValue } from "./indianMarket/realQuoteGuard.js";
 import mongoose from "mongoose";
 import { safeCreateAlert } from "./alertService.js";
 import { INDIAN_SYMBOLS, SUPPORTED_INDIAN_SYMBOLS } from "../config/indianSymbols.js";
@@ -32,7 +33,7 @@ import { PortfolioIntelligenceEngine } from "./agentic/portfolio/PortfolioIntell
 
 // Pricing and valuation re-exports
 export { MOCK_LIVE_INDIAN_TIKERS, resolveLivePriceForIndianTrade } from "./indianMarket/indianPricing.js";
-import { MOCK_LIVE_INDIAN_TIKERS, resolveLivePriceForIndianTrade } from "./indianMarket/indianPricing.js";
+import { MOCK_LIVE_INDIAN_TIKERS, resolveLivePriceForIndianTrade, hasFreshRealIndicators } from "./indianMarket/indianPricing.js";
 
 import { AutoPilotStateMachine } from "./indianMarket/autoPilotStateMachine.js";
 export { AutoPilotStateMachine };
@@ -164,7 +165,14 @@ export class IndianMarketAutoTrader {
 
     const isIndex = normUnderlying === "NIFTY" || normUnderlying === "BANKNIFTY" || normUnderlying === "FINNIFTY";
     const optionChain = isIndex ? OptionChainService.generateOptionChain(normUnderlying, ticker.ltp) : undefined;
-    const regimeAnalysis = StrategyRouter.classifyRegime(ticker.ltp, [], optionChain?.pcr || 1.0);
+    // Real ADX (Angel One candles) and direction vs today's open. This passed an
+    // empty bar list, so ADX defaulted to 22 and every trade was "RANGING" —
+    // letting reversal strategies trade straight into trends.
+    // Strategies decide on RSI/ADX: refuse to trade on simulated ones.
+    if (!hasFreshRealIndicators(targetSymbol)) {
+      throw new Error(`REAL_INDICATORS_REQUIRED: no fresh exchange-candle RSI/ADX for ${targetSymbol}`);
+    }
+    const regimeAnalysis = StrategyRouter.classifyRegime(ticker.ltp, [], optionChain?.pcr || 1.0, { adx14: ticker.adx14, open: ticker.open });
 
     const context = {
       underlying: normUnderlying,
@@ -221,6 +229,14 @@ export class IndianMarketAutoTrader {
 
     const { strategy, trade } = tradeBundle;
     trade.mode = mode;
+
+    // Price integrity: open option trades only on fresh real Angel One quotes
+    // (repriced from them, with volatility-scaled stops). Model-priced entries
+    // produced phantom 1-2 minute wins/losses — see realQuoteGuard.ts.
+    const priced = priceTradeFromRealQuotes(trade, normUnderlying, ticker.ltp);
+    if (!priced.ok) {
+      throw new Error(`REAL_QUOTE_REQUIRED: ${priced.reason}`);
+    }
 
     // 2. Pre-Trade Risk Validation Gatekeeper
 
@@ -390,7 +406,7 @@ export class IndianMarketAutoTrader {
         // Persist the exact margin debited at open so the exit releases the
         // SAME amount (proportional to fill) instead of full notional — the
         // asymmetry here was minting INR on every close.
-        meta: { marginDebitedINR: requiredMargin },
+        meta: { marginDebitedINR: requiredMargin, entryPriceSource: priced.source },
         autoCloseStatus: "ARMED",
         entrySource: "AI_ENSEMBLE_DERIVATIVES_ENGINE",
         decisionPath: ["AI_ENSEMBLE_PIPELINE", trade.strategy, regimeAnalysis.regime],
@@ -457,7 +473,16 @@ export class IndianMarketAutoTrader {
     });
 
     for (const trade of openTrades) {
-      const currentPrice = resolveLivePriceForIndianTrade(trade);
+      // Option trades: act only on fresh real quotes. A model price here
+      // triggered stops/targets on phantom moves; skip this tick instead.
+      let currentPrice: number;
+      if (isOptionTrade(trade)) {
+        const real = realOptionValue(trade, InstrumentMaster.normalizeUnderlying(trade.underlying || trade.symbol));
+        if (real === undefined) continue;
+        currentPrice = real;
+      } else {
+        currentPrice = resolveLivePriceForIndianTrade(trade);
+      }
       const tick = {
         symbol: trade.symbol,
         ltp: currentPrice,

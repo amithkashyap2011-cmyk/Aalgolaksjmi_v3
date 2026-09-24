@@ -432,7 +432,9 @@ describe("Production Accounting & Auto-Pilot Reconciliation Test Suite", () => {
       AutoPilotStateMachine.setMode("AUTO");
     });
 
-    test("Dynamic multi-tier trailing stop ratchets SL to breakeven at +16% and locks profit at +28% and +40%", async () => {
+    test("Dynamic multi-tier trailing stop: breakeven at +25%, locks +15% at +40% and +30% at +60%", async () => {
+      // Tiers moved out 2026-09-24 (were +16/+28/+40): breakeven at +16% cut
+      // real winners at +2-10% while losers ran to the full stop.
       AutoPilotStateMachine.setMode("AUTO");
       const mockBroker = new MockBrokerAdapter();
 
@@ -443,38 +445,42 @@ describe("Production Accounting & Auto-Pilot Reconciliation Test Suite", () => {
         quantity: 150,
         origQty: 150,
         entryPrice: 100.00,
-        tp: 150.00,
+        tp: 200.00,
         sl: 72.00,
         status: "OPEN",
         mode: "PAPER",
         meta: {},
         save: async () => {},
       };
+      const tick = (ltp: number) => AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp, timestamp: Date.now() }, mockBroker);
 
-      // 1. Initial tick at entry price
-      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 100.00, timestamp: Date.now() }, mockBroker);
+      await tick(100);
       expect(tradeDoc.sl).toBe(72.00);
 
-      // 2. Tick reaches +17% (117) -> Should shift SL to Breakeven (+0.50 buffer)
-      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 117.00, timestamp: Date.now() }, mockBroker);
-      expect(tradeDoc.sl).toBe(100.50);
+      // +17% no longer moves the stop (it used to shift to breakeven here)
+      await tick(117);
+      expect(tradeDoc.sl).toBe(72.00);
+
+      // +26% -> breakeven + max(₹0.50, 2% of premium) = 102.00
+      await tick(126);
+      expect(tradeDoc.sl).toBe(102.00);
       expect(tradeDoc.meta.trailingStage).toBe("BREAKEVEN_SHIFT");
 
-      // 3. Tick reaches +30% (130) -> Should shift SL to +15% profit lock (115.00)
-      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 130.00, timestamp: Date.now() }, mockBroker);
+      // +41% -> lock +15% (115.00)
+      await tick(141);
       expect(tradeDoc.sl).toBe(115.00);
       expect(tradeDoc.meta.trailingStage).toBe("PROFIT_LOCK_15PCT");
 
-      // 4. Tick reaches +42% (142) -> Should shift SL to +25% profit lock (125.00)
-      await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 142.00, timestamp: Date.now() }, mockBroker);
-      expect(tradeDoc.sl).toBe(125.00);
-      expect(tradeDoc.meta.trailingStage).toBe("PROFIT_LOCK_25PCT");
+      // +62% -> lock +30% (130.00)
+      await tick(162);
+      expect(tradeDoc.sl).toBe(130.00);
+      expect(tradeDoc.meta.trailingStage).toBe("PROFIT_LOCK_30PCT");
 
-      // 5. Price pulls back from 142 down to 124 (below trailed SL of 125) -> Triggers exit with profit!
-      const exitRes = await AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp: 124.00, timestamp: Date.now() }, mockBroker);
+      // Pull back below the trailed stop -> exits with profit
+      const exitRes = await tick(129);
       expect(exitRes.triggered).toBe(true);
       expect(exitRes.reason).toContain("TRAILING_STOP");
-      expect(exitRes.reason).toContain("PROFIT_LOCK_25PCT");
+      expect(exitRes.reason).toContain("PROFIT_LOCK_30PCT");
       expect(mockBroker.orderPlacedCount).toBe(1);
     });
   });

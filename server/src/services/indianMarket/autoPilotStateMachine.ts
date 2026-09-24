@@ -200,25 +200,28 @@ export class AutoPilotStateMachine {
         let candidateSl = sl;
         let trailStage = tradeDoc.meta.trailingStage || "NONE";
 
-        // Tier 3: Peak gain >= +40% -> Lock in +25% profit
-        if (peakGainPct >= 40) {
-          const lockPrice = roundTo2(entryPrice * 1.25);
+        // Tiers moved out (2026-09-24): breakeven at +16% cut most real winners
+        // at +2-10% while losers ran to the full stop — lopsided exits.
+        // Tier 3: Peak gain >= +60% -> Lock in +30% profit
+        if (peakGainPct >= 60) {
+          const lockPrice = roundTo2(entryPrice * 1.30);
           if (lockPrice > candidateSl) {
             candidateSl = lockPrice;
-            trailStage = "PROFIT_LOCK_25PCT";
+            trailStage = "PROFIT_LOCK_30PCT";
           }
         }
-        // Tier 2: Peak gain >= +28% -> Lock in +15% profit
-        else if (peakGainPct >= 28) {
+        // Tier 2: Peak gain >= +40% -> Lock in +15% profit
+        else if (peakGainPct >= 40) {
           const lockPrice = roundTo2(entryPrice * 1.15);
           if (lockPrice > candidateSl) {
             candidateSl = lockPrice;
             trailStage = "PROFIT_LOCK_15PCT";
           }
         }
-        // Tier 1: Peak gain >= +16% -> Shift to Breakeven (+₹0.50 buffer for charges)
-        else if (peakGainPct >= 16) {
-          const bePrice = roundTo2(entryPrice + 0.50);
+        // Tier 1: Peak gain >= +25% -> Shift to Breakeven (+ charges buffer:
+        // the larger of ₹0.50 or 2% of the premium)
+        else if (peakGainPct >= 25) {
+          const bePrice = roundTo2(entryPrice + Math.max(0.50, entryPrice * 0.02));
           if (bePrice > candidateSl) {
             candidateSl = bePrice;
             trailStage = "BREAKEVEN_SHIFT";
@@ -240,20 +243,20 @@ export class AutoPilotStateMachine {
         let candidateSl = sl;
         let trailStage = tradeDoc.meta.trailingStage || "NONE";
 
-        if (peakDropPct >= 40) {
-          const lockPrice = roundTo2(entryPrice * 0.75);
+        if (peakDropPct >= 60) {
+          const lockPrice = roundTo2(entryPrice * 0.70);
           if (lockPrice < candidateSl) {
             candidateSl = lockPrice;
-            trailStage = "PROFIT_LOCK_25PCT";
+            trailStage = "PROFIT_LOCK_30PCT";
           }
-        } else if (peakDropPct >= 28) {
+        } else if (peakDropPct >= 40) {
           const lockPrice = roundTo2(entryPrice * 0.85);
           if (lockPrice < candidateSl) {
             candidateSl = lockPrice;
             trailStage = "PROFIT_LOCK_15PCT";
           }
-        } else if (peakDropPct >= 16) {
-          const bePrice = roundTo2(entryPrice - 0.50);
+        } else if (peakDropPct >= 25) {
+          const bePrice = roundTo2(entryPrice - Math.max(0.50, entryPrice * 0.02));
           if (bePrice < candidateSl) {
             candidateSl = bePrice;
             trailStage = "BREAKEVEN_SHIFT";
