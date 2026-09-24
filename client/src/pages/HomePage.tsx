@@ -200,7 +200,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       const liveMark = livePrices && livePrices[symbol] ? parseFloat(String(livePrices[symbol])) : 0;
       const finalQuantity = (liveMark > 0 && rawVal >= 1) ? parseFloat((rawVal / liveMark).toFixed(5)) : rawVal;
 
-      await api.placeOrder({
+      const orderRes: any = await api.placeOrder({
         symbol,
         side,
         quantity: finalQuantity,
@@ -212,6 +212,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       });
       setOrderError(null);
       addAlert("GREEN", `✅ Futures ${side === "BUY" ? "LONG" : "SHORT"} $${rawVal} USDT (${finalQuantity} ${symbol.replace("USDT","")}) ${orderLev}× filled!`);
+      for (const w of orderRes?.warnings ?? []) addAlert("AMBER", `⚠️ ${w}`);
       await refresh();
     } catch (e: any) {
       setOrderError("Order failed: " + (e?.message || e));
@@ -241,7 +242,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       const liveMark = livePrices && livePrices[symbol] ? parseFloat(String(livePrices[symbol])) : 0;
       const finalQuantity = (liveMark > 0 && rawVal >= 1) ? parseFloat((rawVal / liveMark).toFixed(5)) : rawVal;
 
-      await api.placeOrder({
+      const orderRes: any = await api.placeOrder({
         symbol,
         side,
         quantity: finalQuantity,
@@ -251,6 +252,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       });
       setOrderError(null);
       addAlert("GREEN", `✅ Spot ${side === "BUY" ? "BUY" : "SELL"} $${rawVal} USDT (${finalQuantity} ${symbol.replace("USDT","")}) filled!`);
+      for (const w of orderRes?.warnings ?? []) addAlert("AMBER", `⚠️ ${w}`);
       await refresh();
     } catch (e: any) {
       setOrderError("Order failed: " + (e?.message || e));

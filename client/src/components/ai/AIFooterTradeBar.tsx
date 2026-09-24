@@ -697,8 +697,10 @@ export default function AIFooterTradeBar() {
         return {
           ...prev,
           entryPrice: fetchedPrice,
-          targetTp: prev.direction === "HOLD" ? fetchedPrice : parseFloat((fetchedPrice * tpMult).toFixed(fetchedPrice > 100 ? 2 : 4)),
-          stopLoss: prev.direction === "HOLD" ? fetchedPrice : parseFloat((fetchedPrice * slMult).toFixed(fetchedPrice > 100 ? 2 : 4)),
+          // Significant digits, not 2/4 decimals (4 decimals turned PEPE's
+          // $0.0000052 levels into 0 / the same value).
+          targetTp: prev.direction === "HOLD" ? fetchedPrice : Number((fetchedPrice * tpMult).toPrecision(6)),
+          stopLoss: prev.direction === "HOLD" ? fetchedPrice : Number((fetchedPrice * slMult).toPrecision(6)),
         };
       });
     }
@@ -850,7 +852,14 @@ export default function AIFooterTradeBar() {
         const json = await res.json();
         if (!res.ok || json.error) throw new Error(json.error || "Indian market order placement failed");
       } else {
-        await api.placeOrder({ symbol: prediction.symbol, side, quantity: qty, mode, sl: prediction.stopLoss, tp: prediction.targetTp, leverage: lev, accountType: resolvedAT });
+        // Only send the AI's levels when they belong to this side: on HOLD they
+        // equal the price (instant exit), and on the opposite call they're
+        // inverted (stop above a buy). Otherwise the server sets side-correct
+        // defaults.
+        const aiSide = prediction.direction === "LONG" ? "BUY" : prediction.direction === "SHORT" ? "SELL" : null;
+        const levels = aiSide === side ? { sl: prediction.stopLoss, tp: prediction.targetTp } : {};
+        const orderRes: any = await api.placeOrder({ symbol: prediction.symbol, side, quantity: qty, mode, ...levels, leverage: lev, accountType: resolvedAT });
+        for (const w of orderRes?.warnings ?? []) useAppStore.getState().addAlert("AMBER", `⚠️ ${w}`);
       }
 
       setExecSuccess(true);

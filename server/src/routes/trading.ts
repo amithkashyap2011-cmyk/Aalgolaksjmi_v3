@@ -6,6 +6,7 @@
  * GET  /trading/history
  * GET  /trading/wallet
  */
+import { validateOrderLevels } from "../services/orderLevels.js";
 import { requirePermission } from "../middleware/rbac.js";
 import { peakConcurrentCapital } from "../services/capitalPeak.js";
 import { UITelemetryService } from "../services/uiTelemetry.js";
@@ -699,17 +700,20 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
     }
 
     /* compute SL/TP prices */
+    // Significant digits, not 8 decimals: toFixed(8) left PEPE (~$0.0000052)
+    // with 2-3 digits, so a stop and a target could round to the same value.
+    const px = (v: number) => Number(v.toPrecision(8));
     let slPrice = sl;
     let tpPrice = tp;
 
     if (slPrice === undefined || tpPrice === undefined) {
       const estAtr = entryPrice * 0.015; // 1.5% ATR estimate for Crypto pairs
       if (side === "BUY") {
-        slPrice = slPrice !== undefined ? slPrice : +(entryPrice - estAtr * 1.5).toFixed(8);
-        tpPrice = tpPrice !== undefined ? tpPrice : +(entryPrice + estAtr * 3.0).toFixed(8);
+        slPrice = slPrice !== undefined ? slPrice : px(entryPrice - estAtr * 1.5);
+        tpPrice = tpPrice !== undefined ? tpPrice : px(entryPrice + estAtr * 3.0);
       } else {
-        slPrice = slPrice !== undefined ? slPrice : +(entryPrice + estAtr * 1.5).toFixed(8);
-        tpPrice = tpPrice !== undefined ? tpPrice : +(entryPrice - estAtr * 3.0).toFixed(8);
+        slPrice = slPrice !== undefined ? slPrice : px(entryPrice + estAtr * 1.5);
+        tpPrice = tpPrice !== undefined ? tpPrice : px(entryPrice - estAtr * 3.0);
       }
     } else {
       // Distinguish absolute price from percentage:
@@ -717,13 +721,34 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
       // Otherwise, if it is a small number (e.g. 2 for 2%), treat as percentage.
       const isSlAbsolute = entryPrice > 0 && Math.abs(slPrice - entryPrice) / entryPrice < 0.5;
       if (!isSlAbsolute) {
-        slPrice = side === "BUY" ? +(entryPrice * (1 - slPrice / 100)).toFixed(8) : +(entryPrice * (1 + slPrice / 100)).toFixed(8);
+        slPrice = side === "BUY" ? px(entryPrice * (1 - slPrice / 100)) : px(entryPrice * (1 + slPrice / 100));
       }
       const isTpAbsolute = entryPrice > 0 && Math.abs(tpPrice - entryPrice) / entryPrice < 0.5;
       if (!isTpAbsolute) {
-        tpPrice = side === "BUY" ? +(entryPrice * (1 + tpPrice / 100)).toFixed(8) : +(entryPrice * (1 - tpPrice / 100)).toFixed(8);
+        tpPrice = side === "BUY" ? px(entryPrice * (1 + tpPrice / 100)) : px(entryPrice * (1 - tpPrice / 100));
       }
     }
+
+    // Sanity: side-correct levels, each at least a round trip of fees away.
+    const { slDist, error: levelError } = validateOrderLevels(side, entryPrice, slPrice!, tpPrice!);
+    if (levelError) {
+      res.status(400).json({ error: levelError });
+      return;
+    }
+    // Soft warning: a stop tighter than the coin's typical hourly move is
+    // likely to be hit by noise (TRX/AVAX stops at ~1.2% were).
+    const warnings: string[] = [];
+    try {
+      const kl = await binance.getKlines(symbol, "1h", undefined, undefined, 15);
+      if (kl.length >= 5) {
+        const ranges = kl.slice(-14).map((k: any) => (parseFloat(k.high) - parseFloat(k.low)) / parseFloat(k.close));
+        const typical = ranges.reduce((a: number, b: number) => a + b, 0) / ranges.length;
+        if (slDist < typical) {
+          warnings.push(`Stop-loss is ${(slDist * 100).toFixed(2)}% away but ${symbol} typically moves ${(typical * 100).toFixed(2)}% in an hour — it may be hit by normal noise.`);
+        }
+      }
+    } catch { /* warning only */ }
+    (req as any).orderWarnings = warnings;
 
     if (mode === "LIVE") {
       // 🛡️ CRITICAL FIX: LiveExecutionBarrier Hard Gate
@@ -895,7 +920,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
             });
           }
         });
-        res.json({ trade: (trade as any).toObject(), pnl: realizedPnlForResponse });
+        res.json({ trade: (trade as any).toObject(), pnl: realizedPnlForResponse, warnings: (req as any).orderWarnings ?? [] });
       } else {
         res.status(500).json({ error: "DB connection required for LIVE trading" });
       }
@@ -1166,6 +1191,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
       }
 
       res.json({
+        warnings: (req as any).orderWarnings ?? [],
         trade: memoryTrade,
         wallet: Object.fromEntries(wallet),
         pnl: +realizedPnl.toFixed(4),
