@@ -11,7 +11,7 @@ import time
 import joblib
 import numpy as np
 
-from data_pipeline import CNN_FEATURE_COLS, INTERVAL, SEQ_LEN, add_cnn_features, fetch_klines, stationarize_windows
+from data_pipeline import CNN_FEATURE_COLS, INTERVAL, SEQ_LEN, add_cnn_features, fetch_klines, get_live_klines, stationarize_windows
 from train_gbm import CHECKPOINT_PATH, FORWARD_HORIZON, window_to_row
 
 logger = logging.getLogger("GBMPredictor")
@@ -44,7 +44,7 @@ class GBMPredictor:
         now = time.monotonic()
         if cached and now - cached[0] < self.WINDOW_CACHE_TTL_SECONDS:
             return cached[1]
-        raw = fetch_klines(symbol, INTERVAL, SEQ_LEN + 40)
+        raw = get_live_klines(symbol, INTERVAL, SEQ_LEN + 40)  # shared bar-aligned cache + backoff
         # Drop the still-forming candle: training only saw completed bars.
         feats = add_cnn_features(raw).dropna(subset=CNN_FEATURE_COLS).iloc[:-1]
         if len(feats) < SEQ_LEN:

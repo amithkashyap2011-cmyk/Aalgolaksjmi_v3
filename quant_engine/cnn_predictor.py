@@ -118,7 +118,7 @@ class CNNPredictor:
         uses (data_pipeline) — so inference inputs are distributed exactly
         like training inputs. Cached per symbol for WINDOW_CACHE_TTL_SECONDS."""
         from data_pipeline import (CNN_FEATURE_COLS, INTERVAL, SEQ_LEN,
-                                   add_cnn_features, fetch_klines,
+                                   add_cnn_features, fetch_klines, get_live_klines,
                                    stationarize_windows)
 
         cached = self._window_cache.get(symbol)
@@ -129,7 +129,7 @@ class CNNPredictor:
         # 64 bars + 21-bar ma_slow warmup + headroom; drop the final row —
         # it is the still-forming candle, and training only ever saw
         # completed bars.
-        raw = fetch_klines(symbol, INTERVAL, SEQ_LEN + 40)
+        raw = get_live_klines(symbol, INTERVAL, SEQ_LEN + 40)  # shared bar-aligned cache + backoff
         feats = add_cnn_features(raw).dropna(subset=CNN_FEATURE_COLS).iloc[:-1]
         if len(feats) < SEQ_LEN:
             raise RuntimeError(f"CNN_WINDOW_INSUFFICIENT_HISTORY: {len(feats)} bars < {SEQ_LEN}")

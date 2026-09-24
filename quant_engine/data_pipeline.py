@@ -68,6 +68,68 @@ def fetch_klines(symbol: str, interval: str = INTERVAL, limit: int = KLINE_LIMIT
     return df[["symbol", "timestamp", "open", "high", "low", "close", "volume"]]
 
 
+# ── Live candles for inference: shared, bar-aligned cache + global backoff ──
+# CNN and GBM each fetched every symbol's 5m candles every 30-55s (candles only
+# change every 5 min) and kept calling Binance through 429s, escalating to 418
+# IP bans — which also block the Node server's LIVE orders from this IP.
+import threading as _threading
+import time as _time
+
+_LIVE_LOCK = _threading.Lock()
+_LIVE_CACHE: dict = {}          # (symbol, interval, limit) -> (bar_id, fetched_at, df)
+_BACKOFF_UNTIL = 0.0            # epoch seconds; no Binance calls before this
+_STALE_OK_SECONDS = 15 * 60     # serve the last good candles this long on errors
+_INTERVAL_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+
+
+class BinanceBackoff(RuntimeError):
+    pass
+
+
+def binance_backoff_remaining() -> float:
+    return max(0.0, _BACKOFF_UNTIL - _time.time())
+
+
+def get_live_klines(symbol: str, interval: str = INTERVAL, limit: int = KLINE_LIMIT) -> pd.DataFrame:
+    """Candles for live inference. One fetch per symbol per bar (refreshed a few
+    seconds after each bar closes), shared by every predictor; honours Binance
+    429/418 (Retry-After) globally; on network errors or backoff returns the
+    last good candles up to 15 min old instead of failing the prediction."""
+    global _BACKOFF_UNTIL
+    step = _INTERVAL_SECONDS.get(interval, 300)
+    now = _time.time()
+    bar_id = int((now - 3) // step)          # new id ~3s after each bar close
+    key = (symbol, interval, limit)
+    with _LIVE_LOCK:
+        hit = _LIVE_CACHE.get(key)
+        if hit and hit[0] == bar_id:
+            return hit[2]
+        if now < _BACKOFF_UNTIL:
+            if hit and now - hit[1] < _STALE_OK_SECONDS:
+                return hit[2]
+            raise BinanceBackoff(f"Binance backoff {int(_BACKOFF_UNTIL - now)}s (rate limited)")
+    try:
+        df = fetch_klines(symbol, interval, limit)
+    except httpx.HTTPStatusError as e:
+        code = e.response.status_code
+        if code in (418, 429):
+            retry = e.response.headers.get("Retry-After")
+            wait = float(retry) if retry and retry.isdigit() else (300.0 if code == 418 else 60.0)
+            with _LIVE_LOCK:
+                _BACKOFF_UNTIL = max(_BACKOFF_UNTIL, _time.time() + wait)
+        if hit and now - hit[1] < _STALE_OK_SECONDS:
+            return hit[2]
+        raise
+    except (httpx.TransportError, OSError):
+        # DNS / connection hiccups ("[Errno 8] nodename nor servname")
+        if hit and now - hit[1] < _STALE_OK_SECONDS:
+            return hit[2]
+        raise
+    with _LIVE_LOCK:
+        _LIVE_CACHE[key] = (bar_id, _time.time(), df)
+    return df
+
+
 def fetch_klines_paginated(symbol: str, interval: str = INTERVAL,
                            total_bars: int = 6000) -> pd.DataFrame:
     """Fetch more history than one request allows by paging backwards with
