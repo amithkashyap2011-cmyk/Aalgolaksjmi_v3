@@ -148,6 +148,12 @@ const app = express();
 // reflect X-Forwarded-Proto. Never trust forwarded headers by default.
 if (getTransportConfig().trustProxy) {
   app.set("trust proxy", 1);
+} else {
+  // Only the local dev proxy (Vite, xfwd) may set X-Forwarded-For: trusted
+  // from loopback peers only, so LAN clients can't spoof it. Without this the
+  // rate limiter threw ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every proxied
+  // request and bucketed all users as 127.0.0.1.
+  app.set("trust proxy", "loopback");
 }
 
 app.use(transportSecurityMiddleware);

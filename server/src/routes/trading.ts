@@ -6,6 +6,7 @@
  * GET  /trading/history
  * GET  /trading/wallet
  */
+import { UITelemetryService } from "../services/uiTelemetry.js";
 import { Router } from "express";
 import { authGuard, adminGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
 import { Settings } from "../models/Settings.js";
@@ -334,6 +335,15 @@ router.get("/market-check", optionalAuth, async (req: AuthRequest, res) => {
     console.error("[market_check_error]", err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+/**
+ * GET /trading/live-decisions — the auto-trader's latest actual decision per
+ * symbol (what it will or won't trade), as opposed to /ensemble-report, which
+ * is a separate analysis and can disagree with the engine.
+ */
+router.get("/live-decisions", optionalAuth, (_req, res) => {
+  res.json({ decisions: UITelemetryService.getLatestDecisions(), now: Date.now() });
 });
 
 router.get("/ensemble-report", optionalAuth, async (req: AuthRequest, res) => {

@@ -46,6 +46,11 @@ export interface UpcomingTradePrediction {
   domain: "CRYPTO" | "INDIAN";
   direction: "LONG" | "SHORT" | "HOLD";
   confidence: number;
+  /** ENGINE = the auto-trader's own latest decision; ANALYSIS = the separate
+   *  ensemble report (can disagree with what the engine will trade). */
+  source?: "ENGINE" | "ANALYSIS";
+  engineThreshold?: number;   // probability (0–100) a side needs before the engine trades
+  engineReason?: string;
   entryPrice: number;
   targetTp: number;
   stopLoss: number;
@@ -465,6 +470,39 @@ export default function AIFooterTradeBar() {
   const signalMap = useRef<Map<string, { direction: string; confidence: number; time: number }>>(new Map());
   const [signalVersion, setSignalVersion] = useState(0); // re-render when background scans land
 
+  // The auto-trader's latest decision per symbol (GET /trading/live-decisions).
+  // The footer shows THIS as the AI call; the ensemble report is only used for
+  // levels, or labelled "analysis" when the engine hasn't evaluated a coin.
+  const liveDecisions = useRef<Record<string, any>>({});
+  useEffect(() => {
+    if (isIndianRoute) return;
+    let alive = true;
+    const load = () => fetch("/trading/live-decisions")
+      .then((r) => r.json())
+      .then((d) => { if (alive && d?.decisions) { liveDecisions.current = d.decisions; setSignalVersion((v) => v + 1); } })
+      .catch(() => {});
+    load();
+    const t = setInterval(load, 10_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [isIndianRoute]);
+  const withEngine = useCallback((p: UpcomingTradePrediction): UpcomingTradePrediction => {
+    if (!p || p.domain !== "CRYPTO") return p;
+    const e = liveDecisions.current[p.symbol];
+    if (!e || Date.now() - e.at > 5 * 60_000) return { ...p, source: "ANALYSIS" };
+    const pct = (x?: number) => (typeof x === "number" ? Math.round(x * 1000) / 10 : undefined);
+    const buy = pct(e.buyProbability), sell = pct(e.sellProbability);
+    // Confidence = probability of the side the engine is (or would be) taking.
+    const conf = e.decision === "LONG" ? buy : e.decision === "SHORT" ? sell : Math.max(buy ?? 0, sell ?? 0);
+    return {
+      ...p,
+      source: "ENGINE",
+      direction: e.decision,
+      confidence: conf ?? Number(e.confidence) ?? 0,
+      engineThreshold: pct(e.threshold),
+      engineReason: e.reason,
+    };
+  }, []);
+
   // Open positions come first in the rotation. Crypto: the app store.
   // Indian: polled from the positions endpoint while on an Indian page.
   const cryptoPositions = useAppStore((s) => s.positions);
@@ -538,7 +576,8 @@ export default function AIFooterTradeBar() {
     createInitialPrediction(activeSymbol, isIndianRoute, accountType, getLivePrice(activeSymbol))
   );
 
-  const applyPrediction = useCallback((p: UpcomingTradePrediction) => {
+  const applyPrediction = useCallback((raw: UpcomingTradePrediction) => {
+    const p = withEngine(raw);
     if (p?.symbol) {
       signalMap.current.set(p.symbol, { direction: p.direction, confidence: Number(p.confidence) || 0, time: Date.now() });
       setSignalVersion((v) => v + 1);
@@ -625,10 +664,11 @@ export default function AIFooterTradeBar() {
       busy = true;
       try {
         const isIndian = isIndianRoute || DEFAULT_INDIAN_SYMBOLS.includes(sym) || !sym.endsWith("USDT");
-        const pred = isIndian
+        const raw = isIndian
           ? (await fetchRealIndianPrediction(sym, indianStocksRef.current)).prediction
           : await fetchRealCryptoPrediction(sym, accountType, getLivePrice(sym));
-        predictionCache.current.set(sym, { pred, time: Date.now() });
+        predictionCache.current.set(sym, { pred: raw, time: Date.now() });
+        const pred = withEngine(raw);
         signalMap.current.set(sym, { direction: pred.direction, confidence: Number(pred.confidence) || 0, time: Date.now() });
         setSignalVersion((v) => v + 1);
       } catch { /* try again on a later tick */ } finally { busy = false; }
@@ -636,7 +676,7 @@ export default function AIFooterTradeBar() {
     tick();
     const t = setInterval(tick, 2500);
     return () => clearInterval(t);
-  }, [bandActive, radarUniverse, isIndianRoute, accountType, getLivePrice]);
+  }, [bandActive, radarUniverse, isIndianRoute, accountType, getLivePrice, withEngine]);
   // Keep the displayed coin inside the band: jump to the best match when the
   // current coin isn't (or no longer is) one.
   useEffect(() => {
@@ -1051,8 +1091,18 @@ export default function AIFooterTradeBar() {
                         {isLoadingPrediction ? "EVALUATING" : prediction.direction}
                       </span>
                       {/* Confidence — 13px secondary (φ.fs.sm) */}
-                      <span style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }} className="hidden sm:inline">
+                      <span
+                        title={prediction.source === "ENGINE"
+                          ? `Auto-trader's live decision. ${prediction.engineReason || ""}`
+                          : "Ensemble analysis only — the auto-trader hasn't evaluated this coin recently, so this is not what it will trade."}
+                        style={{ fontSize: φ.fs.xs, fontWeight: 600, color: "var(--ds-text-faint,#64748b)" }}
+                        className="hidden sm:inline"
+                      >
                         <strong style={{ color: "#2563eb" }}>{prediction.confidence}%</strong>
+                        {prediction.source === "ENGINE" && prediction.direction === "HOLD" && prediction.engineThreshold ? (
+                          <span> · needs {prediction.engineThreshold}%</span>
+                        ) : null}
+                        {prediction.source === "ANALYSIS" && <span style={{ marginLeft: 4, fontSize: 9, fontStyle: "italic" }}>analysis</span>}
                       </span>
                     </>
                   )}
