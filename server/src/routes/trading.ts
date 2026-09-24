@@ -416,7 +416,7 @@ router.get("/performance", authGuard, async (req: AuthRequest, res) => {
       cum += p; peak = Math.max(peak, cum); maxDd = Math.max(maxDd, peak - cum);
       if (!best || p > best.pnl) best = { symbol: t.symbol, pnl: p, closedAt: t.closedAt };
       if (!worst || p < worst.pnl) worst = { symbol: t.symbol, pnl: p, closedAt: t.closedAt };
-      const src = t.entrySource === "MANUAL" ? "Manual" : "AI auto-trader";
+      const src = t.entrySource === "MANUAL" ? "Manual" : t.entrySource === "PAPER_EXPLORATION" ? "PAPER exploration (≥45%)" : "AI auto-trader";
       const b = bySource.get(src) ?? { source: src, trades: 0, pnl: 0, wins: 0 };
       b.trades++; b.pnl += p; if (p > 0) b.wins++; bySource.set(src, b);
     }
@@ -1066,7 +1066,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
           // validation error for every manual order (LIVE and PAPER alike),
           // and in PAPER mode the wallet had already been debited by the time
           // that throw happened — money vanished with zero trade recorded.
-          entrySource: "MANUAL",
+          entrySource: strategy === "PAPER_EXPLORATION" ? "PAPER_EXPLORATION" : "MANUAL", // tagged PAPER experiment (see paperExplorer.ts)
           decisionPath: {},
           authorizedVotes: {},
           shadowVotes: {},

@@ -74,6 +74,7 @@ import { recoveryManager } from "./services/recoveryManager.js";
 import * as binanceService from "./services/binanceService.js";
 import { subscribeTicker, unsubscribeTicker, syncTime } from "./services/binanceService.js";
 import * as autoTradeEngine from "./services/autoTradeEngine.js";
+import { startPaperExplorer } from "./services/paperExplorer.js";
 import * as paperState from "./services/paperState.js";
 import { setIO } from "./services/socketService.js";
 import { UITelemetryService } from "./services/uiTelemetry.js";
@@ -720,6 +721,7 @@ async function boot() {
 
     // Start AutoTradeEngine immediately after memory is ready.
     autoTradeEngine.start();
+    startPaperExplorer(); // PAPER-only exploration on weaker signals (tagged)
     bootLog("AutoTradeEngine started (independent of quant engine state).");
 
     // Start Indian Market Intraday (MIS) 3:15 PM IST Auto Square-off Daemon
