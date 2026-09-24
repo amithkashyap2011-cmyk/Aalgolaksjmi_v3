@@ -2,6 +2,7 @@ import { getQuantEngineURL } from './serviceDiscovery.js';
 
 export const AI_ENDPOINTS = {
   CNN: "/predict/cnn",
+  GBM: "/predict/gbm",
   LSTM: "/predict/lstm",
   PPO: "/predict/ppo-execution",
   MAMBA: "/research/predict/mamba",

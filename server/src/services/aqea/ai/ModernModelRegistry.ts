@@ -13,6 +13,7 @@ import { PatchTSTExpert } from "./experts/PatchTSTExpert.js";
 import { TSFMExpertAdapter } from "./experts/TSFMExpertAdapter.js";
 import { BenchmarkCNNExpert } from "./experts/BenchmarkCNNExpert.js";
 import { BenchmarkLSTMExpert } from "./experts/BenchmarkLSTMExpert.js";
+import { GBMTreesExpert } from "./experts/GBMTreesExpert.js";
 import { Standardized15Features } from "../pipeline/FeaturePipeline.js";
 import { AnyRegime } from "../regimeEngine.js";
 
@@ -35,6 +36,8 @@ export class ModernModelRegistry {
     // Benchmark / Legacy Reference Models
     this.register(new BenchmarkCNNExpert());
     this.register(new BenchmarkLSTMExpert());
+    // Shadow-only: recorded for forward grading, zero voting weight.
+    this.register(new GBMTreesExpert());
   }
 
   public static register(expert: IModelExpert): void {

@@ -12,6 +12,7 @@ import ppo_replay_buffer
 
 from rl_agent import ppo_agent as legacy_ppo_agent
 from cnn_predictor import cnn_predictor
+from gbm_predictor import gbm_predictor
 from lstm_predictor import LSTMPredictor
 lstm_predictor = LSTMPredictor()
 from ppo_execution_agent import ppo_agent
@@ -361,6 +362,31 @@ def predict_cnn(data: CNNRequest):
     except Exception as e:
         logger.error(f"CNN Prediction error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+class GBMRequest(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    symbol: str
+
+@app.post("/predict/gbm")
+def predict_gbm(data: GBMRequest):
+    """SHADOW model (train_gbm.py): recorded by the server, never trades."""
+    try:
+        return gbm_predictor.predict(data.symbol)
+    except Exception as e:
+        logger.error(f"GBM Prediction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health/gbm")
+def health_gbm():
+    # Deliberately separate from /health/models, which gates engine
+    # registration — a shadow model must never block startup.
+    import json as _json
+    from train_gbm import STATE_PATH
+    try:
+        state = _json.loads(STATE_PATH.read_text())
+    except Exception:
+        state = {}
+    return {"loaded": gbm_predictor.checkpoint_loaded, "mode": "SHADOW", "lastInference": gbm_predictor.last_inference, "trainState": state}
 
 class LSTMRequest(BaseModel):
     model_config = ConfigDict(extra='allow')

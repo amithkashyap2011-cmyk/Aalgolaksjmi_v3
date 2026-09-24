@@ -42,7 +42,7 @@ ENABLED = os.getenv("AQEA_CONTINUOUS_LEARNING", "true").lower() not in ("false",
 INTERVAL_SECONDS = int(os.getenv("AQEA_TRAIN_INTERVAL_SECONDS", str(6 * 3600)))
 DEFER_SECONDS = int(os.getenv("AQEA_TRAIN_DEFER_SECONDS", str(10 * 60)))
 
-_last_cycle_result = {"cnn": None, "ppo": None, "started_at": None, "finished_at": None}
+_last_cycle_result = {"cnn": None, "ppo": None, "gbm": None, "started_at": None, "finished_at": None}
 
 
 async def _is_auto_trader_active() -> bool:
@@ -96,6 +96,19 @@ def _run_training_cycle_blocking() -> dict:
     except Exception as e:
         logger.error(f"[TrainingScheduler] PPO training cycle failed: {e}")
         result["ppo"] = {"promoted": False, "error": str(e)}
+
+    # Shadow gradient-boosted model: its failures never affect CNN/PPO.
+    try:
+        from gbm_predictor import gbm_predictor
+        from train_gbm import train_gbm
+        gbm_result = train_gbm()
+        result["gbm"] = gbm_result
+        if gbm_result.get("promoted"):
+            gbm_predictor.reload()
+            logger.info("[TrainingScheduler] GBM (shadow) checkpoint hot-reloaded.")
+    except Exception as e:
+        logger.error(f"[TrainingScheduler] GBM training cycle failed: {e}")
+        result["gbm"] = {"promoted": False, "error": str(e)}
 
     try:
         validation_state.refresh()
