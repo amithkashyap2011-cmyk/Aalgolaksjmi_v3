@@ -463,6 +463,7 @@ export default function AIFooterTradeBar() {
   // Latest direction/confidence per symbol, kept longer than the 20s display
   // cache so RADAR can rank symbols it has already looked at.
   const signalMap = useRef<Map<string, { direction: string; confidence: number; time: number }>>(new Map());
+  const [signalVersion, setSignalVersion] = useState(0); // re-render when background scans land
 
   // Open positions come first in the rotation. Crypto: the app store.
   // Indian: polled from the positions endpoint while on an Indian page.
@@ -538,7 +539,10 @@ export default function AIFooterTradeBar() {
   );
 
   const applyPrediction = useCallback((p: UpcomingTradePrediction) => {
-    if (p?.symbol) signalMap.current.set(p.symbol, { direction: p.direction, confidence: Number(p.confidence) || 0, time: Date.now() });
+    if (p?.symbol) {
+      signalMap.current.set(p.symbol, { direction: p.direction, confidence: Number(p.confidence) || 0, time: Date.now() });
+      setSignalVersion((v) => v + 1);
+    }
     setPrediction(p);
     setCustomMargin(String(p.allocatedMargin));
     setCustomLeverage(String(p.estimatedLeverage));
@@ -592,6 +596,57 @@ export default function AIFooterTradeBar() {
     loadPrediction(activeSymbol);
   }, [activeSymbol, loadPrediction]);
 
+  // ── Confidence filter ────────────────────────────────────────────────
+  // With a band selected, only matching coins are displayed. Other symbols
+  // are evaluated in the background (not shown) to find new matches.
+  const bandActive = confBand !== "ALL";
+  const radarUniverse = useMemo(() => Array.from(new Set([...openSymbols, ...candidateSymbols])), [openSymbols, candidateSymbols]);
+  const matchingSymbols = useMemo(() => {
+    if (!bandActive) return candidateSymbols;
+    const b = bandOf(confBand);
+    const now = Date.now();
+    return radarUniverse.filter((sym) => {
+      const x = signalMap.current.get(sym);
+      return !!x && now - x.time < SIGNAL_TTL_MS && x.direction !== "HOLD" && x.confidence >= b.min && x.confidence < b.max;
+    }).sort((a, c) => signalMap.current.get(c)!.confidence - signalMap.current.get(a)!.confidence);
+  }, [bandActive, confBand, radarUniverse, candidateSymbols, signalVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  const scanCursor = useRef(0);
+  const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
+  useEffect(() => {
+    if (!bandActive) return;
+    let busy = false;
+    const tick = async () => {
+      if (busy) return;
+      const now = Date.now();
+      const stale = radarUniverse.filter((sym) => { const x = signalMap.current.get(sym); return !x || now - x.time >= SIGNAL_TTL_MS; });
+      setScanProgress({ done: radarUniverse.length - stale.length, total: radarUniverse.length });
+      if (!stale.length) return;
+      const sym = stale[scanCursor.current++ % stale.length];
+      busy = true;
+      try {
+        const isIndian = isIndianRoute || DEFAULT_INDIAN_SYMBOLS.includes(sym) || !sym.endsWith("USDT");
+        const pred = isIndian
+          ? (await fetchRealIndianPrediction(sym, indianStocksRef.current)).prediction
+          : await fetchRealCryptoPrediction(sym, accountType, getLivePrice(sym));
+        predictionCache.current.set(sym, { pred, time: Date.now() });
+        signalMap.current.set(sym, { direction: pred.direction, confidence: Number(pred.confidence) || 0, time: Date.now() });
+        setSignalVersion((v) => v + 1);
+      } catch { /* try again on a later tick */ } finally { busy = false; }
+    };
+    tick();
+    const t = setInterval(tick, 2500);
+    return () => clearInterval(t);
+  }, [bandActive, radarUniverse, isIndianRoute, accountType, getLivePrice]);
+  // Keep the displayed coin inside the band: jump to the best match when the
+  // current coin isn't (or no longer is) one.
+  useEffect(() => {
+    if (bandActive && matchingSymbols.length && !matchingSymbols.includes(activeSymbol)) {
+      setActiveSymbol(matchingSymbols[0]);
+      setCountdown(speedSec);
+    }
+  }, [bandActive, matchingSymbols, activeSymbol, speedSec]);
+  const noMatchDisplayed = bandActive && !matchingSymbols.includes(activeSymbol);
+
   // Dynamically update prediction entry/TP/SL when live ticker price arrives
   useEffect(() => {
     if (fetchedPrice && fetchedPrice > 0) {
@@ -628,7 +683,7 @@ export default function AIFooterTradeBar() {
         const x = fresh(s);
         return x && x.direction !== "HOLD" && x.confidence >= b.min && x.confidence < b.max;
       }).sort((a, c) => fresh(c)!.confidence - fresh(a)!.confidence);
-      return [...matches, ...universe.filter((s) => !fresh(s))];
+      return matches; // only matching coins are displayed; others scan in the background
     }
     const open = openSymbols.filter((s) => candidateSymbols.includes(s) || isIndianRoute);
     const rest = candidateSymbols.filter((s) => !open.includes(s));
@@ -930,14 +985,14 @@ export default function AIFooterTradeBar() {
                         margin: 0,
                       }}
                     >
-                      {candidateSymbols.map((sym) => (
+                      {matchingSymbols.map((sym) => (
                         <option key={sym} value={sym} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
-                          {sym}
+                          {sym}{bandActive ? ` · ${signalMap.current.get(sym)?.direction} ${signalMap.current.get(sym)?.confidence}%` : ""}
                         </option>
                       ))}
-                      {!candidateSymbols.includes(activeSymbol) && (
-                        <option value={activeSymbol} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
-                          {activeSymbol}
+                      {!matchingSymbols.includes(activeSymbol) && (
+                        <option value={activeSymbol} disabled={bandActive} style={{ background: "var(--ds-surface, #fff)", color: "var(--ds-text, #0f172a)" }}>
+                          {bandActive ? "No match" : activeSymbol}
                         </option>
                       )}
                     </select>
@@ -966,7 +1021,12 @@ export default function AIFooterTradeBar() {
                   {/* Direction pill. After NSE close an Indian signal is computed on
                       frozen closing prices, so it's shown as the last signal, not
                       as a live call. */}
-                  {mktClosed && isIndianAsset ? (
+                  {noMatchDisplayed ? (
+                    <span title="No coin is currently in this confidence range; the rest are being scanned in the background" style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: "rgba(100,116,139,.12)", color: "#64748b", border: "1px solid rgba(100,116,139,.35)" }}>
+                      <RotateCw size={φ.ic.sm - 2} className={scanProgress.done < scanProgress.total ? "animate-spin" : ""} />
+                      NO COIN IN {bandOf(confBand).label} · scanned {scanProgress.done}/{scanProgress.total}
+                    </span>
+                  ) : mktClosed && isIndianAsset ? (
                     <>
                       <span title={indianStatus?.message} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: "rgba(100,116,139,.12)", color: "#64748b", border: "1px solid rgba(100,116,139,.35)" }}>
                         <Minus size={φ.ic.sm - 2} />
@@ -1039,24 +1099,11 @@ export default function AIFooterTradeBar() {
                   >
                     {CONF_BANDS.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
                   </select>
-                  {confBand !== "ALL" && (() => {
-                    const b = bandOf(confBand);
-                    const now = Date.now();
-                    let n = 0;
-                    let scanning = 0;
-                    for (const sym of new Set([...openSymbols, ...candidateSymbols])) {
-                      const x = signalMap.current.get(sym);
-                      if (!x || now - x.time >= SIGNAL_TTL_MS) { scanning++; continue; }
-                      if (x.direction !== "HOLD" && x.confidence >= b.min && x.confidence < b.max) n++;
-                    }
-                    const cur = signalMap.current.get(activeSymbol);
-                    const curMatches = !!cur && cur.direction !== "HOLD" && cur.confidence >= b.min && cur.confidence < b.max;
-                    return (
-                      <span title={`${n} symbol(s) currently in ${b.label}; ${scanning} not yet scanned`} style={{ fontSize: 9, fontWeight: 800, padding: "2px 5px", borderRadius: φ.r.xs, color: n ? "#2563eb" : "var(--ds-text-faint, #94a3b8)", border: "1px solid var(--ds-border, #cbd5e1)" }}>
-                        {n} match{curMatches ? "" : scanning ? " · scanning" : " · none in range"}
-                      </span>
-                    );
-                  })()}
+                  {bandActive && (
+                    <span title={`${matchingSymbols.length} coin(s) in ${bandOf(confBand).label}; scanned ${scanProgress.done}/${scanProgress.total}`} style={{ fontSize: 9, fontWeight: 800, padding: "2px 5px", borderRadius: φ.r.xs, color: matchingSymbols.length ? "#2563eb" : "var(--ds-text-faint, #94a3b8)", border: "1px solid var(--ds-border, #cbd5e1)" }}>
+                      {matchingSymbols.length} match{scanProgress.done < scanProgress.total ? ` · scanning ${scanProgress.done}/${scanProgress.total}` : ""}
+                    </span>
+                  )}
                   {openSymbols.includes(activeSymbol) && (
                     <span title="You hold this position — RADAR checks open positions first" style={{ fontSize: 9, fontWeight: 800, padding: "2px 5px", borderRadius: φ.r.xs, color: "#059669", background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.3)" }}>
                       OPEN
