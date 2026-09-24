@@ -514,6 +514,8 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
         openedAt: new Date(),
         autoCloseStatus: "ARMED",
         entrySource: "STRATEGY_BUILDER",
+        // Recorded so every exit path releases exactly what was debited.
+        meta: { marginDebitedINR: requiredMargin },
         decisionPath: [trade.strategy, regime],
         authorizedVotes: { strategy: trade.strategy },
         shadowVotes: {},
@@ -1008,7 +1010,11 @@ router.post("/close-position", requirePermission("CANCEL_ORDER"), async (req: Au
       spec.contractMultiplier
     );
     const totalNotional = roundTo2(trade.entryPrice * qty * spec.contractMultiplier);
-    const marginReturned = roundTo2(totalNotional / (trade.leverage || 1));
+    // Return exactly what was debited at open. Returning full notional when
+    // only the required margin had been debited credited free cash on every
+    // manual square-off; legacy trades without the field keep the old rule.
+    const debited = Number(trade.meta?.marginDebitedINR);
+    const marginReturned = roundTo2(debited > 0 ? debited : totalNotional / (trade.leverage || 1));
 
     trade.status = "CLOSED";
     trade.exitPrice = exitPrice;

@@ -131,7 +131,8 @@ export class IntradaySquareOffService {
       await paper.withWalletLock(userIdStr, "PAPER", accType, async () => {
         const wallet = paper.getWallet(userIdStr, "PAPER", accType as any);
         const currentInr = wallet.get("INR") ?? 0;
-        const newBalance = roundTo2(currentInr + Math.max(0, marginReleased + realizedPnl));
+        // No floor at zero — the full loss is charged (see autoPilotStateMachine).
+        const newBalance = roundTo2(currentInr + marginReleased + realizedPnl);
         wallet.set("INR", newBalance);
         await paper.setWalletBalance(userIdStr, "PAPER", "INR", newBalance, accType);
       });

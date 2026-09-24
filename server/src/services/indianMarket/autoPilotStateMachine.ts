@@ -544,7 +544,9 @@ export class AutoPilotStateMachine {
           quantity: origTotalQty,
         } as any);
         const marginReleased = roundTo2(debitedTotal * fillFraction);
-        const cashReturned = Math.max(0, exactAdd(marginReleased, filledRealizedPnl));
+        // No floor at zero: a loss larger than the margin locked at open must
+        // still be charged (the floor minted cash on every such loss).
+        const cashReturned = exactAdd(marginReleased, filledRealizedPnl);
         const balance = exactAdd(currentCash, cashReturned);
         wallet.set("INR", balance);
         if (tradeDoc.mode === "PAPER") {

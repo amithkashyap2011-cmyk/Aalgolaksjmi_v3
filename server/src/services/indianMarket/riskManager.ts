@@ -60,6 +60,15 @@ export class IndianRiskManager {
    * IndianRiskManager is the natural single source of truth for it.
    */
   public static computeRequiredMargin(trade: StructuredTrade): number {
+    // Buying options (single leg or a net-debit spread) costs the full
+    // premium. Debiting only the stop-loss risk (~28% of premium) overstated
+    // buying power and, with exits floored at zero, left losses beyond that
+    // amount uncharged: ₹6,736 of phantom cash on 2026-09-24.
+    const legs: any[] = (trade as any).legs ?? [];
+    const isOption = legs.length > 0 && legs.every((l) => l.instrumentType === "CE" || l.instrumentType === "PE");
+    if (isOption && (trade as any).position !== "SHORT") {
+      return Math.max(trade.risk?.riskAmount || 0, trade.entryPrice * trade.quantity);
+    }
     return trade.risk.riskAmount > 0 ? trade.risk.riskAmount : trade.entryPrice * trade.quantity;
   }
 
