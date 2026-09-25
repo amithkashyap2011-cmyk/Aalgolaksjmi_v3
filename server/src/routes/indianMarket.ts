@@ -7,6 +7,7 @@
 import { InstrumentMaster } from "../services/indianMarket/instrumentMaster.js";
 import { optionContracts } from "../services/indianMarket/angelOne/optionContracts.js";
 import { peakConcurrentCapital } from "../services/capitalPeak.js";
+import { dailyBreakdown } from "../services/dailyBreakdown.js";
 import { chargesAtClose } from "../services/indianMarket/tradeCharges.js";
 import express from "express";
 import mongoose from "mongoose";
@@ -1201,6 +1202,42 @@ let fundsCache: { timestamp: number; key: string; data: any } = { timestamp: 0, 
 /**
  * GET /api/indian-market/funds
  */
+/**
+ * GET /api/indian-market/daily-summary?mode=PAPER&days=30
+ * Per IST day: invested (entry cost of trades opened), peak in market,
+ * closed (count, net P&L after charges) and still holding at end of day.
+ */
+router.get("/daily-summary", async (req, res) => {
+  try {
+    const userId = resolveIndianUserId((req.query.userId as string) || (req as any).userId);
+    const mode = (req.query.mode as "PAPER" | "LIVE") || "PAPER";
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+    const from = new Date(Date.now() - (days + 1) * 86_400_000);
+    const OPEN_STATES = ["OPEN", "TARGET_TRIGGERED", "STOP_TRIGGERED", "EXIT_PENDING", "EXIT_PARTIALLY_FILLED"];
+    const trades = await Trade.find({
+      userId, mode, ...REAL_PRICED,
+      accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
+      $or: [{ openedAt: { $gte: from } }, { closedAt: { $gte: from } }, { status: { $in: OPEN_STATES } }],
+    }).lean();
+    const rows = dailyBreakdown(trades.map((t: any) => {
+      const pos = AuthoritativeLedger.buildAuthoritativePosition(t);
+      const open = OPEN_STATES.includes(t.status);
+      return {
+        openedAt: t.openedAt,
+        closedAt: t.closedAt,
+        cost: (Number(t.entryPrice) || 0) * (Number(t.origQty ?? t.quantity) || 0),
+        realized: open ? 0 : Number(pos.realized_pnl) || 0,
+        charges: open ? 0 : Number(pos.charges) || 0,
+        unrealized: open ? Number(pos.unrealized_pnl) || 0 : 0,
+        open,
+      };
+    }), days);
+    res.json({ success: true, currency: "INR", timezone: "Asia/Kolkata", rows });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/funds", async (req, res) => {
   try {
     const rawUserId = (req.query.userId as string) || (req as any).userId;

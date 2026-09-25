@@ -1,5 +1,6 @@
 import CryptoControlCenter from "../components/dashboard/CryptoControlCenter";
 import InvestmentSummary from "../components/common/InvestmentSummary";
+import DailyCapitalTable from "../components/common/DailyCapitalTable";
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { INITIAL_SUMMARY, useDashboardStore, type DomainMetrics, INITIAL_DOMAIN_METRICS } from '../store/useDashboardStore';
@@ -777,6 +778,13 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
           hidden={!showValues}
           loading={!appConnected || !userId || userId === "mock-user-001"}
           note={terminalTab === "all" ? "Spot + Futures combined" : undefined}
+        />
+
+        {/* Per day: invested, peak in market, closed P/L, holding (this tab's account type). */}
+        <DailyCapitalTable
+          currency="$"
+          hidden={!showValues}
+          endpoint={`/trading/daily-summary?mode=${mode === "LIVE" ? "LIVE" : "PAPER"}&accountType=${terminalTab === "all" ? "BOTH" : terminalTab === "futures" ? "FUTURES" : "SPOT"}&days=30`}
         />
 
         {/* Controls, why-no-trade, P&L history and performance (parity with the Indian page). */}

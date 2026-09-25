@@ -1,4 +1,5 @@
 import InvestmentSummary from "../components/common/InvestmentSummary";
+import DailyCapitalTable from "../components/common/DailyCapitalTable";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
@@ -827,6 +828,9 @@ export default function IndianMarketPage() {
           loading={(funds as any).totalDepositsINR === undefined}
           note={executionMode === "LIVE" ? "LIVE — Angel One account" : "PAPER account"}
         />
+
+        {/* Per day: invested, peak in market, closed (net P/L), holding. */}
+        <DailyCapitalTable currency="₹" endpoint={`/api/indian-market/daily-summary?mode=${executionMode === "LIVE" ? "LIVE" : "PAPER"}&days=30`} />
 
         {/* Top 4 Financial Metric Cards */}
         {(() => {

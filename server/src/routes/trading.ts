@@ -9,6 +9,7 @@
 import { validateOrderLevels } from "../services/orderLevels.js";
 import { requirePermission } from "../middleware/rbac.js";
 import { peakConcurrentCapital } from "../services/capitalPeak.js";
+import { dailyBreakdown } from "../services/dailyBreakdown.js";
 import { UITelemetryService } from "../services/uiTelemetry.js";
 import { Router } from "express";
 import { authGuard, adminGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
@@ -26,7 +27,7 @@ import { AqeaPerformance } from "../models/AqeaPerformance.js";
 import { AqeaTradeAnalytics } from "../models/AqeaTradeAnalytics.js";
 import * as binance from "../services/binanceService.js";
 import * as paper from "../services/paperState.js";
-import { enrichOpenTrades, TAKER_FEE } from "../services/pnlService.js";
+import { enrichOpenTrades, TAKER_FEE, computeUnrealisedPnl } from "../services/pnlService.js";
 import { toValidObjectId } from "../utils/mongoUtils.js";
 import * as autoTradeEngine from "../services/autoTradeEngine.js";
 import { getTradingControlStatus, setTradingControlStatus, getTradingControlChangedAt } from "../services/tradingControlStatus.js";
@@ -374,6 +375,43 @@ router.get("/capital-usage", authGuard, async (req: AuthRequest, res) => {
     }
     out.peak = peakConcurrentCapital(spans);
     res.json({ ...out, deployed: Number(out.deployed.toFixed(2)), openDeployed: Number(out.openDeployed.toFixed(2)) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /trading/daily-summary?mode=PAPER&accountType=SPOT|FUTURES|BOTH&days=30
+ * Per IST day: invested (cash debited = notional ÷ leverage for trades
+ * opened), peak in market, closed (count, P&L) and still holding at end of
+ * day. Crypto P&L is already net of fees.
+ */
+router.get("/daily-summary", authGuard, async (req: AuthRequest, res) => {
+  try {
+    const mode = String(req.query.mode || "PAPER");
+    const acct = String(req.query.accountType || "BOTH");
+    const types = acct === "BOTH" ? ["SPOT", "FUTURES"] : [acct];
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+    const from = new Date(Date.now() - (days + 1) * 86_400_000);
+    const trades = await Trade.find(
+      { userId: req.userId, mode, accountType: { $in: types }, $or: [{ openedAt: { $gte: from } }, { closedAt: { $gte: from } }, { status: "OPEN" }] },
+      { symbol: 1, side: 1, entryPrice: 1, quantity: 1, origQty: 1, leverage: 1, status: 1, pnl: 1, openedAt: 1, closedAt: 1, accountType: 1 },
+    ).lean();
+    const rows = dailyBreakdown((trades as any[]).map((t) => {
+      const qty = Number(t.origQty ?? t.quantity) || 0;
+      const open = t.status === "OPEN";
+      let unrealized = 0;
+      if (open) {
+        const px = binance.getTickerPriceSync(t.symbol, t.accountType === "FUTURES");
+        if (px) unrealized = computeUnrealisedPnl(t, px);
+      }
+      return {
+        openedAt: t.openedAt, closedAt: t.closedAt,
+        cost: (Number(t.entryPrice) || 0) * qty / (Number(t.leverage) || 1),
+        realized: open ? 0 : Number(t.pnl) || 0, charges: 0, unrealized, open,
+      };
+    }), days);
+    res.json({ success: true, currency: "USD", timezone: "Asia/Kolkata", rows });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

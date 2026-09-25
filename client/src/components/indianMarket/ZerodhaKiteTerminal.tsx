@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import InvestmentSummary from "../common/InvestmentSummary";
+import DailyCapitalTable from "../common/DailyCapitalTable";
 import {
   Search, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   Wallet, Layers, ShieldCheck, CheckCircle2, AlertCircle, RefreshCw,
@@ -632,6 +633,7 @@ export default function ZerodhaKiteTerminal({
   // Spot Index Prices for Kite Header
   // Live USD/INR from the app store (was a hardcoded 85.0).
   const usdInr = useAppStore((st) => (st as any).inrRate) || 95;
+  const kiteDailyMode = useAppStore((st) => st.indianMode) === "LIVE" ? "LIVE" : "PAPER";
   const noQuote = { price: 0, change: 0, changePct: 0 };
   const niftySpot = watchlist.find((s) => s.symbol === "NIFTY50") || noQuote;
   const bankNiftySpot = watchlist.find((s) => s.symbol === "BANKNIFTY") || noQuote;
@@ -1229,6 +1231,7 @@ export default function ZerodhaKiteTerminal({
             peak={Number(funds.peakDeployedINR) || 0}
             loading={funds.totalDepositsINR === undefined}
           />
+          <DailyCapitalTable currency="₹" endpoint={`/api/indian-market/daily-summary?mode=${kiteDailyMode}&days=30`} />
 
           {activeTab === "WATCHLIST" && (
             <div>
