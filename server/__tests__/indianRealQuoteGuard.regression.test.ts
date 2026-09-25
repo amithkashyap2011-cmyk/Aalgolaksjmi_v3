@@ -5,7 +5,7 @@
  */
 import { optionContracts, OptionContract } from "../src/services/indianMarket/angelOne/optionContracts.js";
 import { setOptionQuote } from "../src/services/indianMarket/angelOne/optionQuotes.js";
-import { realOptionValue, priceTradeFromRealQuotes, volScaledStops, volScaledSpreadStops, isOptionTrade } from "../src/services/indianMarket/realQuoteGuard.js";
+import { realOptionValue, priceTradeFromRealQuotes, volScaledStops, volScaledSpreadStops, holdingMinutes, isOptionTrade } from "../src/services/indianMarket/realQuoteGuard.js";
 import { StrategyRouter } from "../src/services/indianMarket/strategyRouter.js";
 
 const EXP = "2026-09-29";
@@ -84,4 +84,28 @@ test("debit spreads get volatility-scaled stops instead of a flat −60% / +75%-
     { action: "BUY", strike: 1220, instrumentType: "CE", expiry: EXP },
     { action: "SELL", strike: 1220, instrumentType: "PE", expiry: EXP },
   ], [20, 12], 8)).toBeUndefined();
+});
+
+test("stops are sized for the time left until the 15:15 square-off, not a fixed hour", () => {
+  // 2026-09-25: RELIANCE 1220/1240 CE bought at 8.00 at 09:38 IST got a stop
+  // of 5.32 (1-hour sizing), was stopped at 5.30 on a midday dip, and the
+  // spread was back at 8.25 by 14:57.
+  const ist = (h: number, m: number) => Date.UTC(2026, 8, 25, h, m) - 5.5 * 3_600_000;
+  expect(holdingMinutes(ist(9, 38))).toBe(337);
+  expect(holdingMinutes(ist(14, 45))).toBe(30);   // floor
+  expect(holdingMinutes(ist(9, 16))).toBe(359);
+  expect(holdingMinutes(ist(16, 0))).toBe(60);    // after close
+  expect(holdingMinutes(ist(8, 0))).toBe(60);     // before open
+
+  const legs = [
+    { action: "BUY", strike: 1220, instrumentType: "CE", expiry: EXP },
+    { action: "SELL", strike: 1240, instrumentType: "CE", expiry: EXP },
+  ];
+  const early = volScaledSpreadStops(1225, legs, [11.7, 3.7], 8, ist(9, 38))!;
+  const late = volScaledSpreadStops(1225, legs, [11.7, 3.7], 8, ist(14, 45))!;
+  expect(8 * (1 - early.slPct)).toBeLessThan(5.30); // the 13:16 dip no longer stops it out
+  expect(late.slPct).toBeLessThan(early.slPct);     // less time left, tighter stop
+  const e1 = volScaledStops(56500, 56500, true, EXP, 420, ist(9, 38));
+  const l1 = volScaledStops(56500, 56500, true, EXP, 420, ist(14, 45));
+  expect(l1.slPct).toBeLessThanOrEqual(e1.slPct);
 });

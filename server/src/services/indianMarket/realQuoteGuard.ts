@@ -63,17 +63,32 @@ export function isOptionTrade(t: any): boolean {
 }
 
 /**
+ * Minutes a new intraday trade will be held: until the 15:15 IST square-off,
+ * clamped to 30 min – 6 h (60 outside market hours). Stops were sized for a
+ * fixed 1-hour move while trades are held until square-off, so on an early
+ * entry the stop sat inside normal intraday noise: RELIANCE 1220/1240 CE
+ * (entered 09:38) was stopped at 5.30 on a midday dip at 13:16 and the spread
+ * was back above its 8.00 entry by 14:57 (2026-09-25).
+ */
+export function holdingMinutes(nowMs: number = Date.now()): number {
+  const istMin = Math.floor(((nowMs + 5.5 * 3_600_000) % 86_400_000) / 60_000);
+  const left = 15 * 60 + 15 - istMin;
+  if (left <= 0 || istMin < 9 * 60 + 15) return 60;
+  return Math.min(360, Math.max(30, left));
+}
+
+/**
  * Volatility-scaled stop/target for a single-leg long option, as fractions of
- * the premium. The expected 1-hour premium move is |Δ|·S·σ·√(60/94500)
+ * the premium. The expected premium move until square-off is |Δ|·S·σ·√(H/94500), H = holdingMinutes()
  * (94,500 = 252 sessions × 375 trading minutes); stop = 1.5×, target = 2.5×
  * that move (1.67R), bounded to 12–40% / 20–80%.
  */
-export function volScaledStops(spot: number, strike: number, isCall: boolean, expiry: string, premium: number): { slPct: number; tpPct: number; iv?: number } {
+export function volScaledStops(spot: number, strike: number, isCall: boolean, expiry: string, premium: number, nowMs: number = Date.now()): { slPct: number; tpPct: number; iv?: number } {
   const dteYears = Math.max(0.5 / 365, (expiryCloseTime(expiry).getTime() - Date.now()) / (365 * 86400_000));
   const iv = OptionChainService.impliedVolatility(premium, spot, strike, dteYears, isCall);
   if (!iv) return { slPct: 0.25, tpPct: 0.42 };
   const delta = Math.abs(OptionChainService.calculateBlackScholesGreeks(spot, strike, dteYears, iv, isCall).delta);
-  const move = (delta * spot * iv * Math.sqrt(60 / 94_500)) / premium;
+  const move = (delta * spot * iv * Math.sqrt(holdingMinutes(nowMs) / 94_500)) / premium;
   const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
   return { slPct: clamp(1.5 * move, 0.12, 0.40), tpPct: clamp(2.5 * move, 0.20, 0.80), iv };
 }
@@ -84,14 +99,14 @@ export function volScaledStops(spot: number, strike: number, isCall: boolean, ex
  * stop at −60% and a target at +75% of max profit (e.g. RELIANCE 1220/1240 CE
  * bought at 8: stop 3.20, target 17.00) — levels an intraday trade squared
  * off at 15:15 almost never reaches, so a loser just bled until square-off.
- * Same method as single legs: expected 1-hour spread move from the net delta
+ * Same method as single legs: expected spread move until square-off from the net delta
  * of both legs (each leg's IV implied from its real quote); stop = 1.5×,
  * target = 2.5× that move, bounded to 15–40% / 25–100%, with the target kept
  * below the spread's maximum value (its width) and ≥ 1.6× the stop.
  * Returns undefined when the trade isn't a vertical debit spread or IVs
  * can't be implied.
  */
-export function volScaledSpreadStops(spot: number, legs: any[], prices: number[], netDebit: number): { slPct: number; tpPct: number } | undefined {
+export function volScaledSpreadStops(spot: number, legs: any[], prices: number[], netDebit: number, nowMs: number = Date.now()): { slPct: number; tpPct: number } | undefined {
   if (legs.length !== 2 || !(spot > 0) || !(netDebit > 0)) return undefined;
   const bi = legs.findIndex((l) => l.action === "BUY"), si = legs.findIndex((l) => l.action === "SELL");
   if (bi < 0 || si < 0) return undefined;
@@ -105,7 +120,7 @@ export function volScaledSpreadStops(spot: number, legs: any[], prices: number[]
   if (!iv) return undefined;
   const delta = (k: number, v: number) => OptionChainService.calculateBlackScholesGreeks(spot, k, dteYears, v, isCall).delta;
   const netDelta = Math.abs(delta(Number(b.strike), ivB ?? iv) - delta(Number(sl.strike), ivS ?? iv));
-  const move = (netDelta * spot * ((ivB ?? iv) + (ivS ?? iv)) / 2 * Math.sqrt(60 / 94_500)) / netDebit;
+  const move = (netDelta * spot * ((ivB ?? iv) + (ivS ?? iv)) / 2 * Math.sqrt(holdingMinutes(nowMs) / 94_500)) / netDebit;
   const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
   const width = Math.abs(Number(b.strike) - Number(sl.strike));
   const maxTp = width > netDebit ? (width * 0.95 - netDebit) / netDebit : 0.25;
