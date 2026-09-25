@@ -99,7 +99,11 @@ const AqeaDecisionAttributionSchema = new Schema<IAqeaDecisionAttribution>({
   meta: { type: Schema.Types.Mixed, default: {} }
 });
 
-AqeaDecisionAttributionSchema.index({ timestamp: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
+// 14-day retention (2026-09-25): these collections had no working expiry and
+// grew to ~22 GB until the disk filled and MongoDB crashed.
+// The old 7-day TTL here never applied: a plain {timestamp:1} index already
+// existed, and MongoDB skips an index with the same key but different options.
+AqeaDecisionAttributionSchema.index({ timestamp: 1 }, { expireAfterSeconds: 1209600 });
 // Powers the user-scoped timeline query without scanning every tenant's data.
 AqeaDecisionAttributionSchema.index({ userId: 1, timestamp: -1 });
 

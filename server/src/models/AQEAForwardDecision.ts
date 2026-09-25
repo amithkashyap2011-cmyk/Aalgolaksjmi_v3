@@ -132,6 +132,10 @@ AQEAForwardDecisionSchema.index({ symbol: 1, timestamp: -1 });
 AQEAForwardDecisionSchema.index({ marketDomain: 1, regime: 1, timestamp: -1 });
 // Startup hydration reads the newest bounded window across all symbols.
 AQEAForwardDecisionSchema.index({ timestamp: -1 });
+// 14-day retention (2026-09-25): these collections had no working expiry and
+// grew to ~22 GB until the disk filled and MongoDB crashed.
+// timestamp is epoch millis (a number), so expiry keys on createdAt.
+AQEAForwardDecisionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1209600 });
 
 export const AQEAForwardDecision = (mongoose?.models && mongoose.models.AQEAForwardDecision) ||
   (mongoose?.model && mongoose.model<IAQEAForwardDecision>("AQEAForwardDecision", AQEAForwardDecisionSchema)) ||

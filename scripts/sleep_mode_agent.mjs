@@ -220,3 +220,27 @@ writeLog("info", "════════════════════�
 startCaffeinate();
 runSupervisoryCheck();
 setInterval(runSupervisoryCheck, POLL_INTERVAL_MS);
+
+/**
+ * Daily MongoDB log rotation. mongod's log was never rotated and reached
+ * 14 GB, which helped fill the disk and crash MongoDB (2026-09-25). Once a
+ * day: ask mongod to rotate (it renames mongo.log to mongo.log.<timestamp>)
+ * and delete rotated files older than 7 days.
+ */
+const MONGO_LOG_DIR = process.env.MONGO_LOG_DIR || "/opt/homebrew/var/log/mongodb";
+const MONGO_LOG_KEEP_MS = 7 * 86_400_000;
+function rotateMongoLog() {
+  try {
+    execSync(`mongosh --quiet --eval "db.adminCommand({logRotate: 1})"`, { stdio: "ignore", timeout: 30_000 });
+    let removed = 0;
+    for (const f of fs.readdirSync(MONGO_LOG_DIR)) {
+      if (!/^mongo\.log\..+/.test(f)) continue;
+      const full = path.join(MONGO_LOG_DIR, f);
+      if (Date.now() - fs.statSync(full).mtimeMs > MONGO_LOG_KEEP_MS) { fs.unlinkSync(full); removed++; }
+    }
+    writeLog("info", `MongoDB log rotated (${removed} old file(s) removed).`);
+  } catch (err) {
+    writeLog("warn", "MongoDB log rotation failed: " + err.message);
+  }
+}
+setInterval(rotateMongoLog, 86_400_000);

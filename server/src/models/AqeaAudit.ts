@@ -11,7 +11,7 @@ export interface IAqeaAudit extends Document {
 }
 
 const AqeaAuditSchema = new Schema<IAqeaAudit>({
-  timestamp: { type: Date, default: Date.now, index: true },
+  timestamp: { type: Date, default: Date.now },
   userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
   symbol: { type: String, required: true, index: true },
   component: { type: String, required: true, index: true },
@@ -22,5 +22,8 @@ const AqeaAuditSchema = new Schema<IAqeaAudit>({
 
 // Audit feed is filtered by component and sorted newest-first.
 AqeaAuditSchema.index({ component: 1, timestamp: -1 });
+// 14-day retention (2026-09-25): these collections had no working expiry and
+// grew to ~22 GB until the disk filled and MongoDB crashed.
+AqeaAuditSchema.index({ timestamp: 1 }, { expireAfterSeconds: 1209600 });
 
 export const AqeaAudit = mongoose.model<IAqeaAudit>("AqeaAudit", AqeaAuditSchema);

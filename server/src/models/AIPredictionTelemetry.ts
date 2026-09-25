@@ -67,7 +67,10 @@ const AIPredictionTelemetrySchema = new Schema<IAIPredictionTelemetry>({
 AIPredictionTelemetrySchema.index({ model_name: 1, isCorrect: 1, timestamp: -1 });
 AIPredictionTelemetrySchema.index({ model_name: 1, timestamp: -1 });
 AIPredictionTelemetrySchema.index({ symbol: 1, timestamp: -1 });
-AIPredictionTelemetrySchema.index({ timestamp: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
+// 14-day retention (2026-09-25): these collections had no working expiry and
+// grew to ~22 GB until the disk filled and MongoDB crashed.
+// The old 7-day TTL here never applied (a plain {timestamp:1} index blocked it).
+AIPredictionTelemetrySchema.index({ timestamp: 1 }, { expireAfterSeconds: 1209600 });
 
 export const AIPredictionTelemetry = mongoose.model<IAIPredictionTelemetry>("AIPredictionTelemetry", AIPredictionTelemetrySchema);
 

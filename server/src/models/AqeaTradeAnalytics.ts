@@ -76,7 +76,7 @@ export interface IAqeaTradeAnalytics extends Document {
 }
 
 const AqeaTradeAnalyticsSchema = new Schema<IAqeaTradeAnalytics>({
-  timestamp: { type: Date, default: Date.now, index: true },
+  timestamp: { type: Date, default: Date.now },
   userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
   symbol: { type: String, required: true, index: true },
   decision: { type: String, enum: ["LONG", "SHORT", "HOLD", "EXIT"], required: true },
@@ -100,5 +100,8 @@ const AqeaTradeAnalyticsSchema = new Schema<IAqeaTradeAnalytics>({
 // {userId, timestamp} it walked the user's whole history (5.8GB, 245k docs) to
 // find matches — 15s+ per query, and all of it when none matched at all.
 AqeaTradeAnalyticsSchema.index({ userId: 1, "aiPredictions.predictor": 1, timestamp: -1 });
+// 14-day retention (2026-09-25): these collections had no working expiry and
+// grew to ~22 GB until the disk filled and MongoDB crashed.
+AqeaTradeAnalyticsSchema.index({ timestamp: 1 }, { expireAfterSeconds: 1209600 });
 
 export const AqeaTradeAnalytics = mongoose.model<IAqeaTradeAnalytics>("AqeaTradeAnalytics", AqeaTradeAnalyticsSchema);

@@ -26,6 +26,10 @@ const AlertSchema = new Schema<IAlert>(
 );
 
 AlertSchema.index({ createdAt: 1 }, { expireAfterSeconds: 604800 }); // 7-day automatic TTL expiration
+// Serves GET /trading/alerts (userId, newest first with _id tiebreak). The
+// existing {userId, timestamp} index can't provide the _id tiebreak, so each
+// call sorted all of the user's alerts in memory (~1.4–7s per call).
+AlertSchema.index({ userId: 1, timestamp: -1, _id: -1 });
 
 AlertSchema.post("save", function (doc) {
   const io = getIO();
