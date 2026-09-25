@@ -151,14 +151,19 @@ async function runSupervisoryCheck() {
   const windowLabel = isNight ? "🌙 OVERNIGHT (SLEEP MODE)" : "☀️ DAYTIME (ACTIVE SESSION)";
 
   // Check 1: Server Core Health
-  const healthResult = await httpGetJson(`${SERVER_URL}/health`);
+  // /health is synchronous, so a slow answer means a busy event loop, not a
+  // dead server. A 6s timeout x 3 checks restart-looped a loaded-but-working
+  // server 9-11 times an hour (2026-09-23..25), and each restart added boot
+  // load and wiped in-memory state. Only a server that stays unresponsive for
+  // ~2.5 min (5 checks, 20s each) is restarted, at most once per 10 min.
+  const healthResult = await httpGetJson(`${SERVER_URL}/health`, 20_000);
   
   if (!healthResult.ok) {
     consecutiveFailures++;
     writeLog("warn", `[HEALTH_ALERT] Server unreachable at ${SERVER_URL}/health (failures=${consecutiveFailures}): ${healthResult.error}`);
 
     // If server is failing repeatedly and managed by PM2, attempt automated recovery
-    if (consecutiveFailures >= 3 && Date.now() - lastRestartAttempt > 120_000) {
+    if (consecutiveFailures >= 5 && Date.now() - lastRestartAttempt > 600_000) {
       lastRestartAttempt = Date.now();
       writeLog("warn", "Triggering PM2 auto-restart for aqea-server...");
       try {

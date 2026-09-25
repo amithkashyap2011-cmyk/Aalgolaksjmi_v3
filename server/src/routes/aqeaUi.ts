@@ -26,6 +26,22 @@ import { AQEAAutonomousControlPlane } from "../services/aqea/autonomy/AQEAAutono
 
 const router = express.Router();
 
+/**
+ * Every /aqea-ui route is per-account (dashboard, trades, positions, logs…)
+ * and read the account from ?userId= (or body.userId) with no auth, so any
+ * client that could reach the server could read or change any account by
+ * editing the id. Require auth, and pin userId to the caller's own account
+ * unless the caller is an admin (incl. the local-operator loopback bypass).
+ */
+router.use(authGuard, (req: AuthRequest, _res, next) => {
+  const isAdmin = String(req.user?.role || "").toUpperCase() === "ADMIN";
+  if (!isAdmin && req.userId) {
+    (req.query as any).userId = req.userId;
+    if (req.body && typeof req.body === "object" && "userId" in req.body) req.body.userId = req.userId;
+  }
+  next();
+});
+
 const INDIAN_ACCOUNT_TYPES = ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO", "INDIAN_EQUITY"];
 
 function applyMarketFilter(filter: any, market?: string) {

@@ -137,9 +137,14 @@ export class RiskEngine {
     // real drawdown. We now query CLOSED trades by closedAt and additionally
     // fold current open *unrealized losses* into the daily figure (open gains
     // are ignored, so an open winner can never mask a breach).
+    // Only pnl and the timestamps are read. Full trade documents are ~22 KB
+    // (meta/decisionPath), and this runs per symbol per account every cycle:
+    // loading them whole was ~1.5 MB/s of BSON decoding and stalled the event
+    // loop until /health timed out and the guardian restart-looped the server.
+    const PNL_FIELDS = { pnl: 1, closedAt: 1, openedAt: 1 } as const;
     const [closedThisMonth, allTrades] = isDbConnected ? await Promise.all([
-      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED", closedAt: { $gte: monthStart } }).lean(),
-      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED" }).lean(),
+      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED", closedAt: { $gte: monthStart } }, PNL_FIELDS).lean(),
+      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED" }, PNL_FIELDS).lean(),
     ]) : [[], []];
 
     // Prefer closedAt; fall back to openedAt only for legacy rows missing it.

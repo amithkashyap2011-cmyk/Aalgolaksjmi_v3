@@ -10,6 +10,9 @@ import "./styles/ui-modern-patch.css";
 import "./styles/design-tokens.css";
 import "./styles/responsive.css";
 import { registerSW } from "./lib/registerSW";
+import { installAuthFetch } from "./lib/api";
+
+installAuthFetch();
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

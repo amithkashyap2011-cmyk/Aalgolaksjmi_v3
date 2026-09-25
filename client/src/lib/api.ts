@@ -675,3 +675,31 @@ export async function getTradesWithArchived(userId: string, limit = 100) {
 export async function getEvidenceGovernorReport() {
   return request<{ success: boolean; report: any }>("/aqea-ui/evidence-governor");
 }
+
+/**
+ * Attach the session token to same-origin fetch() calls that don't set their
+ * own Authorization header. Many pages call per-account routes (/aqea-ui/…)
+ * with plain fetch; the server now requires auth there, and without this
+ * those calls would 401 from any device other than this machine.
+ */
+export function installAuthFetch(): void {
+  const w = window as any;
+  if (w.__aalgoAuthFetch) return;
+  w.__aalgoAuthFetch = true;
+  const orig = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const sameOrigin = url.startsWith("/") && !url.startsWith("//") || url.startsWith(window.location.origin);
+      const token = getToken();
+      if (sameOrigin && token) {
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        if (!headers.has("Authorization")) {
+          headers.set("Authorization", `Bearer ${token}`);
+          return orig(input, { ...init, headers });
+        }
+      }
+    } catch { /* fall through to the untouched call */ }
+    return orig(input, init);
+  };
+}

@@ -80,7 +80,7 @@ router.post("/login", async (req, res) => {
     // Live DB Auth
     let user = await User.findOne({ email });
     const isProduction = process.env.NODE_ENV === "production";
-    if (!user && !isProduction && email === "demo@aalgo.internal" && password === "123456") {
+    if (!user && !isProduction && email === DEV_DEMO_EMAIL && password === "123456") {
       await ensureDefaultDemoUser();
       user = await User.findOne({ email });
     }
@@ -95,17 +95,25 @@ router.post("/login", async (req, res) => {
   }
 });
 
+/**
+ * The dev demo account — the same one the client auto-logs into
+ * (client/src/lib/api.ts DEMO_EMAIL). This used to seed a separate
+ * demo@aalgo.internal ADMIN account, which the client also logged into,
+ * mixing two users' data on one page (removed 2026-09-25).
+ */
+const DEV_DEMO_EMAIL = "demo@aalgo.local";
+
 export async function ensureDefaultDemoUser(): Promise<void> {
   try {
     if (mongoose.connection.readyState !== 1) return;
     if (process.env.NODE_ENV === "production") {
       return; // 🛡️ Hardcoded demo account seed strictly disallowed in production
     }
-    const demoEmail = "demo@aalgo.internal";
+    const demoEmail = DEV_DEMO_EMAIL;
     const existing = await User.findOne({ email: demoEmail });
     if (!existing) {
       const passwordHash = await bcrypt.hash("123456", 12);
-      const user = await User.create({ email: demoEmail, passwordHash, role: "admin" });
+      const user = await User.create({ email: demoEmail, passwordHash, role: "user" });
       const existingSettings = await Settings.findOne({ userId: user._id });
       if (!existingSettings) {
         await Settings.create({ userId: user._id });
