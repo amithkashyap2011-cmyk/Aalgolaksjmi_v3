@@ -22,6 +22,8 @@ import * as binanceService from "../binanceService.js";
 // untested or let tests silently hit real network calls, tests inject a
 // stub directly — a no-op in every real code path since the guard makes
 // it inert outside NODE_ENV=test.
+type GradingPriceLookup = { prices: Map<string, Map<number, number>>; unavailable: Set<string> };
+
 let klinesProviderOverride: typeof binanceService.getKlines | null = null;
 export function __setKlinesProviderForTesting(fn: typeof binanceService.getKlines | null): void {
   if (process.env.NODE_ENV !== "test") return;
@@ -172,6 +174,8 @@ export class AITelemetryService {
     // record's first grading pass arriving late again.
     const records = [...freshOnly, ...recentRecords, ...backlogRecords];
 
+    const priceLookup = await AITelemetryService.prefetchGradingPrices(records, now);
+
     console.log(`[TELEMETRY] Found ${records.length} pending records for resolution (${recentRecords.length} recent-lane [mature, <${ACTIVE_COHORT_CEILING_MINUTES}m old], ${freshOnly.length} fresh-lane [first-touch, newest-matured first], ${backlogRecords.length} backlog-lane [>=${ACTIVE_COHORT_CEILING_MINUTES}m old]).`);
 
     // 🛡️ Concurrency cap (2026-09-15): grading previously fired every
@@ -194,7 +198,7 @@ export class AITelemetryService {
       const updates: any = {};
 
       if (ageMinutes >= 15 && !r.outcome15m) {
-        const out = await this.resolveOutcome(r.symbol, r.timestamp, 15, r.priceAtPrediction, r.direction);
+        const out = await this.resolveOutcome(r.symbol, r.timestamp, 15, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price15m = out.price;
             updates.outcome15m = out.status;
@@ -207,7 +211,7 @@ export class AITelemetryService {
       // excluded from the accuracy sample, not counted as a miss: the model
       // wasn't wrong, the market just didn't move enough to grade it.
       if (ageMinutes >= 25 && !r.outcome25m) {
-        const out = await this.resolveOutcome(r.symbol, r.timestamp, 25, r.priceAtPrediction, r.direction);
+        const out = await this.resolveOutcome(r.symbol, r.timestamp, 25, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price25m = out.price;
             updates.outcome25m = out.status;
@@ -219,7 +223,7 @@ export class AITelemetryService {
       }
 
       if (ageMinutes >= 30 && !r.outcome30m) {
-        const out = await this.resolveOutcome(r.symbol, r.timestamp, 30, r.priceAtPrediction, r.direction);
+        const out = await this.resolveOutcome(r.symbol, r.timestamp, 30, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price30m = out.price;
             updates.outcome30m = out.status;
@@ -231,7 +235,7 @@ export class AITelemetryService {
       // with NEUTRAL counted as a loss) made HOLD near-unwinnable and
       // produced impossible readings like 0.0% rolling accuracy.
       if (ageMinutes >= 60 && !r.outcome60m) {
-        const out = await this.resolveOutcome(r.symbol, r.timestamp, 60, r.priceAtPrediction, r.direction);
+        const out = await this.resolveOutcome(r.symbol, r.timestamp, 60, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price60m = out.price;
             updates.outcome60m = out.status;
@@ -252,17 +256,73 @@ export class AITelemetryService {
     }
   }
 
-  private static async resolveOutcome(symbol: string, timestamp: Date, offset: number, entry: number, decision: "LONG" | "SHORT" | "HOLD"): Promise<any> {
+  /**
+   * One bulk 1-minute kline fetch per symbol per grading cycle instead of one
+   * REST call per record per horizon. Grading needed the close at 15/25/30/60
+   * minutes after each prediction, fetched one candle at a time: ~800 records
+   * x up to 4 horizons = ~2,400 klines calls in a burst, which tripped
+   * Binance's 429 limit every 10-15 minutes (2026-09-25) and suspended Spot
+   * REST for the live engine too. Pages of up to 1,000 candles cover each
+   * symbol's needed range (bounded to 12 pages ~ 8 days).
+   */
+  private static async prefetchGradingPrices(records: any[], now: number): Promise<GradingPriceLookup> {
+    const HORIZONS: Array<[number, string]> = [[15, "outcome15m"], [25, "outcome25m"], [30, "outcome30m"], [60, "outcome60m"]];
+    const ranges = new Map<string, { lo: number; hi: number }>();
+    for (const r of records) {
+      if (!r?.priceAtPrediction || !r.timestamp) continue;
+      const t0 = new Date(r.timestamp).getTime();
+      for (const [h, field] of HORIZONS) {
+        if ((now - t0) / 60_000 < h || r[field]) continue;
+        const m = Math.ceil((t0 + h * 60_000) / 60_000) * 60_000;
+        const cur = ranges.get(r.symbol);
+        ranges.set(r.symbol, cur ? { lo: Math.min(cur.lo, m), hi: Math.max(cur.hi, m) } : { lo: m, hi: m });
+      }
+    }
+    const lookup: GradingPriceLookup = { prices: new Map(), unavailable: new Set() };
+    const klinesFn = klinesProviderOverride ?? binanceService.getKlines;
+    for (const [symbol, { lo, hi }] of ranges) {
+      const map = new Map<number, number>();
+      let start = lo;
+      try {
+        for (let page = 0; page < 12 && start <= hi; page++) {
+          const kl = await klinesFn(symbol, "1m", start, hi + 60_000, 1000);
+          if (!kl || kl.length === 0) break;
+          // Only candles inside the requested range count: while REST is
+          // suspended getKlines can serve cached candles from elsewhere.
+          for (const k of kl) {
+            const ot = Number(k.openTime);
+            if (ot >= lo && ot <= hi) map.set(ot, parseFloat(k.close));
+          }
+          const last = Number(kl[kl.length - 1].openTime);
+          if (!(last >= start)) break;
+          start = last + 60_000;
+        }
+      } catch { /* treated as unavailable below */ }
+      if (map.size === 0) lookup.unavailable.add(symbol);
+      else lookup.prices.set(symbol, map);
+    }
+    return lookup;
+  }
+
+  private static async resolveOutcome(symbol: string, timestamp: Date, offset: number, entry: number, decision: "LONG" | "SHORT" | "HOLD", lookup?: GradingPriceLookup): Promise<any> {
     try {
       const targetTime = timestamp.getTime() + offset * 60 * 1000;
-      const klinesFn = klinesProviderOverride ?? binanceService.getKlines;
-      const klines = await klinesFn(symbol, "1m", targetTime, undefined, 1);
-      if (!klines || klines.length === 0) {
-          console.warn(`[TELEMETRY] No klines found for ${symbol} at ${new Date(targetTime).toISOString()}`);
-          return null;
+      let price: number | undefined;
+      if (lookup) {
+        // Prefetch failed for this symbol (e.g. REST rate-limited): skip it this
+        // cycle rather than retry with one request per record.
+        if (lookup.unavailable.has(symbol)) return null;
+        price = lookup.prices.get(symbol)?.get(Math.ceil(targetTime / 60_000) * 60_000);
       }
-
-      const price = parseFloat(klines[0].close);
+      if (price === undefined) {
+        const klinesFn = klinesProviderOverride ?? binanceService.getKlines;
+        const klines = await klinesFn(symbol, "1m", targetTime, undefined, 1);
+        if (!klines || klines.length === 0) {
+            console.warn(`[TELEMETRY] No klines found for ${symbol} at ${new Date(targetTime).toISOString()}`);
+            return null;
+        }
+        price = parseFloat(klines[0].close);
+      }
       const ret = (price / entry) - 1;
       
       let status: "WIN" | "LOSS" | "NEUTRAL" = "NEUTRAL";

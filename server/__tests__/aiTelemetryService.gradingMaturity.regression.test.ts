@@ -33,13 +33,27 @@ let klinesValue: any = [{ close: "51000" }];
 let pendingResolvers: Array<(v: any) => void> = [];
 let klinesCalls: any[][] = [];
 
+// Like Binance, return one 1m candle per minute of the requested range, each
+// with an openTime (grading now bulk-fetches a range per symbol and looks
+// minutes up by openTime). The test controls only the close price.
+function asCandles(value: any[], args: any[]): any[] {
+  if (!Array.isArray(value) || value.length === 0) return value;
+  const [, , startTime, endTime, limit = 500] = args;
+  if (!startTime) return value;
+  const first = Math.ceil(startTime / 60_000) * 60_000;
+  const last = Math.min(endTime ?? first, first + (limit - 1) * 60_000);
+  const out = [];
+  for (let t = first; t <= last; t += 60_000) out.push({ ...value[0], openTime: t });
+  return out;
+}
+
 function fakeGetKlines(...args: any[]): Promise<any> {
   klinesCalls.push(args);
   if (klinesMode === "pending") {
-    return new Promise((resolve) => { pendingResolvers.push(resolve); });
+    return new Promise((resolve) => { pendingResolvers.push((v: any) => resolve(asCandles(v, args))); });
   }
   if (klinesMode === "empty") return Promise.resolve([]);
-  return Promise.resolve(klinesValue);
+  return Promise.resolve(asCandles(klinesValue, args));
 }
 
 import mongoose from "mongoose";
@@ -259,15 +273,21 @@ describe("AITelemetryService.resolvePendingOutcomes — maturity-based selection
     // fresh lane (descending, missing outcome15m) return this same record —
     // exactly the overlap the dedup in runGradingCycle exists to collapse.
     const doc = await AIPredictionTelemetry.create(makePrediction({ timestamp: minutesAgo(20) }));
+    const resolveSpy = jest.spyOn(AITelemetryService as any, "resolveOutcome");
     await AITelemetryService.resolvePendingOutcomes();
 
     const after = await AIPredictionTelemetry.findById(doc._id);
     expect(after.outcome15m).toBe("WIN");
     // One resolveOutcome call for the 15m horizon — not two — proves the
-    // fresh-lane dedup against recentRecords is working, not double-firing
-    // Binance lookups for a record already covered by the recent lane.
-    const fifteenMinuteCalls = klinesCalls.filter((args) => args[3] === undefined && args[4] === 1);
+    // fresh-lane dedup against recentRecords is working, not double-grading
+    // a record already covered by the recent lane.
+    const fifteenMinuteCalls = resolveSpy.mock.calls.filter((args: any[]) => args[2] === 15);
+    resolveSpy.mockRestore();
     expect(fifteenMinuteCalls.length).toBe(1);
+    // And Binance saw one bulk range request for the symbol, not one per
+    // record per horizon (2026-09-25: per-record calls tripped HTTP 429).
+    expect(klinesCalls.filter((args) => args[4] === 1).length).toBe(0);
+    expect(klinesCalls.filter((args) => args[4] === 1000).length).toBe(1);
   });
 
   test("a mature record missing only outcome15m is graded promptly by the fresh lane", async () => {
