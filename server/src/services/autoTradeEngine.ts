@@ -88,6 +88,8 @@ const peakPrices = new Map<string, number>();
 
 /** Cooldown timers per symbol/user. */
 const cooldowns = new Map<string, number>();
+const HOLD_ALERT_REPEAT_MS = 30 * 60_000;
+const holdAlertSentAt = new Map<string, number>();
 const activeProcessingKeys = new Set<string>();
 
 /* ── Public API ───────────────────────────────────────── */
@@ -657,6 +659,11 @@ async function processSymbol(
     } else {
       alertMessage = `Score=${originalScore}% (HOLD regime / indicators neutral)`;
     }
+    // A neutral HOLD is the normal outcome of most cycles (~1,500/hour across
+    // 25 coins x 2 accounts). Alerting on each one buried the alerts feed and
+    // filled Mongo; the decision is still recorded in telemetry below. Only
+    // blocked HOLDs (a strong score stopped by a gate) raise an alert.
+    const isNeutralHold = originalScore >= 40 && originalScore <= 75;
 
     if (decisionId) {
       const isModelOff = Boolean(wasStrictBlocked);
@@ -668,13 +675,20 @@ async function processSymbol(
       ForwardTelemetryStore.updateTerminalState(decisionId, termState, alertMessage || finalReason, decClass);
     }
 
-    await safeCreateAlert({
-      userId,
-      severity: "AMBER",
-      symbol,
-      title: "ORDER HOLD / NOT EXECUTED",
-      message: alertMessage,
-    });
+    // Blocked HOLDs repeat every cycle for the same coin and reason; alert on
+    // each distinct (coin, reason) at most once per 30 minutes.
+    const holdKey = `${userId}|${symbol}|${alertMessage.replace(/^Score=\d+(\.\d+)?%\s*/, "")}`;
+    const lastHoldAlert = holdAlertSentAt.get(holdKey) ?? 0;
+    if (!isNeutralHold && Date.now() - lastHoldAlert > HOLD_ALERT_REPEAT_MS) {
+      holdAlertSentAt.set(holdKey, Date.now());
+      await safeCreateAlert({
+        userId,
+        severity: "AMBER",
+        symbol,
+        title: "ORDER HOLD / NOT EXECUTED",
+        message: alertMessage,
+      });
+    }
     return;
   }
 

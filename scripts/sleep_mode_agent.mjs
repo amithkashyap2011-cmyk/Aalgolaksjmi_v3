@@ -23,6 +23,8 @@ import { spawn, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import net from "node:net";
+import os from "node:os";
 
 const LOG_DIR = path.join(process.cwd(), "logs");
 const LOG_FILE = path.join(LOG_DIR, "sleep-mode-agent.log");
@@ -244,3 +246,53 @@ function rotateMongoLog() {
   }
 }
 setInterval(rotateMongoLog, 86_400_000);
+
+/**
+ * MongoDB watchdog. The Homebrew launchd service has KeepAlive=false, so when
+ * mongod crashed on a full disk (2026-09-25 11:07 IST) nothing restarted it and
+ * all trading froze for ~45 min. Checked directly on the port (independent of
+ * aqea-server): after 3 failed checks (~90s) kickstart the service, at most
+ * once per 5 min. Editing the plist instead would be overwritten by
+ * `brew services`.
+ */
+const MONGO_PORT = Number(process.env.MONGO_PORT || 27017);
+const MONGO_SERVICE = `gui/${os.userInfo().uid}/homebrew.mxcl.mongodb-community`;
+let mongoFailures = 0;
+let lastMongoRestart = 0;
+function mongoPortOpen() {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: "127.0.0.1", port: MONGO_PORT });
+    const done = (ok) => { sock.destroy(); resolve(ok); };
+    sock.setTimeout(5_000, () => done(false));
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+  });
+}
+function freeDiskMB() {
+  try {
+    const st = fs.statfsSync("/opt/homebrew/var/mongodb");
+    return Math.round((st.bavail * st.bsize) / 1048576);
+  } catch { return null; }
+}
+async function checkMongo() {
+  if (await mongoPortOpen()) {
+    if (mongoFailures >= 3) writeLog("info", "MongoDB reachable again.");
+    mongoFailures = 0;
+    return;
+  }
+  mongoFailures++;
+  writeLog("warn", `[MONGO_ALERT] MongoDB not reachable on port ${MONGO_PORT} (failures=${mongoFailures})`);
+  if (mongoFailures < 3 || Date.now() - lastMongoRestart < 300_000) return;
+  lastMongoRestart = Date.now();
+  const free = freeDiskMB();
+  if (free !== null && free < 1024) {
+    writeLog("error", `[MONGO_ALERT] Only ${free} MB free on the MongoDB disk; a restart may crash again until space is freed.`);
+  }
+  try {
+    execSync(`launchctl kickstart ${MONGO_SERVICE}`, { stdio: "ignore", timeout: 30_000 });
+    writeLog("warn", "MongoDB restart issued (launchctl kickstart).");
+  } catch (err) {
+    writeLog("error", "MongoDB restart failed: " + err.message);
+  }
+}
+setInterval(checkMongo, POLL_INTERVAL_MS);
