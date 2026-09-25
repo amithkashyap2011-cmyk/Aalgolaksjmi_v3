@@ -86,7 +86,18 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   const [topUpLoading, setTopUpLoading] = useState(false);
   const [closingId, setClosingId]       = useState<string | null>(null);
 
-  const symbol  = selectedSymbol || "BTCUSDT";
+  // The store's selectedSymbol is shared with the Indian pages, so it can be
+  // e.g. TATAMOTORS here — the crypto chart then showed a synthetic price
+  // series for a stock (2026-09-25). Only a crypto pair is used on this page:
+  // otherwise the footer's last crypto symbol, else BTCUSDT.
+  const symbol = (() => {
+    if (selectedSymbol && /USDT$/.test(selectedSymbol)) return selectedSymbol;
+    try {
+      const s = JSON.parse(localStorage.getItem("aiFooterRadarPrefs") || "{}")?.symbol?.crypto;
+      if (typeof s === "string" && /USDT$/.test(s)) return s;
+    } catch { /* storage unavailable */ }
+    return "BTCUSDT";
+  })();
   const inrRate = summary.inrRate || 84.0;
 
   // Synchronize route and hash changes with active terminal and accountType

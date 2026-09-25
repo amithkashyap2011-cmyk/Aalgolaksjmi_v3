@@ -56,6 +56,15 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
           if (!isSilent) setErr("No market data");
           return;
         }
+        // Never chart fabricated prices: for symbols the exchange doesn't have
+        // (or while REST is suspended) the server returns SYNTHETIC candles.
+        if (kl.some((k: any) => k?.isSynthetic || k?.dataProvenance === "SYNTHETIC")) {
+          setOhlc([]);
+          setVolume([]);
+          setLivePrice(null);
+          setErr(`No real market data for ${symbol}`);
+          return;
+        }
         const ohlcData = kl.map((k) => [Number(k.openTime), parseFloat(k.open), parseFloat(k.high), parseFloat(k.low), parseFloat(k.close)]);
         const volData = kl.map((k) => [Number(k.openTime), parseFloat(k.volume)]);
         setOhlc(ohlcData);
