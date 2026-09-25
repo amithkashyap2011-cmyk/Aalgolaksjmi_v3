@@ -5,7 +5,9 @@ import Sidebar from '../components/layout/Sidebar';
 import HomePage from '../pages/HomePage';
 import { useAppStore } from '../store/useAppStore';
 
-describe('Dual-Market Terminal Routing & Sidebar Differentiation', () => {
+// Renders the full crypto HomePage; with the whole suite running in parallel
+// the first render regularly took >5s and timed out (passes alone).
+describe('Dual-Market Terminal Routing & Sidebar Differentiation', { timeout: 20_000 }, () => {
   beforeEach(() => {
     useAppStore.setState({
       userId: 'test-user',

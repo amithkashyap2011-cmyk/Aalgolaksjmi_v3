@@ -1,5 +1,6 @@
 import InvestmentSummary from "../components/common/InvestmentSummary";
 import DailyCapitalTable from "../components/common/DailyCapitalTable";
+import TodayInvestedStrip from "../components/common/TodayInvestedStrip";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
@@ -1621,6 +1622,7 @@ export default function IndianMarketPage() {
       {/* TAB 3: POSITIONS & CLOSED TRADE HISTORY */}
       {activeTab === "POSITIONS" && (
         <div style={{ background: "#0a1120", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: 18 }}>
+          <TodayInvestedStrip currency="₹" endpoint={`/api/indian-market/daily-summary?mode=${executionMode === "LIVE" ? "LIVE" : "PAPER"}&days=2`} />
           {/* Sub-Header with Segmented Control & Timeframe Filter */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
             <div style={{ display: "flex", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 4, gap: 4 }}>

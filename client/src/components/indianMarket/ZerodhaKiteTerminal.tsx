@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAppStore } from "../../store/useAppStore";
 import InvestmentSummary from "../common/InvestmentSummary";
 import DailyCapitalTable from "../common/DailyCapitalTable";
+import TodayInvestedStrip from "../common/TodayInvestedStrip";
 import {
   Search, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   Wallet, Layers, ShieldCheck, CheckCircle2, AlertCircle, RefreshCw,
@@ -1391,6 +1392,7 @@ export default function ZerodhaKiteTerminal({
                     Total P&L: {formatINR(totalPositionsPnl)}
                   </span>
                 </div>
+                <TodayInvestedStrip currency="₹" endpoint={`/api/indian-market/daily-summary?mode=${kiteDailyMode}&days=2`} />
 
                 {positions.length === 0 ? (
                   <div style={{ padding: "20px 0", textAlign: "center", color: "#64748b", fontSize: 13 }}>
@@ -1658,6 +1660,7 @@ export default function ZerodhaKiteTerminal({
                   Total Unrealized P&L: {totalPositionsPnl >= 0 ? "+" : ""}{formatINR(totalPositionsPnl)}
                 </div>
               </div>
+              <TodayInvestedStrip currency="₹" endpoint={`/api/indian-market/daily-summary?mode=${kiteDailyMode}&days=2`} />
 
               {positions.length === 0 ? (
                 <div style={{ padding: "40px 0", textAlign: "center", color: "#64748b" }}>

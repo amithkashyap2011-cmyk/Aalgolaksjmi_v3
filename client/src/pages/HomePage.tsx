@@ -1,6 +1,7 @@
 import CryptoControlCenter from "../components/dashboard/CryptoControlCenter";
 import InvestmentSummary from "../components/common/InvestmentSummary";
 import DailyCapitalTable from "../components/common/DailyCapitalTable";
+import TodayInvestedStrip from "../components/common/TodayInvestedStrip";
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { INITIAL_SUMMARY, useDashboardStore, type DomainMetrics, INITIAL_DOMAIN_METRICS } from '../store/useDashboardStore';
@@ -1305,6 +1306,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
               </span>
             </div>
           </div>
+          <div style={{ padding: "10px 16px 0" }}>
+            <TodayInvestedStrip currency="$" endpoint={`/trading/daily-summary?mode=${mode === "LIVE" ? "LIVE" : "PAPER"}&accountType=SPOT&days=2`} />
+          </div>
 
           {displayPositions.length === 0 ? (
             <div style={{ padding: "32px 20px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
@@ -1416,6 +1420,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 Close All
               </button>
             )}
+          </div>
+          <div style={{ padding: "10px 16px 0" }}>
+            <TodayInvestedStrip currency="$" endpoint={`/trading/daily-summary?mode=${mode === "LIVE" ? "LIVE" : "PAPER"}&accountType=FUTURES&days=2`} />
           </div>
 
           {displayPositions.length === 0 ? (
@@ -1555,6 +1562,9 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 All Crypto Open Positions ({displayPositions.length})
               </span>
             </div>
+          </div>
+          <div style={{ padding: "10px 16px 0" }}>
+            <TodayInvestedStrip currency="$" endpoint={`/trading/daily-summary?mode=${mode === "LIVE" ? "LIVE" : "PAPER"}&accountType=BOTH&days=2`} />
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
