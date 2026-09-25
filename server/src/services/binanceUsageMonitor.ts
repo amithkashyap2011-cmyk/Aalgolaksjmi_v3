@@ -18,7 +18,7 @@ let installed = false;
 
 function endpointOf(url: string): string | null {
   const m = url.match(/^https?:\/\/(api\d?|fapi|dapi)\.binance\.com(\/[^?]*)/);
-  return m ? `${m[1]}${m[2]}` : null;
+  return m ? m[2].slice(1) : null; // path already names the surface (api/v3, fapi/v1)
 }
 
 function roll(): void {
