@@ -203,8 +203,18 @@ export class AutoPilotStateMachine {
 
         // Tiers moved out (2026-09-24): breakeven at +16% cut most real winners
         // at +2-10% while losers ran to the full stop — lopsided exits.
+        // Tier 4: Peak gain >= +100% -> lock half of the peak gain, rising with
+        // the peak. The +30% lock was the ceiling before (2026-09-25): an
+        // AXISBANK spread at +118% could still give back ~75% of its profit.
+        if (peakGainPct >= 100) {
+          const lockPrice = roundTo2(entryPrice + (highestLtp - entryPrice) * 0.5);
+          if (lockPrice > candidateSl) {
+            candidateSl = lockPrice;
+            trailStage = "PEAK_LOCK_50PCT";
+          }
+        }
         // Tier 3: Peak gain >= +60% -> Lock in +30% profit
-        if (peakGainPct >= 60) {
+        else if (peakGainPct >= 60) {
           const lockPrice = roundTo2(entryPrice * 1.30);
           if (lockPrice > candidateSl) {
             candidateSl = lockPrice;

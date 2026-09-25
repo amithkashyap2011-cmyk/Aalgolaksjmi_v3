@@ -483,6 +483,32 @@ describe("Production Accounting & Auto-Pilot Reconciliation Test Suite", () => {
       expect(exitRes.reason).toContain("PROFIT_LOCK_30PCT");
       expect(mockBroker.orderPlacedCount).toBe(1);
     });
+
+    test("big winners (peak >= +100%) lock half of the peak gain, rising with the peak", async () => {
+      AutoPilotStateMachine.setMode("AUTO");
+      const mockBroker = new MockBrokerAdapter();
+      const tradeDoc: any = {
+        _id: "trade_peak_lock_test", symbol: "NIFTY26SEP24500CE", side: "BUY",
+        quantity: 150, origQty: 150, entryPrice: 100.00, tp: 400.00, sl: 72.00,
+        status: "OPEN", mode: "PAPER", meta: {}, save: async () => {},
+      };
+      const tick = (ltp: number) => AutoPilotStateMachine.processTick(tradeDoc, { symbol: "NIFTY26SEP24500CE", ltp, timestamp: Date.now() }, mockBroker);
+
+      await tick(162);
+      expect(tradeDoc.sl).toBe(130.00); // +62% still locks +30%
+      await tick(210);
+      expect(tradeDoc.sl).toBe(155.00); // +110% -> entry + 50% of 110
+      expect(tradeDoc.meta.trailingStage).toBe("PEAK_LOCK_50PCT");
+      await tick(240);
+      expect(tradeDoc.sl).toBe(170.00); // follows the new peak
+      await tick(200);
+      expect(tradeDoc.sl).toBe(170.00); // never moves down
+
+      const exitRes = await tick(169);
+      expect(exitRes.triggered).toBe(true);
+      expect(exitRes.reason).toContain("PEAK_LOCK_50PCT");
+      expect(mockBroker.orderPlacedCount).toBe(1);
+    });
   });
 
   // ─── 5. ACCOUNTING LEDGER INVARIANTS (Section 23) ─────────────────
