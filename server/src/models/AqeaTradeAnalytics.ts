@@ -100,6 +100,11 @@ const AqeaTradeAnalyticsSchema = new Schema<IAqeaTradeAnalytics>({
 // {userId, timestamp} it walked the user's whole history (5.8GB, 245k docs) to
 // find matches — 15s+ per query, and all of it when none matched at all.
 AqeaTradeAnalyticsSchema.index({ userId: 1, "aiPredictions.predictor": 1, timestamp: -1 });
+// Serves PerformanceMonitorService.calculateRollingMetrics (per user+symbol
+// EXIT records, run for every symbol each cycle). Without it each call scanned
+// the whole collection (~2.5 GB), hit its 1s maxTimeMS and returned nothing:
+// ~1s wasted per symbol decision (2026-09-25).
+AqeaTradeAnalyticsSchema.index({ userId: 1, symbol: 1, decision: 1 });
 // 14-day retention (2026-09-25): these collections had no working expiry and
 // grew to ~22 GB until the disk filled and MongoDB crashed.
 AqeaTradeAnalyticsSchema.index({ timestamp: 1 }, { expireAfterSeconds: 1209600 });
