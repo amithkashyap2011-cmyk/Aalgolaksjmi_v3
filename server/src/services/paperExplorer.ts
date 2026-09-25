@@ -15,6 +15,9 @@
  *   - orders go through the normal PAPER /trading/place-order path (server-
  *     side stop/target defaults and validation), tagged entrySource
  *     "PAPER_EXPLORATION" so results are reported separately
+ *   - closes at market after 2 hours if neither stop nor target was hit
+ *     (EXPLORATION_TIME_EXIT): the signals predict a ~25-min move, and trades
+ *     waiting days on wider levels kept all 3 slots taken (2026-09-25)
  *   - never touches LIVE; pauses whenever the auto-trader is PAUSED / KILLED
  *
  * Disable with PAPER_EXPLORATION=false.
@@ -35,6 +38,7 @@ const COOLDOWN_MS = 30 * 60_000;
 const DECISION_MAX_AGE_MS = 3 * 60_000;
 const SIZE_FRACTION = 0.05;
 const MIN_NOTIONAL = 6;
+const MAX_HOLD_MS = 2 * 60 * 60_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
@@ -52,7 +56,28 @@ export async function explorationTick(): Promise<void> {
     if (mongoose.connection.readyState !== 1) return;
 
     const userId = DEMO_USER_ID;
-    const open = await Trade.find({ userId, entrySource: EXPLORATION_SOURCE, status: "OPEN" }, { symbol: 1 }).lean();
+    const port = Number(process.env.PORT) || 9991;
+    const openAll = await Trade.find({ userId, entrySource: EXPLORATION_SOURCE, status: "OPEN" }, { symbol: 1, openedAt: 1 }).lean();
+
+    // Time exit: free the slot once the trade has outlived its signal.
+    const expired = new Set<string>();
+    for (const t of openAll as any[]) {
+      if (!t.openedAt || Date.now() - new Date(t.openedAt).getTime() < MAX_HOLD_MS) continue;
+      const res = await fetch(`http://127.0.0.1:${port}/trading/close-position`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tradeId: String(t._id), mode: "PAPER", reason: "EXPLORATION_TIME_EXIT" }),
+        signal: AbortSignal.timeout(20_000),
+      }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: String(e) }) }) as any);
+      const body: any = await res.json().catch(() => ({}));
+      if (res.ok) {
+        expired.add(String(t._id));
+        log(`time exit ${t.symbol} after ${((Date.now() - new Date(t.openedAt).getTime()) / 3_600_000).toFixed(1)}h (pnl ${Number(body?.pnl ?? body?.trade?.pnl ?? 0).toFixed(4)})`);
+      } else {
+        log(`time exit failed for ${t.symbol}: ${body?.error || res.status}`);
+      }
+    }
+    const open = (openAll as any[]).filter((t) => !expired.has(String(t._id)));
     if (open.length >= MAX_OPEN) return;
     const openSymbols = new Set(open.map((t: any) => t.symbol));
     const recent = await Trade.find(
@@ -87,7 +112,6 @@ export async function explorationTick(): Promise<void> {
       if (!(price > 0)) continue;
       const quantity = Number((notional / price).toPrecision(6));
       // Normal PAPER order path from this machine (auth: local operator).
-      const port = Number(process.env.PORT) || 9991;
       const res = await fetch(`http://127.0.0.1:${port}/trading/place-order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

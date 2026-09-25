@@ -1540,6 +1540,8 @@ router.post("/wallet/adjust", authGuard, async (req: AuthRequest, res) => {
 router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
   try {
     const { tradeId, mode = "PAPER", force = false } = req.body;
+    // Only known system reasons are accepted; anything else is a manual close.
+    const closeReason = req.body?.reason === "EXPLORATION_TIME_EXIT" && mode === "PAPER" ? "EXPLORATION_TIME_EXIT" : "MANUAL";
     if (!tradeId) return res.status(400).json({ error: "tradeId required" }) as any;
 
     const trade = await Trade.findOne({ _id: tradeId, userId: req.userId!, status: "OPEN" });
@@ -1776,7 +1778,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
         req.userId!, mode, trade.accountType || "FUTURES", initialMargin + pnl,
         (session) => Trade.findOneAndUpdate(
           { _id: tradeId, status: "OPEN" },
-          { $set: { status: "CLOSED", exitPrice, pnl, closedAt: new Date(), "meta.closeReason": "MANUAL" } },
+          { $set: { status: "CLOSED", exitPrice, pnl, closedAt: new Date(), "meta.closeReason": closeReason } },
           { session },
         ),
       );
