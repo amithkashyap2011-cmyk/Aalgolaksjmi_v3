@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 
 /**
  * Per-day capital and P&L, shared by the Indian and crypto dashboards:
- * how much was put into trades each day, the most that was in the market at
- * once, what closed (with net P&L after charges) and what was still held at
+ * invested capital each day (the most that was in the market at once, with
+ * the total of trade entries as a sub-line), what closed (with net P&L after charges) and what was still held at
  * the end of the day (right now, for today). Days are IST calendar days.
  * Data: GET /api/indian-market/daily-summary or /trading/daily-summary.
  */
@@ -78,13 +78,12 @@ export default function DailyCapitalTable({ endpoint, currency, hidden, title = 
       {!error && rows && rows.length === 0 && <div style={{ padding: "8px 14px 12px", fontSize: 11, color: "#94a3b8" }}>No trades in the last 30 days.</div>}
       {!error && rows && rows.length > 0 && (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
             <thead>
               <tr>
                 <th style={{ ...th, textAlign: "left" }}>Day</th>
-                <th style={th} title="Capital put into trades opened that day">Invested</th>
-                <th style={th} title="Most capital in open trades at the same time that day">Peak in market</th>
-                <th style={th} title="Trades closed that day and the capital they used">Closed</th>
+                <th style={th} title="Most money in open trades at the same time that day — the capital actually used (cash is reused across trades)">Invested capital</th>
+                <th style={th} title="Trades closed that day (won / lost)">Closed</th>
                 <th style={th} title="Net P/L of trades closed that day (after charges)">Closed P/L</th>
                 <th style={th} title="Still open at the end of the day (right now, for today)">Holding</th>
                 <th style={th} title="Current open P/L — shown for today only">Open P/L</th>
@@ -96,9 +95,11 @@ export default function DailyCapitalTable({ endpoint, currency, hidden, title = 
                 return (
                   <tr key={r.date} style={isToday ? { background: "rgba(56,189,248,0.06)" } : undefined}>
                     <td style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: isToday ? 800 : 600, color: isToday ? "#38bdf8" : "#e2e8f0" }}>{label(r.date)}</td>
-                    <td style={td}>{money(r.invested)}<div style={sub}>{r.opened} trade{r.opened === 1 ? "" : "s"}</div></td>
-                    <td style={td}>{money(r.peak)}</td>
-                    <td style={td}>{money(r.closedCost)}<div style={sub}>{r.closedCount} closed{r.closedCount ? ` · ${r.won}W/${r.lost}L` : ""}</div></td>
+                    <td style={{ ...td, fontWeight: 800 }}>
+                      {money(r.peak)}
+                      <div style={sub}>{r.opened} trade{r.opened === 1 ? "" : "s"}{r.opened ? ` · entries ${money(r.invested)}` : ""}</div>
+                    </td>
+                    <td style={{ ...td, fontFamily: "inherit" }}>{r.closedCount ? `${r.closedCount} · ${r.won}W/${r.lost}L` : "—"}</td>
                     <td style={{ ...td, color: hidden ? td.color : pnlColor(r.realizedNet), fontWeight: 800 }}>
                       {r.closedCount ? money(r.realizedNet, true) : "—"}
                       {r.charges > 0 && !hidden && <div style={sub}>charges {fmt(currency, r.charges)}</div>}

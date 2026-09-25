@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 
 /**
  * Compact "how much did I put in today" strip for positions panels: invested
- * today, holding now (open capital + open P/L) and closed today (net P/L
+ * capital today (most money in trades at once), holding now (open capital + open P/L) and closed today (net P/L
  * after charges). Today's row of the daily-summary endpoint (IST day).
  */
 interface TodayRow {
-  opened: number; invested: number;
+  opened: number; invested: number; peak: number;
   closedCount: number; closedCost: number; won: number; lost: number; realizedNet: number;
   holdingCount: number; holdingCost: number; unrealized: number | null;
 }
@@ -39,7 +39,7 @@ export default function TodayInvestedStrip({ endpoint, currency }: { endpoint: s
     return v < 0 ? `−${s}` : signed && v > 0 ? `+${s}` : s;
   };
   const color = (v: number) => (v > 0 ? "#10b981" : v < 0 ? "#ef4444" : "#94a3b8");
-  const r = row ?? { opened: 0, invested: 0, closedCount: 0, closedCost: 0, won: 0, lost: 0, realizedNet: 0, holdingCount: 0, holdingCost: 0, unrealized: 0 };
+  const r = row ?? { opened: 0, invested: 0, peak: 0, closedCount: 0, closedCost: 0, won: 0, lost: 0, realizedNet: 0, holdingCount: 0, holdingCost: 0, unrealized: 0 };
 
   const cell = (label: string, value: string, sub: React.ReactNode, valueColor = "#f8fafc") => (
     <div style={{ flex: "1 1 150px", minWidth: 0, padding: "8px 12px", borderRadius: 8, background: "rgba(255,255,255,0.03)", border: "1px solid #1e293b" }}>
@@ -51,17 +51,17 @@ export default function TodayInvestedStrip({ endpoint, currency }: { endpoint: s
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-      {cell("Invested today", fmt(r.invested), `${r.opened} trade${r.opened === 1 ? "" : "s"} opened`)}
+      {/* Invested capital = most money in trades at once today (cash is reused
+          across trades, so the sum of entries overstates what was put in). */}
+      {cell("Invested capital today", fmt(r.peak), `${r.opened} trade${r.opened === 1 ? "" : "s"}${r.opened ? ` · entries total ${fmt(r.invested)}` : ""}`)}
       {cell("Holding now", fmt(r.holdingCost),
         <>
           {r.holdingCount} open
           {r.holdingCount > 0 && r.unrealized !== null && <span style={{ color: color(r.unrealized), fontWeight: 700 }}> · {fmt(r.unrealized, true)}</span>}
         </>, "#fbbf24")}
-      {cell("Closed today", fmt(r.closedCost),
-        <>
-          {r.closedCount} closed{r.closedCount ? ` · ${r.won}W/${r.lost}L` : ""}
-          {r.closedCount > 0 && <span style={{ color: color(r.realizedNet), fontWeight: 700 }}> · {fmt(r.realizedNet, true)}</span>}
-        </>)}
+      {cell("Closed today · net P/L", r.closedCount ? fmt(r.realizedNet, true) : fmt(0),
+        `${r.closedCount} closed${r.closedCount ? ` · ${r.won}W/${r.lost}L` : ""}`,
+        r.closedCount ? color(r.realizedNet) : "#f8fafc")}
     </div>
   );
 }
