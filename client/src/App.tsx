@@ -51,7 +51,10 @@ export default function App() {
       if (activeMarket !== "GLOBAL") setActiveMarket("GLOBAL");
     } else if (location.pathname.startsWith("/india") || location.pathname.startsWith("/indian-market")) {
       if (activeMarket !== "INDIA") setActiveMarket("INDIA");
-    } else if (location.pathname.startsWith("/crypto") || location.pathname.startsWith("/futures") || location.pathname.startsWith("/spot")) {
+    } else if (location.pathname === "/" || location.pathname.startsWith("/crypto") || location.pathname.startsWith("/futures") || location.pathname.startsWith("/spot")) {
+      // "/" is the crypto HomePage; without it, arriving there from an Indian
+      // page (e.g. the sidebar's Crypto → Dashboard) left the market on INDIA,
+      // so the top ribbon kept showing NSE stocks on the crypto dashboard.
       if (activeMarket !== "CRYPTO") setActiveMarket("CRYPTO");
     }
   }, [location.pathname]);
