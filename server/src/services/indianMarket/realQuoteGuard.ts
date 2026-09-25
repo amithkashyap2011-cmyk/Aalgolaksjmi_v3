@@ -79,6 +79,42 @@ export function volScaledStops(spot: number, strike: number, isCall: boolean, ex
 }
 
 /**
+ * Volatility-scaled stop/target for a two-leg vertical DEBIT spread (bull
+ * call / bear put), as fractions of the net debit. Debit spreads used a flat
+ * stop at −60% and a target at +75% of max profit (e.g. RELIANCE 1220/1240 CE
+ * bought at 8: stop 3.20, target 17.00) — levels an intraday trade squared
+ * off at 15:15 almost never reaches, so a loser just bled until square-off.
+ * Same method as single legs: expected 1-hour spread move from the net delta
+ * of both legs (each leg's IV implied from its real quote); stop = 1.5×,
+ * target = 2.5× that move, bounded to 15–40% / 25–100%, with the target kept
+ * below the spread's maximum value (its width) and ≥ 1.6× the stop.
+ * Returns undefined when the trade isn't a vertical debit spread or IVs
+ * can't be implied.
+ */
+export function volScaledSpreadStops(spot: number, legs: any[], prices: number[], netDebit: number): { slPct: number; tpPct: number } | undefined {
+  if (legs.length !== 2 || !(spot > 0) || !(netDebit > 0)) return undefined;
+  const bi = legs.findIndex((l) => l.action === "BUY"), si = legs.findIndex((l) => l.action === "SELL");
+  if (bi < 0 || si < 0) return undefined;
+  const [b, sl] = [legs[bi], legs[si]];
+  if (b.instrumentType !== sl.instrumentType || !isOptionLeg(b) || b.expiry !== sl.expiry || !b.expiry) return undefined;
+  const isCall = b.instrumentType === "CE";
+  const dteYears = Math.max(0.5 / 365, (expiryCloseTime(b.expiry).getTime() - Date.now()) / (365 * 86400_000));
+  const ivB = OptionChainService.impliedVolatility(prices[bi], spot, Number(b.strike), dteYears, isCall);
+  const ivS = OptionChainService.impliedVolatility(prices[si], spot, Number(sl.strike), dteYears, isCall);
+  const iv = ivB ?? ivS;
+  if (!iv) return undefined;
+  const delta = (k: number, v: number) => OptionChainService.calculateBlackScholesGreeks(spot, k, dteYears, v, isCall).delta;
+  const netDelta = Math.abs(delta(Number(b.strike), ivB ?? iv) - delta(Number(sl.strike), ivS ?? iv));
+  const move = (netDelta * spot * ((ivB ?? iv) + (ivS ?? iv)) / 2 * Math.sqrt(60 / 94_500)) / netDebit;
+  const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
+  const width = Math.abs(Number(b.strike) - Number(sl.strike));
+  const maxTp = width > netDebit ? (width * 0.95 - netDebit) / netDebit : 0.25;
+  const tpPct = Math.min(clamp(2.5 * move, 0.25, 1.0), Math.max(0.25, maxTp));
+  const slPct = Math.min(clamp(1.5 * move, 0.15, 0.40), tpPct / 1.6);
+  return { slPct: Number(slPct.toFixed(4)), tpPct: Number(tpPct.toFixed(4)) };
+}
+
+/**
  * Reprices a proposed option trade from fresh real quotes and resets its
  * stop/target. Returns { ok: false, reason } when it must not be opened.
  */
@@ -104,8 +140,12 @@ export function priceTradeFromRealQuotes(trade: any, underlying: string, spot: n
     const { slPct, tpPct } = volScaledStops(spot, Number(leg.strike), leg.instrumentType === "CE", leg.expiry, entry);
     trade.stopLoss = Number((entry * (1 - slPct)).toFixed(2));
     trade.target = Number((entry * (1 + tpPct)).toFixed(2));
+  } else if (!isShort && spot > 0 && volScaledSpreadStops(spot, trade.legs, prices, entry)) {
+    const { slPct, tpPct } = volScaledSpreadStops(spot, trade.legs, prices, entry)!;
+    trade.stopLoss = Number((entry * (1 - slPct)).toFixed(2));
+    trade.target = Number((entry * (1 + tpPct)).toFixed(2));
   } else if (oldEntry > 0) {
-    // Multi-leg: keep the strategy's stop/target distances relative to entry.
+    // Other multi-leg: keep the strategy's stop/target distances relative to entry.
     const r = entry / oldEntry;
     if (trade.stopLoss) trade.stopLoss = Number((trade.stopLoss * r).toFixed(2));
     if (trade.target) trade.target = Number((trade.target * r).toFixed(2));

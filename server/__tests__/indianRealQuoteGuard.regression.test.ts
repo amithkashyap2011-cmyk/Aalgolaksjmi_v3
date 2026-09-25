@@ -5,7 +5,7 @@
  */
 import { optionContracts, OptionContract } from "../src/services/indianMarket/angelOne/optionContracts.js";
 import { setOptionQuote } from "../src/services/indianMarket/angelOne/optionQuotes.js";
-import { realOptionValue, priceTradeFromRealQuotes, volScaledStops, isOptionTrade } from "../src/services/indianMarket/realQuoteGuard.js";
+import { realOptionValue, priceTradeFromRealQuotes, volScaledStops, volScaledSpreadStops, isOptionTrade } from "../src/services/indianMarket/realQuoteGuard.js";
 import { StrategyRouter } from "../src/services/indianMarket/strategyRouter.js";
 
 const EXP = "2026-09-29";
@@ -55,4 +55,33 @@ test("regime uses real ADX and direction vs open — not a hardcoded RANGING", (
   expect(StrategyRouter.classifyRegime(990, [], 1.0, { adx14: 32, open: 1000 }).regime).toBe("TRENDING_BEAR");
   expect(StrategyRouter.classifyRegime(1010, [], 1.0, { adx14: 32, open: 1000 }).regime).toBe("TRENDING_BULL");
   expect(StrategyRouter.classifyRegime(1000.5, [], 1.0, { adx14: 14, open: 1000 }).regime).not.toMatch(/TRENDING/);
+});
+
+test("debit spreads get volatility-scaled stops instead of a flat −60% / +75%-of-max", () => {
+  // 2026-09-25: RELIANCE 1220/1240 CE bull call spread bought at 8 had stop
+  // 3.20 (−60%) and target 17.00 (+112%) on an intraday trade.
+  for (const [spot, buyK, sellK, buyPx, sellPx, t] of [
+    [1225, 1220, 1240, 20, 12, "CE"],
+    [55550, 55500, 55600, 410, 360, "CE"],
+    [290, 295, 285, 9.1, 6.0, "PE"],
+  ] as const) {
+    const legs = [
+      { action: "BUY", strike: buyK, instrumentType: t, expiry: EXP },
+      { action: "SELL", strike: sellK, instrumentType: t, expiry: EXP },
+    ];
+    const debit = buyPx - sellPx;
+    const r = volScaledSpreadStops(spot, legs, [buyPx, sellPx], debit)!;
+    expect(r).toBeDefined();
+    expect(r.slPct).toBeGreaterThanOrEqual(0.10);
+    expect(r.slPct).toBeLessThanOrEqual(0.40); // never the old −60%
+    expect(r.tpPct).toBeGreaterThanOrEqual(0.25);
+    expect(debit * (1 + r.tpPct)).toBeLessThan(Math.abs(buyK - sellK)); // below max value
+    expect(r.tpPct / r.slPct).toBeGreaterThanOrEqual(1.6 - 1e-9);
+  }
+  // not a vertical debit spread → no override
+  expect(volScaledSpreadStops(1225, [{ action: "BUY", strike: 1220, instrumentType: "CE", expiry: EXP }], [20], 20)).toBeUndefined();
+  expect(volScaledSpreadStops(1225, [
+    { action: "BUY", strike: 1220, instrumentType: "CE", expiry: EXP },
+    { action: "SELL", strike: 1220, instrumentType: "PE", expiry: EXP },
+  ], [20, 12], 8)).toBeUndefined();
 });
