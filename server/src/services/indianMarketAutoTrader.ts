@@ -537,11 +537,16 @@ export class IndianMarketAutoTrader {
                 targetUsers.add(uid);
               }
             }
-            // Project only _id — this runs every 10s and previously pulled every
-            // field of every user document just to collect ids.
+            // Only accounts that still exist. This used to ADD every user in
+            // the users collection (so the autoTrade flag never restricted
+            // anything) and never dropped settings whose user was gone: a
+            // deleted demo account (settings userId stored as a string) kept
+            // being scanned every 10s — ~1,000 sizing/indicator rejections a
+            // day in the error log (2026-09-25).
             const appUsers = await mongoose.connection.db?.collection("users").find({}, { projection: { _id: 1 } }).toArray() || [];
-            for (const u of appUsers) {
-              targetUsers.add(u._id.toString());
+            const existing = new Set(appUsers.map((u) => u._id.toString()));
+            if (existing.size > 0) {
+              for (const uid of [...targetUsers]) if (!existing.has(uid)) targetUsers.delete(uid);
             }
           } catch { }
         }

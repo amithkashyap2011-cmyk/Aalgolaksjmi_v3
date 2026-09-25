@@ -26,6 +26,37 @@ export interface RiskValidationResult {
   checks: Record<string, { passed: boolean; message: string }>;
 }
 
+
+/**
+ * Market direction of an Indian trade. Stored side is "BUY" even for bearish
+ * trades (a bear put spread buys a put), so direction comes from the legs:
+ * one option leg → BUY CE / SELL PE bullish, BUY PE / SELL CE bearish; a
+ * two-leg vertical (one BUY, one SELL, same type) → the bought leg's type;
+ * stock/futures legs or no legs → the side; anything else (straddles,
+ * condors, mixed types) is NEUTRAL.
+ */
+export function tradeDirection(t: any): "BULL" | "BEAR" | "NEUTRAL" {
+  const legs: any[] = Array.isArray(t?.legs) ? t.legs : [];
+  const isOpt = (l: any) => l?.instrumentType === "CE" || l?.instrumentType === "PE";
+  const bySide = (side: any) => {
+    const x = String(side || "").toUpperCase();
+    return x === "BUY" || x === "LONG" ? "BULL" : x === "SELL" || x === "SHORT" ? "BEAR" : "NEUTRAL";
+  };
+  if (legs.length === 0) return bySide(t?.side ?? t?.position);
+  if (legs.length === 1) {
+    const l = legs[0];
+    if (!isOpt(l)) return bySide(l.action ?? t?.side);
+    const bull = (l.action === "BUY") === (l.instrumentType === "CE");
+    return bull ? "BULL" : "BEAR";
+  }
+  if (legs.length === 2 && legs.every(isOpt) && legs[0].instrumentType === legs[1].instrumentType) {
+    const bought = legs.find((l) => l.action === "BUY");
+    const sold = legs.find((l) => l.action === "SELL");
+    if (bought && sold) return bought.instrumentType === "CE" ? "BULL" : "BEAR";
+  }
+  return "NEUTRAL";
+}
+
 export class IndianRiskManager {
   // In-memory trade cooldown & duplicate fingerprints
   private static recentTradeFingerprints = new Map<string, number>();
@@ -235,6 +266,20 @@ export class IndianRiskManager {
       };
       if (await Trade.exists({ ...base, underlying: trade.underlying, status: "OPEN" })) {
         return "DUPLICATE_OPEN_POSITION";
+      }
+      // Opposite-direction position on the same underlying (any strategy). The
+      // check above is per strategy, so a bearish put spread and a bullish
+      // stock buy on TATAMOTORS were both open at once (2026-09-25), betting
+      // against each other and paying fees on both.
+      const dir = tradeDirection(trade);
+      if (dir !== "NEUTRAL") {
+        const openSame = await Trade.find(
+          { userId: base.userId, accountType: base.accountType, underlying: trade.underlying, status: "OPEN" },
+          { legs: 1, side: 1, position: 1 },
+        ).lean();
+        if (openSame.some((t) => { const d = tradeDirection(t); return d !== "NEUTRAL" && d !== dir; })) {
+          return "CONFLICTING_OPEN_POSITION";
+        }
       }
       // Trade has no createdAt (no schema timestamps); the ObjectId carries it.
       const since = mongoose.Types.ObjectId.createFromTime(Math.floor((Date.now() - cooldownMinutes * 60_000) / 1000));
