@@ -21,6 +21,15 @@ export function clearToken(): void {
   try { localStorage.removeItem(TOKEN_KEY); } catch { /* noop */ }
 }
 
+/**
+ * The local demo account. The store's boot login and ensureToken() must use
+ * the same one: they used to differ (demo@aalgo.local vs demo@aalgo.internal),
+ * so the token and the store's userId could belong to different users and a
+ * page showed one account's equity next to another's deposits.
+ */
+export const DEMO_EMAIL = "demo@aalgo.local";
+export const DEMO_PASSWORD = "123456";
+
 let activeAuthPromise: Promise<string | null> | null = null;
 
 export async function ensureToken(): Promise<string | null> {
@@ -33,7 +42,7 @@ export async function ensureToken(): Promise<string | null> {
       const res = await fetch(`${BASE}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify({ email: "demo@aalgo.internal", password: "123456" }),
+        body: JSON.stringify({ email: DEMO_EMAIL, password: DEMO_PASSWORD }),
       });
       if (res.ok) {
         const data = await res.json();

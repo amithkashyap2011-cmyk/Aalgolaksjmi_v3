@@ -46,8 +46,7 @@ socket.on("disconnect", () => {
   useAppStore.setState({ connected: false });
 });
 
-const DEMO_EMAIL = "demo@aalgo.local";
-const DEMO_PASSWORD = "123456";
+const { DEMO_EMAIL, DEMO_PASSWORD } = api;
 
 let bootRetryMs = 3_000;
 // Whether the last boot actually authenticated (a live socket can make

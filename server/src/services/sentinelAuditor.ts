@@ -23,6 +23,7 @@ import fs from "node:fs";
 import { ApiKeys } from "../models/ApiKeys.js";
 import { decrypt } from "../lib/crypto.js";
 import { LiveExecutionBarrier } from "./aqea/governance/LiveExecutionBarrier.js";
+import { TAKER_FEE } from "./pnlService.js";
 
 const AUTO_FIX_LOG = "/Users/amithks/aalgolakshmi_v3/server/auto_trade.log";
 const STATIC_BASELINE_USDT = 0; // Reset balance to safe $20K if corrupted
@@ -151,10 +152,30 @@ export async function runSentinelAudit(userId: string, mode: "PAPER" | "LIVE", a
             }
           }
 
-          await Trade.updateOne(
-            { _id: orphan._id },
-            { $set: { status: "CLOSED", exitPrice: orphan.entryPrice, pnl: 0, closedAt: new Date(), "meta.closeReason": "SENTINEL_AUTO_PURGE" } }
-          );
+          if (mode === "PAPER") {
+            // A PAPER orphan was paid for when it opened. It used to be closed
+            // at pnl 0 with no wallet credit, so its margin was never returned
+            // ($107 of SPOT positions on 2026-09-21 → ~$27 missing cash and
+            // hidden P&L). Close it like any exit: market price, fees, and
+            // margin + net P&L credited back.
+            const acct = (orphan.accountType || accountType) as any;
+            const mark = (await binance.getTickerPrice(symbol, acct === "FUTURES").catch(() => 0)) || orphan.entryPrice;
+            const gross = orphan.side === "BUY" ? (mark - orphan.entryPrice) * orphan.quantity : (orphan.entryPrice - mark) * orphan.quantity;
+            const pnl = gross - (orphan.entryPrice + mark) * orphan.quantity * TAKER_FEE;
+            const margin = (orphan.quantity * orphan.entryPrice) / (orphan.leverage || 1);
+            await paper.creditWalletAndCloseTrade(userId, mode, acct, margin + pnl, (session) =>
+              Trade.findOneAndUpdate(
+                { _id: orphan._id, status: "OPEN" },
+                { $set: { status: "CLOSED", exitPrice: mark, pnl, netPnl: pnl, closedAt: new Date(), "meta.closeReason": "SENTINEL_AUTO_PURGE", "meta.walletCredited": margin + pnl } },
+                { session },
+              ));
+            logAutoFix(`  -> PAPER orphan closed at ${mark}: credited margin ${margin.toFixed(4)} + pnl ${pnl.toFixed(4)}`);
+          } else {
+            await Trade.updateOne(
+              { _id: orphan._id },
+              { $set: { status: "CLOSED", exitPrice: orphan.entryPrice, pnl: 0, closedAt: new Date(), "meta.closeReason": "SENTINEL_AUTO_PURGE" } }
+            );
+          }
           clearPeakPrice(userId, symbol, orphan._id.toString());
         }
 
