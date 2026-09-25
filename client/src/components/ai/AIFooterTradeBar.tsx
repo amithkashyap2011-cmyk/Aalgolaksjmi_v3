@@ -124,6 +124,14 @@ const writeRadarPrefs = (patch: RadarPrefs) => {
     localStorage.setItem(RADAR_PREFS_KEY, JSON.stringify({ ...cur, ...patch, symbol: { ...cur.symbol, ...patch.symbol } }));
   } catch { /* storage unavailable — prefs just don't persist */ }
 };
+const ENGINE_FRESH_MS = 5 * 60_000;
+const pct = (x?: number) => (typeof x === "number" ? Math.round(x * 1000) / 10 : undefined);
+/** Confidence = probability (%) of the side the engine is (or would be) taking. */
+const engineConfidence = (e: any): number => {
+  const buy = pct(e.buyProbability), sell = pct(e.sellProbability);
+  const conf = e.decision === "LONG" ? buy : e.decision === "SHORT" ? sell : Math.max(buy ?? 0, sell ?? 0);
+  return conf ?? (Number(e.confidence) || 0);
+};
 // How long a signal counts for ranking (the display cache is only 20s).
 const SIGNAL_TTL_MS = 10 * 60_000;
 const DISMISS_STORAGE_KEY = "aqea_footer_bar_dismissed";
@@ -479,7 +487,19 @@ export default function AIFooterTradeBar() {
     let alive = true;
     const load = () => fetch("/trading/live-decisions")
       .then((r) => r.json())
-      .then((d) => { if (alive && d?.decisions) { liveDecisions.current = d.decisions; setSignalVersion((v) => v + 1); } })
+      .then((d) => {
+        if (!alive || !d?.decisions) return;
+        liveDecisions.current = d.decisions;
+        // The engine evaluates every allowed coin each cycle, so its decisions
+        // cover the whole RADAR universe at once; per-coin analysis fetches
+        // are only needed for coins it hasn't evaluated recently.
+        for (const e of Object.values(d.decisions) as any[]) {
+          if (!e?.symbol || Date.now() - e.at > ENGINE_FRESH_MS) continue;
+          const prev = signalMap.current.get(e.symbol);
+          if (!prev || prev.time <= e.at) signalMap.current.set(e.symbol, { direction: e.decision, confidence: engineConfidence(e), time: e.at });
+        }
+        setSignalVersion((v) => v + 1);
+      })
       .catch(() => {});
     load();
     const t = setInterval(load, 10_000);
@@ -488,16 +508,12 @@ export default function AIFooterTradeBar() {
   const withEngine = useCallback((p: UpcomingTradePrediction): UpcomingTradePrediction => {
     if (!p || p.domain !== "CRYPTO") return p;
     const e = liveDecisions.current[p.symbol];
-    if (!e || Date.now() - e.at > 5 * 60_000) return { ...p, source: "ANALYSIS" };
-    const pct = (x?: number) => (typeof x === "number" ? Math.round(x * 1000) / 10 : undefined);
-    const buy = pct(e.buyProbability), sell = pct(e.sellProbability);
-    // Confidence = probability of the side the engine is (or would be) taking.
-    const conf = e.decision === "LONG" ? buy : e.decision === "SHORT" ? sell : Math.max(buy ?? 0, sell ?? 0);
+    if (!e || Date.now() - e.at > ENGINE_FRESH_MS) return { ...p, source: "ANALYSIS" };
     return {
       ...p,
       source: "ENGINE",
       direction: e.decision,
-      confidence: conf ?? Number(e.confidence) ?? 0,
+      confidence: engineConfidence(e),
       engineThreshold: pct(e.threshold),
       engineReason: e.reason,
     };
@@ -686,6 +702,16 @@ export default function AIFooterTradeBar() {
     }
   }, [bandActive, matchingSymbols, activeSymbol, speedSec]);
   const noMatchDisplayed = bandActive && !matchingSymbols.includes(activeSymbol);
+  // Strongest fresh signal anywhere, so an empty band still says where things stand.
+  const bestNow = useMemo(() => {
+    const now = Date.now();
+    let best: { sym: string; direction: string; confidence: number } | null = null;
+    for (const sym of radarUniverse) {
+      const x = signalMap.current.get(sym);
+      if (x && now - x.time < SIGNAL_TTL_MS && (!best || x.confidence > best.confidence)) best = { sym, ...x };
+    }
+    return best;
+  }, [radarUniverse, signalVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Dynamically update prediction entry/TP/SL when live ticker price arrives
   useEffect(() => {
@@ -1071,9 +1097,11 @@ export default function AIFooterTradeBar() {
                       frozen closing prices, so it's shown as the last signal, not
                       as a live call. */}
                   {noMatchDisplayed ? (
-                    <span title="No coin is currently in this confidence range; the rest are being scanned in the background" style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: "rgba(100,116,139,.12)", color: "#64748b", border: "1px solid rgba(100,116,139,.35)" }}>
+                    <span title={`No LONG/SHORT signal in ${bandOf(confBand).label} right now. ${scanProgress.done} of ${scanProgress.total} coins have a fresh signal; the list refreshes every 10s.`} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 7px", borderRadius: φ.r.xs, fontSize: φ.fs.xxs, fontWeight: 900, background: "rgba(100,116,139,.12)", color: "#64748b", border: "1px solid rgba(100,116,139,.35)" }}>
                       <RotateCw size={φ.ic.sm - 2} className={scanProgress.done < scanProgress.total ? "animate-spin" : ""} />
-                      NO COIN IN {bandOf(confBand).label} · scanned {scanProgress.done}/{scanProgress.total}
+                      NO COIN IN {bandOf(confBand).label}
+                      {bestNow && <span style={{ fontWeight: 700 }}>· best now {bestNow.sym.replace(/USDT$/, "")} {bestNow.direction} {Math.round(bestNow.confidence)}%</span>}
+                      {scanProgress.done < scanProgress.total && <span style={{ fontWeight: 700 }}>· checking {scanProgress.done}/{scanProgress.total}</span>}
                     </span>
                   ) : mktClosed && isIndianAsset ? (
                     <>
