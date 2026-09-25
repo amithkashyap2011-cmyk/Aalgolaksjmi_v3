@@ -1,3 +1,4 @@
+import { getBinanceUsage } from "../services/binanceUsageMonitor.js";
 import { Router } from "express";
 import { systemManager, SystemState } from "../services/systemManager.js";
 import mongoose from "mongoose";
@@ -52,6 +53,11 @@ router.get("/status", (req, res) => {
  *       cycle so a CPU-heavy retrain never competes with live inference
  *       for the same cores.
  */
+/** Binance REST calls per endpoint + reported weight (see binanceUsageMonitor). */
+router.get("/binance-usage", (_req, res) => {
+  res.json(getBinanceUsage());
+});
+
 router.get("/auto-trader-active", async (req, res) => {
   const { getScannerCount } = await import("../services/autoTradeEngine.js");
   const scannerCount = getScannerCount();

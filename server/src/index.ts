@@ -2,6 +2,7 @@
  * ─── AALGOLAKSHMI V2 — Server entry ───────────────────
  * Refreshed: Clean reload triggered. (Restarted after MongoDB recovery)
  */
+import { installBinanceUsageMonitor } from "./services/binanceUsageMonitor.js";
 import jwt from "jsonwebtoken";
 import { config } from "dotenv";
 import { fileURLToPath } from "node:url";
@@ -143,6 +144,7 @@ import {
 // 🛡️ Fail-closed production transport security validation (Warning #3 Elimination)
 validateTransportSecurityOnStartup();
 
+installBinanceUsageMonitor();
 const app = express();
 
 // Express must trust the configured TLS terminator before req.secure can

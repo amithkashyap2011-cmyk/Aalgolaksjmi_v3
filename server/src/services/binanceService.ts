@@ -35,6 +35,16 @@ const REST_TIMEOUT_MS = 2_500;
 
 /* Cache for synchronous lookups */
 const priceCache = new Map<string, number>();
+// When each cached price was last refreshed (WS tick or REST). getTickerPrice
+// serves a fresh one without a REST call: it used to call /ticker/price on
+// every lookup (~470 calls/min, the bulk of the IP's weight) even while the
+// WebSocket was streaming that exact price, tripping 429 bans all night.
+const priceCacheAt = new Map<string, number>();
+const PRICE_FRESH_MS = 5_000;
+function setCachedPrice(key: string, price: number): void {
+  priceCache.set(key, price);
+  priceCacheAt.set(key, Date.now());
+}
 
 /* ── Circuit Breaker & IP Ban Interceptor ──────────────── */
 // Binance Spot (api.binance.com) and Futures (fapi.binance.com) are separate
@@ -1347,6 +1357,8 @@ export function getActiveSocketsInfo() {
 export async function getTickerPrice(symbol: string, isFutures: boolean = false): Promise<number> {
   const cached = getTickerPriceSync(symbol, isFutures);
   const surface: BinanceSurface = isFutures ? "futures" : "spot";
+  const freshAt = priceCacheAt.get(getCacheKey(symbol, isFutures)) ?? 0;
+  if (cached !== null && Date.now() - freshAt < PRICE_FRESH_MS) return cached;
   if (isRestBanned(surface)) {
     // A live WS/REST cached price is real, last-known market data — safe to serve.
     if (cached !== null) return cached;
@@ -1377,7 +1389,7 @@ export async function getTickerPrice(symbol: string, isFutures: boolean = false)
     if (is1000xContract(binanceSymbol)) {
       price = price / 1000;
     }
-    priceCache.set(getCacheKey(symbol, isFutures), price);
+    setCachedPrice(getCacheKey(symbol, isFutures), price);
     return price;
   } catch (err: any) {
     if (cached !== null) return cached;
@@ -1442,7 +1454,7 @@ export async function get24hrTicker(symbol: string, isFutures: boolean = false):
       data.lowPrice = (parseFloat(data.lowPrice) / 1000).toString();
     }
     
-    priceCache.set(getCacheKey(symbol, isFutures), parseFloat(data.lastPrice));
+    setCachedPrice(getCacheKey(symbol, isFutures), parseFloat(data.lastPrice));
     return data;
   } catch (err: any) {
     if (cachedPrice !== null) {
@@ -1537,7 +1549,7 @@ function handleMessage(cs: CombinedSocket, raw: Buffer | string): void {
         open /= 1000;
       }
 
-      priceCache.set(getCacheKey(ourSymbol, isFutures), price);
+      setCachedPrice(getCacheKey(ourSymbol, isFutures), price);
       
       signalBus.emitSignal({
         type: SignalType.PRICE_TICK,
