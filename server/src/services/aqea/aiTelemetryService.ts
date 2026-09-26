@@ -30,6 +30,17 @@ export function __setKlinesProviderForTesting(fn: typeof binanceService.getKline
   klinesProviderOverride = fn;
 }
 
+/**
+ * A horizon is gradeable only once the candle it is graded against exists:
+ * resolveOutcome reads the 1m candle opening at ceil(t0 + h). Treating
+ * "age >= h" as due left a <=60s window where that candle had not opened yet,
+ * so the prefetch missed and a fallback REST call came back empty — ~22k
+ * wasted klines requests + "[TELEMETRY] No klines found" warnings a day.
+ */
+function horizonDue(t0: number, horizonMin: number, now: number): boolean {
+  return now >= Math.ceil((t0 + horizonMin * 60_000) / 60_000) * 60_000;
+}
+
 export class AITelemetryService {
   // 🛡️ Re-entrancy guard (2026-09-15): resolvePendingOutcomes() is invoked
   // from exactly one setInterval today, but nothing previously stopped an
@@ -194,10 +205,10 @@ export class AITelemetryService {
     const resolveRecord = async (r: (typeof records)[number]) => {
       if (!r.priceAtPrediction) return;
 
-      const ageMinutes = (now - r.timestamp.getTime()) / 60000;
+      const t0 = r.timestamp.getTime();
       const updates: any = {};
 
-      if (ageMinutes >= 15 && !r.outcome15m) {
+      if (horizonDue(t0, 15, now) && !r.outcome15m) {
         const out = await this.resolveOutcome(r.symbol, r.timestamp, 15, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price15m = out.price;
@@ -210,7 +221,7 @@ export class AITelemetryService {
       // NEUTRAL (move within the ±fee-floor band on a LONG/SHORT call) is
       // excluded from the accuracy sample, not counted as a miss: the model
       // wasn't wrong, the market just didn't move enough to grade it.
-      if (ageMinutes >= 25 && !r.outcome25m) {
+      if (horizonDue(t0, 25, now) && !r.outcome25m) {
         const out = await this.resolveOutcome(r.symbol, r.timestamp, 25, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price25m = out.price;
@@ -222,7 +233,7 @@ export class AITelemetryService {
         }
       }
 
-      if (ageMinutes >= 30 && !r.outcome30m) {
+      if (horizonDue(t0, 30, now) && !r.outcome30m) {
         const out = await this.resolveOutcome(r.symbol, r.timestamp, 30, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price30m = out.price;
@@ -234,7 +245,7 @@ export class AITelemetryService {
       // grading a 25-minute prediction at 60 minutes (as the old code did,
       // with NEUTRAL counted as a loss) made HOLD near-unwinnable and
       // produced impossible readings like 0.0% rolling accuracy.
-      if (ageMinutes >= 60 && !r.outcome60m) {
+      if (horizonDue(t0, 60, now) && !r.outcome60m) {
         const out = await this.resolveOutcome(r.symbol, r.timestamp, 60, r.priceAtPrediction, r.direction, priceLookup);
         if (out) {
             updates.price60m = out.price;
@@ -272,7 +283,7 @@ export class AITelemetryService {
       if (!r?.priceAtPrediction || !r.timestamp) continue;
       const t0 = new Date(r.timestamp).getTime();
       for (const [h, field] of HORIZONS) {
-        if ((now - t0) / 60_000 < h || r[field]) continue;
+        if (!horizonDue(t0, h, now) || r[field]) continue;
         const m = Math.ceil((t0 + h * 60_000) / 60_000) * 60_000;
         const cur = ranges.get(r.symbol);
         ranges.set(r.symbol, cur ? { lo: Math.min(cur.lo, m), hi: Math.max(cur.hi, m) } : { lo: m, hi: m });

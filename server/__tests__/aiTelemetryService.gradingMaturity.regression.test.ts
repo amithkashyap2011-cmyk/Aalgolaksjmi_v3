@@ -126,18 +126,38 @@ describe("AITelemetryService.resolvePendingOutcomes — maturity-based selection
   test("a prediction exactly at 15 minutes is eligible and gets graded", async () => {
     if (skipIfNoMongo()) return;
 
-    // Slightly past 15:00 (15:00:05) so the boundary comparison in
-    // resolveRecord's `ageMinutes >= 15` — evaluated a moment after the
-    // query itself runs — reliably lands on the "included" side rather
-    // than racing the clock.
+    // Minute-aligned so the grading candle (the 1m candle opening at
+    // ceil(t0 + 15m)) has already opened — the real due condition.
+    const lastMinute = Math.floor(Date.now() / 60_000) * 60_000;
     const doc = await AIPredictionTelemetry.create(
-      makePrediction({ timestamp: new Date(Date.now() - (15 * 60 * 1000 + 5000)) })
+      makePrediction({ timestamp: new Date(lastMinute - 15 * 60 * 1000) })
     );
     await AITelemetryService.resolvePendingOutcomes();
 
     const after = await AIPredictionTelemetry.findById(doc._id);
     expect(after.outcome15m).toBe("WIN");
     expect(klinesCalls.length).toBeGreaterThan(0);
+  });
+
+  // 2026-09-26: "age >= 15m" was treated as due, but the grading candle opens
+  // at the NEXT whole minute. In that <=60s window the prefetch missed and a
+  // fallback REST call came back empty (~22k "No klines found" + wasted
+  // klines requests/day). Such a record must wait, without any klines call.
+  test("a matured prediction whose grading candle has not opened yet waits, with no klines call", async () => {
+    if (skipIfNoMongo()) return;
+
+    // 15m + a fraction of the current minute old, so it's past maturity, but
+    // its target (just after the last minute boundary) rounds up to a candle
+    // that opens at the next boundary, still in the future.
+    const lastMinute = Math.floor(Date.now() / 60_000) * 60_000;
+    const doc = await AIPredictionTelemetry.create(
+      makePrediction({ timestamp: new Date(lastMinute + 1 - 15 * 60 * 1000) })
+    );
+    await AITelemetryService.resolvePendingOutcomes();
+
+    const after = await AIPredictionTelemetry.findById(doc._id);
+    expect(after.outcome15m).toBeUndefined();
+    expect(klinesCalls.length).toBe(0);
   });
 
   test("a prediction at 14:59 (one second short of maturity) is NOT graded", async () => {
