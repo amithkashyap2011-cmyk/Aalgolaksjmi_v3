@@ -1587,6 +1587,8 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
 
     let exitPrice = trade.entryPrice;
     let pnl = 0;
+    let grossPnl = 0;
+    let feeCost = 0;
 
     if (mode === "LIVE") {
       if (force) {
@@ -1604,16 +1606,20 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
 
         const entryFee = trade.entryPrice * trade.quantity * TAKER_FEE;
         const exitFee = exitPrice * trade.quantity * TAKER_FEE;
-        const grossPnl = trade.side === "BUY"
+        grossPnl = trade.side === "BUY"
           ? (exitPrice - trade.entryPrice) * trade.quantity
           : (trade.entryPrice - exitPrice) * trade.quantity;
-        pnl = grossPnl - entryFee - exitFee;
+        feeCost = entryFee + exitFee;
+        pnl = grossPnl - feeCost;
 
         await Trade.updateOne({ _id: tradeId }, {
           $set: {
             status: "CLOSED",
             exitPrice,
             pnl,
+            grossPnl,
+            feeCost,
+            netPnl: pnl,
             closedAt: new Date(),
             "meta.closeReason": "MANUAL_LIVE_FORCE_SYNC"
           }
@@ -1752,10 +1758,11 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
 
         const entryFee = trade.entryPrice * closedQty * TAKER_FEE;
         const exitFee = exitPrice * closedQty * TAKER_FEE;
-        const grossPnl = trade.side === "BUY"
+        grossPnl = trade.side === "BUY"
           ? (exitPrice - trade.entryPrice) * closedQty
           : (trade.entryPrice - exitPrice) * closedQty;
-        pnl = grossPnl - entryFee - exitFee;
+        feeCost = entryFee + exitFee;
+        pnl = grossPnl - feeCost;
 
         const remainingQty = trade.quantity - closedQty;
         if (remainingQty > 1e-9) {
@@ -1783,7 +1790,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
 
       // Update DB
       await Trade.updateOne({ _id: tradeId }, {
-        $set: { status: "CLOSED", exitPrice, pnl, closedAt: new Date(), "meta.closeReason": "MANUAL_LIVE", "meta.exitClientOrderId": exitClientOrderId, "meta.exitBinanceOrderId": result.orderId }
+        $set: { status: "CLOSED", exitPrice, pnl, grossPnl, feeCost, netPnl: pnl, closedAt: new Date(), "meta.closeReason": "MANUAL_LIVE", "meta.exitClientOrderId": exitClientOrderId, "meta.exitBinanceOrderId": result.orderId }
       });
     } else {
       // PAPER MODE Close
@@ -1798,10 +1805,11 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
 
       const entryFee = trade.entryPrice * trade.quantity * TAKER_FEE;
       const exitFee = exitPrice * trade.quantity * TAKER_FEE;
-      const grossPnl = trade.side === "BUY"
+      grossPnl = trade.side === "BUY"
         ? (exitPrice - trade.entryPrice) * trade.quantity
         : (trade.entryPrice - exitPrice) * trade.quantity;
-      pnl = grossPnl - entryFee - exitFee;
+      feeCost = entryFee + exitFee;
+      pnl = grossPnl - feeCost;
 
       // Atomically claim the OPEN → CLOSED transition AND credit the wallet
       // in one MongoDB transaction. The auto-trade engine's own SL/TP/exit
@@ -1816,7 +1824,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
         req.userId!, mode, trade.accountType || "FUTURES", initialMargin + pnl,
         (session) => Trade.findOneAndUpdate(
           { _id: tradeId, status: "OPEN" },
-          { $set: { status: "CLOSED", exitPrice, pnl, closedAt: new Date(), "meta.closeReason": closeReason } },
+          { $set: { status: "CLOSED", exitPrice, pnl, grossPnl, feeCost, netPnl: pnl, closedAt: new Date(), "meta.closeReason": closeReason } },
           { session },
         ),
       );
