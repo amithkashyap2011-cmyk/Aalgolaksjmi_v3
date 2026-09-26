@@ -32,6 +32,7 @@ export interface SizingInput {
   portfolioHeat: number;  // capital-at-risk % (0–100)
   userId: string;
   mode: "PAPER" | "LIVE";
+  accountType: "SPOT" | "FUTURES";
 }
 
 export interface SizingOutput {
@@ -51,10 +52,10 @@ export class UnifiedSizingEngine {
    * all five factors: balance, Kelly, risk limits, portfolio heat, and regime.
    */
   static async compute(input: SizingInput): Promise<SizingOutput> {
-    const { balance, atr, price, regime, quality, portfolioHeat, userId, mode } = input;
+    const { balance, atr, price, regime, quality, portfolioHeat, userId, mode, accountType } = input;
 
-    // 1. Rolling Kelly from last 30 closed trades
-    const kelly = await this.computeRollingKelly(userId, mode);
+    // 1. Rolling Kelly from the engine's own last 30 closed trades on this account type
+    const kelly = await this.computeRollingKelly(userId, mode, accountType);
 
     // Half-Kelly for variance reduction; capped at MAX_RISK_PER_TRADE (1%)
     const effectiveRiskPct = this.effectiveRiskFromKelly(kelly);
@@ -124,11 +125,14 @@ export class UnifiedSizingEngine {
   }
 
   /**
-   * Computes rolling Kelly fraction from the last 30 closed trades.
+   * Computes rolling Kelly fraction from the last 30 closed trades the engine
+   * itself opened on this account type. Indian trades (same userId, ₹ P&L),
+   * the other crypto account, MANUAL entries and PAPER_EXPLORATION probes are
+   * excluded — none of them are evidence of this engine's edge here.
    * Returns MAX_RISK_PER_TRADE when fewer than 10 trades exist (insufficient data).
    * Returns 0 when the system is in a losing streak (Kelly goes negative).
    */
-  static async computeRollingKelly(userId: string, mode: "PAPER" | "LIVE"): Promise<number> {
+  static async computeRollingKelly(userId: string, mode: "PAPER" | "LIVE", accountType: "SPOT" | "FUTURES"): Promise<number> {
     try {
       if (mongoose.connection.readyState !== 1) {
         return AQEA_CONFIG.MAX_RISK_PER_TRADE;
@@ -136,7 +140,9 @@ export class UnifiedSizingEngine {
       const trades = await Trade.find({
         userId: toValidObjectId(userId),
         mode,
+        accountType,
         status: "CLOSED",
+        entrySource: { $nin: ["MANUAL", "PAPER_EXPLORATION"] },
       })
         .sort({ closedAt: -1 })
         .limit(30)

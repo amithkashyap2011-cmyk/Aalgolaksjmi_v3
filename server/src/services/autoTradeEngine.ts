@@ -877,6 +877,7 @@ async function processSymbol(
     portfolioHeat,
     userId,
     mode,
+    accountType,
   });
 
   riskProfile.positionSize = unified.positionSize;
