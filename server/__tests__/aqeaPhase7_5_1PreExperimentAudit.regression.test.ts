@@ -1096,10 +1096,34 @@ describe("Z. Statistical Sensitivity & Zero-Balance Paper Invariants (Phase 7.5.
       quality: { score: 85, rating: "NORMAL" } as any,
       portfolioHeat: 0,
       userId: "test-user-zero-bal",
-      mode: "PAPER"
+      mode: "PAPER",
+      accountType: "FUTURES"
     });
     expect(sizing.positionSize).toBeGreaterThan(0);
     expect(sizing.leverage).toBeGreaterThanOrEqual(1);
     expect(sizing.effectiveRiskPct).toBeGreaterThan(0);
+  });
+
+  // 2026-09-26: conviction leverage (up to MAX_LEVERAGE) was applied to SPOT
+  // too, and PAPER entry debits allocUsdt / leverage, so a SPOT wallet bought
+  // 3-4x its cash (ADA $91.90 for $22.98). High-conviction inputs must still
+  // yield leverage 1 on SPOT while FUTURES levers up.
+  it("Z5: SPOT sizing is never leveraged; FUTURES with the same inputs is", async () => {
+    const { UnifiedSizingEngine } = await import("../src/services/aqea/unifiedSizingEngine.js");
+    const input = {
+      balance: 150,
+      atr: 0.0005,
+      price: 0.2585,
+      regime: { regime: "BULL_EXPANSION" as any, confidence: 90 } as any,
+      quality: { score: 95, rating: "AGGRESSIVE" } as any,
+      portfolioHeat: 0,
+      userId: "test-user-spot-leverage",
+      mode: "PAPER" as const,
+    };
+    const spot = await UnifiedSizingEngine.compute({ ...input, accountType: "SPOT" });
+    const fut = await UnifiedSizingEngine.compute({ ...input, accountType: "FUTURES" });
+    expect(spot.leverage).toBe(1);
+    expect(fut.leverage).toBeGreaterThan(1);
+    expect(spot.positionSize).toBe(fut.positionSize);
   });
 });

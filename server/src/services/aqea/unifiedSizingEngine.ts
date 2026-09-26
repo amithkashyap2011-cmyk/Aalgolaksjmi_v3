@@ -102,6 +102,9 @@ export class UnifiedSizingEngine {
     ));
     let leverage = Math.round(1 + (AQEA_CONFIG.MAX_LEVERAGE - 1) * conviction);
     leverage = Math.max(1, Math.min(AQEA_CONFIG.MAX_LEVERAGE, leverage));
+    // Spot has no leverage. The PAPER entry path debits allocUsdt / leverage,
+    // so a conviction leverage here let a SPOT wallet buy 4x its cash.
+    if (accountType === "SPOT") leverage = 1;
 
     const reason = [
       `Bal:$${balance.toFixed(0)}`,
