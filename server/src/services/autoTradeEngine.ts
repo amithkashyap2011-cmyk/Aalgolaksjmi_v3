@@ -36,7 +36,7 @@ import { AdaptiveBayesianGate } from "./aqea/bayesian/AdaptiveBayesianGate.js";
 import { weatherIntelligenceEngine } from "./weatherIntelligenceEngine.js";
 
 /* ── AQEA Imports ─────────────────────────────────────── */
-import { AQEAEngine, type AQEADecision } from "./aqea/engine.js";
+import { AQEAEngine, PAPER_BAYES_RELAXED_TAG, type AQEADecision } from "./aqea/engine.js";
 import { evaluateLongEntry, evaluateShortEntry } from "./autoTradeEngine.decisionLogic.js";
 import { RiskEngine } from "./aqea/riskEngine.js";
 import { ShadowSimulator } from "./aqea/shadowSimulator.js";
@@ -883,6 +883,11 @@ async function processSymbol(
   riskProfile.positionSize = unified.positionSize;
   riskProfile.leverage      = unified.leverage;
   riskProfile.reason        = unified.reason;
+  // Tag PAPER entries admitted under the relaxed Bayesian floor so their
+  // results can be separated from strict-gate trades (Trade.aiReasoning).
+  if (aqeaDecision.reasons?.some((r) => r.startsWith(PAPER_BAYES_RELAXED_TAG))) {
+    riskProfile.reason += " | BAYES_PAPER_RELAXED";
+  }
 
   console.log(`[UNIFIED_SIZING] ${symbol} ${unified.reason}`);
 

@@ -312,6 +312,50 @@ describe("AQEA Engine Integration", () => {
     expect(res.reasons.some((r: string) => r.includes("EV_GATE"))).toBe(false);
   });
 
+  // PAPER-only Bayesian floor: a directional call whose posterior clears
+  // PAPER_BAYES_FLOOR but not the regime threshold is admitted (and tagged) in
+  // PAPER; LIVE keeps the full threshold; below the floor stays vetoed.
+  describe("PAPER Bayesian floor", () => {
+    const failBayes = async (posterior: number) => {
+      const { AdaptiveBayesianGate } = await import("../../src/services/aqea/bayesian/AdaptiveBayesianGate.js");
+      jest.spyOn(AdaptiveBayesianGate, "evaluate").mockImplementation((...args: any[]) => ({
+        passesGate: false, posteriorProbability: posterior, calibratedProbability: posterior, requiredThreshold: 0.78,
+        priorOdds: 1, likelihoodRatio: 1, calibrationMethod: "ANALYTICAL_FALLBACK", sampleCount: 0,
+        calibrationConfidence: 0, rejectionReason: "POSTERIOR_BELOW_THRESHOLD", regime: args[3] ?? "TRENDING_BULL", meta: {},
+      }) as any);
+    };
+    afterEach(async () => { await approveBayesianGate(jest); });
+
+    test("PAPER: posterior above the floor is admitted and tagged", async () => {
+      await failBayes(0.50);
+      withFusion({ buyProbability: 0.46, sellProbability: 0.21, holdProbability: 0.33 });
+      const res = await alignedLong();
+      expect(res.decision).toBe("LONG");
+      expect(res.reasons.some((r: string) => r.startsWith("BAYESIAN_GATE: PAPER_RELAXED"))).toBe(true);
+    });
+
+    test("PAPER: posterior below the floor is still vetoed", async () => {
+      await failBayes(0.40);
+      withFusion({ buyProbability: 0.46, sellProbability: 0.21, holdProbability: 0.33 });
+      const res = await alignedLong();
+      expect(res.decision).toBe("HOLD");
+      expect(res.reasons).toContain("BAYESIAN_GATE: POSTERIOR_BELOW_THRESHOLD");
+    });
+
+    test("LIVE: the same posterior is vetoed (full regime threshold)", async () => {
+      await failBayes(0.50);
+      withFusion({ buyProbability: 0.46, sellProbability: 0.21, holdProbability: 0.33 });
+      (AQEA_CONFIG as any).AI_ENABLED = true;
+      (AQEA_CONFIG as any).CNN_VOTING_ENABLED = true;
+      currentPreds = [{ predictor: "CNN_1D_V1", direction: "LONG", confidence: 0.85, probability: 0.85 }];
+      mockGetAllPredictions.mockResolvedValue(currentPreds);
+      mockGetAuthorizedPredictions.mockResolvedValue(currentPreds);
+      const res = await AQEAEngine.decide(symbol, userId, { ...baseContext, mode: "LIVE" });
+      expect(res.decision).toBe("HOLD");
+      expect(res.reasons.some((r: string) => r.includes("PAPER_RELAXED"))).toBe(false);
+    });
+  });
+
   test("no-view HOLD leaning the opposite way still vetoes the technical fallback", async () => {
     withFusion({ buyProbability: 0.28, sellProbability: 0.42, holdProbability: 0.30 });
     const res = await alignedLong();

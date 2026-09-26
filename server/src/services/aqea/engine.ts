@@ -46,6 +46,10 @@ import { toValidObjectId } from "../../utils/mongoUtils.js";
 import { getWallet } from "../paperState.js";
 import crypto from "node:crypto";
 
+/** PAPER-only posterior floor for the AdaptiveBayesianGate veto (LIVE keeps the regime threshold). */
+export const PAPER_BAYES_FLOOR = 0.45;
+export const PAPER_BAYES_RELAXED_TAG = "BAYESIAN_GATE: PAPER_RELAXED";
+
 export interface DecisionPath {
   cnnVote: string;
   ppoVote: string;
@@ -1015,7 +1019,19 @@ export class AQEAEngine {
 
       // The Bayesian gate is an execution veto, not merely telemetry.  A
       // directional signal that fails it must not reach the order path.
-      if (!bayesianEvaluation.passesGate) {
+      //
+      // PAPER only: the regime threshold (0.78–0.93) is unreachable while the
+      // ensemble is split (observed posteriors 0.25–0.53), so no engine entry
+      // has run since 2026-09-22 and there is no forward evidence to calibrate
+      // it with. PAPER accepts posterior >= PAPER_BAYES_FLOOR (the explorer's
+      // bar) and tags the trade; LIVE keeps the full threshold. Engine-only
+      // Kelly (unifiedSizingEngine) sizes these to $0 after 5 straight losses.
+      const paperBayesRelaxed = !bayesianEvaluation.passesGate
+        && context.mode === "PAPER"
+        && bayesianEvaluation.posteriorProbability >= PAPER_BAYES_FLOOR;
+      if (paperBayesRelaxed) {
+        reasons.push(`${PAPER_BAYES_RELAXED_TAG} (posterior ${bayesianEvaluation.posteriorProbability} >= ${PAPER_BAYES_FLOOR}, live needs ${bayesianEvaluation.requiredThreshold})`);
+      } else if (!bayesianEvaluation.passesGate) {
         activeDecision = "HOLD";
         finalPositionSize = 0;
         reasons.push("BAYESIAN_GATE: POSTERIOR_BELOW_THRESHOLD");
