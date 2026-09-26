@@ -63,6 +63,20 @@ const coinQty = (q: number) => (q >= 1000 ? q.toLocaleString("en-US", { maximumF
 const coin = (symbol: string) => symbol.replace(/(USDT|USDC|FDUSD)$/, "");
 const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 
+type AccountTab = "ALL" | "SPOT" | "FUTURES";
+const TABS: Array<{ id: AccountTab; label: string; hint: string }> = [
+  { id: "ALL", label: "All", hint: "Spot + Futures" },
+  { id: "SPOT", label: "Spot", hint: "1:1, no leverage" },
+  { id: "FUTURES", label: "Futures", hint: "USD-M perp, leverage" },
+];
+const TAB_KEY = "cryptoPortfolio.tab";
+const readTab = (): AccountTab => {
+  try {
+    const v = localStorage.getItem(TAB_KEY);
+    return v === "SPOT" || v === "FUTURES" ? v : "ALL";
+  } catch { return "ALL"; }
+};
+
 function toHolding(p: any, livePrices?: Props["livePrices"]): Holding {
   const account = p.accountType === "SPOT" ? "SPOT" : "FUTURES";
   const rawSide = String(p.side ?? p.positionSide ?? "BUY").toUpperCase();
@@ -81,8 +95,13 @@ function toHolding(p: any, livePrices?: Props["livePrices"]): Holding {
 export default function CryptoPortfolioView({ mode, balances, livePrices, inrRate }: Props) {
   const navigate = useNavigate();
   const [rawPositions, setRawPositions] = useState<any[]>([]);
-  const [closed, setClosed] = useState<any[]>([]);
+  const [allClosed, setClosed] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<AccountTab>(readTab);
+  const selectTab = (t: AccountTab) => {
+    setTab(t);
+    try { localStorage.setItem(TAB_KEY, t); } catch { /* per-viewer convenience only */ }
+  };
 
   const load = async () => {
     const [spot, fut, hist] = await Promise.allSettled([
@@ -112,9 +131,15 @@ export default function CryptoPortfolioView({ mode, balances, livePrices, inrRat
   }, [mode]);
 
   const money = (usd: number) => formatUsdWithInr(usd, inrRate);
-  const holdings = useMemo(() => rawPositions.map((p) => toHolding(p, livePrices)), [rawPositions, livePrices]);
-
-  const cash = Math.max(0, balances.spot) + Math.max(0, balances.futures);
+  const allHoldings = useMemo(() => rawPositions.map((p) => toHolding(p, livePrices)), [rawPositions, livePrices]);
+  // Every figure below is scoped to the selected account tab, so Share and
+  // allocation read as "of this account" on Spot / Futures.
+  const holdings = useMemo(() => (tab === "ALL" ? allHoldings : allHoldings.filter((h) => h.account === tab)), [allHoldings, tab]);
+  const closed = useMemo(() => (tab === "ALL" ? allClosed : allClosed.filter((t) => t.accountType === tab)), [allClosed, tab]);
+  const spotCash = Math.max(0, balances.spot);
+  const futCash = Math.max(0, balances.futures);
+  const cash = tab === "SPOT" ? spotCash : tab === "FUTURES" ? futCash : spotCash + futCash;
+  const tabCount = (t: AccountTab) => (t === "ALL" ? allHoldings.length : allHoldings.filter((h) => h.account === t).length);
   const holdingsValue = holdings.reduce((s, h) => s + h.value, 0);
   const invested = holdings.reduce((s, h) => s + h.cost, 0);
   const upnl = holdings.reduce((s, h) => s + h.upnl, 0);
@@ -197,9 +222,33 @@ export default function CryptoPortfolioView({ mode, balances, livePrices, inrRat
         </div>
       </div>
 
+      <style>{"@media (max-width: 480px) { .crypto-portfolio-page .cp-tab-hint { display: none; } }"}</style>
+      <div role="tablist" aria-label="Account" style={{ display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid ${BORD}` }}>
+        {TABS.map((t) => {
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => selectTab(t.id)}
+              style={{
+                display: "flex", alignItems: "baseline", gap: 6, padding: "8px 14px", marginBottom: -1,
+                border: "none", borderBottom: `2px solid ${active ? "#3b82f6" : "transparent"}`,
+                background: "transparent", color: active ? TEXT : FAINT, fontSize: 13, fontWeight: 800, cursor: "pointer",
+              }}
+            >
+              {t.label}
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 8, background: active ? "rgba(59,130,246,0.18)" : BORD, color: active ? "#60a5fa" : FAINT }}>{tabCount(t.id)}</span>
+              <span className="cp-tab-hint" style={{ fontSize: 10, fontWeight: 600, color: FAINT }}>{t.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
-        {tile("Total Portfolio Value", money(total), "Cash + holdings at live prices")}
-        {tile("Cash (USDT)", money(cash), `Spot ${money(balances.spot)} · Futures ${money(balances.futures)}`)}
+        {tile(tab === "ALL" ? "Total Portfolio Value" : `${tab === "SPOT" ? "Spot" : "Futures"} Account Value`, money(total), "Cash + holdings at live prices")}
+        {tile("Cash (USDT)", money(cash), tab === "ALL" ? `Spot ${money(balances.spot)} · Futures ${money(balances.futures)}` : "Free to trade")}
         {tile("Invested in Holdings", money(invested), `${holdings.length} open position${holdings.length === 1 ? "" : "s"}`)}
         {tile("Unrealized P&L", money(upnl), invested > 0 ? pct((upnl / invested) * 100) : "No open positions", upnl >= 0 ? G : R)}
         {tile("Realized P&L (lifetime)", money(realized), `${closed.length} closed trade${closed.length === 1 ? "" : "s"}`, realized >= 0 ? G : R)}
@@ -222,7 +271,7 @@ export default function CryptoPortfolioView({ mode, balances, livePrices, inrRat
         </div>
       ))}
 
-      {section("Holdings", holdings.length === 0 ? empty("No open positions — everything is in cash.") : (
+      {section("Holdings", holdings.length === 0 ? empty(tab === "ALL" ? "No open positions — everything is in cash." : `No open ${tab === "SPOT" ? "Spot" : "Futures"} positions.`) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>{["Coin", "Account", "Side", "Quantity", "Avg Price", "Current", "Value", "Unrealized P&L", "Share"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
