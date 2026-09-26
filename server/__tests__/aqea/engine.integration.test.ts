@@ -265,7 +265,7 @@ describe("AQEA Engine Integration", () => {
     // Same aligned inputs as the LONG test, but the ensemble now vetoes on EV.
     LakshmiMasterRouter.route = async (...args: any[]) => {
       const r: any = await __origRoute(...args);
-      if (r?.ensembleFusion) r.ensembleFusion.evPassesGate = false;
+      if (r?.ensembleFusion) Object.assign(r.ensembleFusion, { evPassesGate: false, expectedValue: -0.12 });
       return r;
     };
 
@@ -281,6 +281,42 @@ describe("AQEA Engine Integration", () => {
 
     expect(res.decision).toBe("HOLD");
     expect(res.reasons.some((r: string) => r.includes("EV_GATE: BLOCKED_NEGATIVE_EV_FALLBACK"))).toBe(true);
+  });
+
+  // A failed gate that only means "no strong ensemble view" (plain HOLD, EV 0,
+  // probabilities leaning the same way) must NOT veto the technical fallback —
+  // that was vetoing 100% of decisions and stopped all entries after 09-22.
+  const withFusion = (patch: Record<string, number | boolean>) => {
+    LakshmiMasterRouter.route = async (...args: any[]) => {
+      const r: any = await __origRoute(...args);
+      if (r?.ensembleFusion) Object.assign(r.ensembleFusion, { direction: "HOLD", evPassesGate: false, expectedValue: 0, ...patch });
+      return r;
+    };
+  };
+  const alignedLong = async () => {
+    (AQEA_CONFIG as any).AI_ENABLED = true;
+    (AQEA_CONFIG as any).CNN_VOTING_ENABLED = true;
+    mockRegimeAnalyze.mockReturnValue({ state: "TRENDING_BULL", score: 80, confidence: 80 });
+    mockMultiTFCalculate.mockResolvedValue({ score: 85, direction: "BULLISH" });
+    mockValidateTrade.mockResolvedValue({ allowed: true, positionSize: 200, riskScore: 90 });
+    currentPreds = [{ predictor: "CNN_1D_V1", direction: "LONG", confidence: 0.85, probability: 0.85 }];
+    mockGetAllPredictions.mockResolvedValue(currentPreds);
+    mockGetAuthorizedPredictions.mockResolvedValue(currentPreds);
+    return AQEAEngine.decide(symbol, userId, baseContext);
+  };
+
+  test("no-view HOLD leaning the same way does not veto the technical fallback", async () => {
+    withFusion({ buyProbability: 0.42, sellProbability: 0.28, holdProbability: 0.30 });
+    const res = await alignedLong();
+    expect(res.decision).toBe("LONG");
+    expect(res.reasons.some((r: string) => r.includes("EV_GATE"))).toBe(false);
+  });
+
+  test("no-view HOLD leaning the opposite way still vetoes the technical fallback", async () => {
+    withFusion({ buyProbability: 0.28, sellProbability: 0.42, holdProbability: 0.30 });
+    const res = await alignedLong();
+    expect(res.decision).toBe("HOLD");
+    expect(res.reasons.some((r: string) => r.includes("fusion leans opposite"))).toBe(true);
   });
 
   test("Generate HOLD decision if regime score is too low", async () => {

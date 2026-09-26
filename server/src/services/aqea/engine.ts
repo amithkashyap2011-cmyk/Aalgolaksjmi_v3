@@ -806,10 +806,21 @@ export class AQEAEngine {
       // rejected still opens a trade purely on finalScore crossing a threshold.
       // Only an EXPLICIT false blocks; undefined (no fusion data) must not, so
       // legitimate technical fallbacks are preserved when there is no EV signal.
-      const evGateBlocksFallback = lakshmiResult?.ensembleFusion?.evPassesGate === false;
+      //
+      // evPassesGate is also false for every plain "no strong view" HOLD
+      // (computeExpectedValue / evaluateNoTradeGate), which made this veto
+      // fire on 100% of decisions and silently disabled the fallback. So a
+      // failed gate only vetoes when the fusion actually argues against the
+      // trade: a negative candidate EV, or probabilities leaning the other way.
+      const ef = lakshmiResult?.ensembleFusion;
+      const fallbackSide = finalScore > buyThreshold ? "LONG" : finalScore < shortThreshold ? "SHORT" : null;
+      const fusionLeansOpposite = !!ef && fallbackSide !== null && (fallbackSide === "LONG"
+        ? ef.sellProbability > ef.buyProbability
+        : ef.buyProbability > ef.sellProbability);
+      const evGateBlocksFallback = ef?.evPassesGate === false && ((ef.expectedValue ?? 0) < 0 || fusionLeansOpposite);
       if (signalDecision === "HOLD") {
-        if (evGateBlocksFallback && (finalScore > buyThreshold || finalScore < shortThreshold)) {
-           reasons.push(`EV_GATE: BLOCKED_NEGATIVE_EV_FALLBACK (score ${Math.round(finalScore)})`);
+        if (evGateBlocksFallback && fallbackSide !== null) {
+           reasons.push(`EV_GATE: BLOCKED_NEGATIVE_EV_FALLBACK (score ${Math.round(finalScore)}, ev ${ef?.expectedValue ?? 0}, ${fusionLeansOpposite ? "fusion leans opposite" : "negative EV"})`);
         } else if (finalScore > buyThreshold) {
            signalDecision = applyAiConsensusGate ? "HOLD" : "LONG";
            if (applyAiConsensusGate) reasons.push("AI_HARD_GATE: BLOCKED_LONG");
