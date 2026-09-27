@@ -125,26 +125,15 @@ export class LSTMPredictor extends BasePredictor {
 
       return data;
     } catch (err) {
-      // Local fallback calculation
-      const rsi = features.market?.rsi ?? 50;
-      const ema20 = features.market?.ema20 ?? features.market?.close;
-      const close = features.market?.close ?? 0;
-
-      let direction: AIDirection = "HOLD";
-      let confidence = 0.5;
-      if (close > ema20 && rsi >= 53) {
-        direction = "LONG";
-        confidence = Math.min(0.9, 0.68 + (rsi - 50) * 0.009);
-      } else if (close < ema20 && rsi <= 47) {
-        direction = "SHORT";
-        confidence = Math.min(0.9, 0.68 + (50 - rsi) * 0.009);
-      }
-
+      // No fabricated vote (see TransformerPredictor): the old fallback
+      // synthesized an RSI-momentum LONG/SHORT at 0.68–0.90 "confidence" and
+      // reported it as the LSTM's. Also covers the v2 model's
+      // "LSTM_V2_NOT_TRAINED" / window-fetch errors from the quant engine.
       return {
-        direction,
-        confidence: Number(confidence.toFixed(2)),
-        probability: Number(confidence.toFixed(2)),
-        meta: { recommendedAction: direction, model: "LSTM_SEQUENCE_LOCAL" },
+        direction: "HOLD" as AIDirection,
+        confidence: 0,
+        probability: 0.5,
+        meta: { fallback: true, reason: (err as Error)?.message, model: "LSTM_SEQUENCE_V1_UNAVAILABLE" },
       };
     }
   }

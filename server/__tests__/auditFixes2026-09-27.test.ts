@@ -1,3 +1,4 @@
+import { jest } from "@jest/globals";
 import { isLoopbackRequest } from "../src/middleware/auth.js";
 import { UnifiedSizingEngine } from "../src/services/aqea/unifiedSizingEngine.js";
 import { ExitEngine } from "../src/services/aqea/exitEngine.js";
@@ -54,5 +55,31 @@ describe("M2: collapsed LSTM does not vote", () => {
   test("LSTM is SHADOW and not among authorized voters", () => {
     expect(VotingRegistry.getAuthorizedVoters()).not.toContain("LSTM");
     expect(VotingRegistry.getGovernance("LSTM" as any).affectsTrading).toBe(false);
+  });
+});
+
+// Fabricated fallbacks: when the Python service errored, the Transformer and
+// LSTM predictors invented an RSI/MACD momentum LONG/SHORT at 0.68–0.94
+// "confidence" and reported it as the model's own vote.
+describe("no fabricated model votes when the quant service fails", () => {
+  const features: any = {
+    symbol: "BTCUSDT",
+    market: { open: 100, high: 101, low: 99, close: 100.5, volume: 1000, rsi: 72, macdHistogram: 0.5, adx: 35, ema20: 99, atr: 1 },
+    regime: { state: "TRENDING_BULL" }, orderFlow: {},
+  };
+  let fetchSpy: any;
+  beforeEach(() => { fetchSpy = jest.spyOn(globalThis as any, "fetch").mockRejectedValue(new Error("ECONNREFUSED")); });
+  afterEach(() => fetchSpy.mockRestore());
+
+  test.each([
+    ["TransformerPredictor", "../src/services/aqea/ai/TransformerPredictor.js"],
+    ["LSTMPredictor", "../src/services/aqea/ai/LSTMPredictor.js"],
+  ])("%s returns a neutral HOLD at confidence 0", async (name, path) => {
+    const mod: any = await import(path);
+    const p = new mod[name]();
+    const r = await p.runInference(features);
+    expect(r.direction).toBe("HOLD");
+    expect(r.confidence).toBe(0);
+    expect(r.meta?.fallback).toBe(true);
   });
 });

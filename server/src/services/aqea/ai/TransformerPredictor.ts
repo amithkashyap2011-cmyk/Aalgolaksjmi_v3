@@ -105,26 +105,15 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
 
       return result;
     } catch (err) {
-      // 🧠 Transformer Multi-Head Attention Alignment Fallback
-      const macdHist = features.market?.macdHistogram ?? features.market?.macd ?? 0;
-      const rsi = features.market?.rsi ?? 50;
-      const adx = features.market?.adx ?? 25;
-
-      let direction: AIDirection = "HOLD";
-      let confidence = 0.50;
-      if (macdHist > 0 && rsi >= 53 && adx >= 20) {
-        direction = "LONG";
-        confidence = Math.min(0.94, 0.74 + (rsi - 50) * 0.009);
-      } else if (macdHist < 0 && rsi <= 47 && adx >= 20) {
-        direction = "SHORT";
-        confidence = Math.min(0.94, 0.74 + (50 - rsi) * 0.009);
-      }
-
+      // No fabricated vote. This used to synthesize LONG/SHORT from RSI/MACD at
+      // 0.74–0.94 "confidence" and report it as the Transformer's prediction —
+      // a momentum-chasing signal (the pattern the RSI entry guard now blocks)
+      // indistinguishable from the real model in votes and graded telemetry.
       return {
-        direction,
-        confidence: Number(confidence.toFixed(2)),
-        probability: Number(confidence.toFixed(2)),
-        meta: { recommendedAction: direction, model: "TRANSFORMER_ATTENTION_ALIGNMENT_LOCAL" }
+        direction: "HOLD" as AIDirection,
+        confidence: 0,
+        probability: 0.5,
+        meta: { fallback: true, reason: (err as Error)?.message, model: "TRANSFORMER_MICRO_V1_UNAVAILABLE" },
       };
     }
   }
