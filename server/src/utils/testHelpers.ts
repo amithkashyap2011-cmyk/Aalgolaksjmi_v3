@@ -11,6 +11,7 @@ export function createMockRiskConfig(overrides: Partial<IRiskConfig> = {}): IRis
     trailingSL: 1,
     defaultLeverage: 1,
     maxConcurrentPositions: 5,
+    maxSameDirectionPositions: 3,
     maxPortfolioHeat: 50,
     capitalPreservationMode: false,
     riskEngineEnabled: true,

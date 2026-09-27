@@ -48,6 +48,24 @@ describe.each([
     }
   });
 
+  // 2026-09-27: the "correlated" cap compared against maxConcurrent (10), the
+  // same as the total cap, so six same-side alt positions stopped out together.
+  test("blocks at the same-direction cap even when the total cap has room", () => {
+    const result = evaluate(baseInput({ sameDirectionCount: 3, maxConcurrent: 10, maxSameDirection: 3 }));
+    expect(result.ok).toBe(false);
+    if (!result.ok && !result.silent) expect(result.reason).toContain("Correlated exposure cap reached (max 3");
+  });
+
+  test("allows entry below the same-direction cap", () => {
+    const result = evaluate(baseInput({ sameDirectionCount: 2, maxConcurrent: 10, maxSameDirection: 3 }));
+    expect(result.ok).toBe(true);
+  });
+
+  test("without maxSameDirection the cap falls back to maxConcurrent", () => {
+    expect(evaluate(baseInput({ sameDirectionCount: 3, maxConcurrent: 10 })).ok).toBe(true);
+    expect(evaluate(baseInput({ sameDirectionCount: 10, maxConcurrent: 10 })).ok).toBe(false);
+  });
+
   test("blocks when AQEA's own risk approval is false", () => {
     const result = evaluate(baseInput({ aqeaDecision: { ...baseInput().aqeaDecision, riskApproved: false } }));
     expect(result.ok).toBe(false);

@@ -20,6 +20,7 @@ export interface IRiskConfig {
   trailingSL: number;         // trailing stop %
   defaultLeverage: number;    // x1‑x125
   maxConcurrentPositions: number; // max simultaneous open positions (1–30)
+  maxSameDirectionPositions: number; // max engine positions on one side (BUY or SELL) per account — crypto alts move together
 
   // V8.0 Institutional Risk
   maxPortfolioHeat: number;
@@ -147,6 +148,7 @@ const SettingsSchema = new Schema<ISettings>({
         trailingSL: { type: Number, default: 1 },
         defaultLeverage: { type: Number, default: 1 },
         maxConcurrentPositions: { type: Number, default: 15 },
+        maxSameDirectionPositions: { type: Number, default: 3 },
         maxPortfolioHeat: { type: Number, default: 40 },
         capitalPreservationMode: { type: Boolean, default: true },
         riskEngineEnabled: { type: Boolean, default: true },

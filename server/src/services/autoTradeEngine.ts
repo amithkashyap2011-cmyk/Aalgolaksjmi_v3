@@ -1184,11 +1184,18 @@ export async function handleLong(
     status: "OPEN"
   }).lean();
   const existing = paper.getPosition(userId, symbol, mode, accountType) || dbExisting;
-  const openPositions = paper.getOpenPositions(userId, mode).filter(p => p.accountType === accountType);
-  const sameDirectionCount = openPositions.filter(p => p.side === "BUY").length;
+  // Correlated-exposure cap: crypto alts move together, so N same-side
+  // positions behave like one N-sized bet (2026-09-27: six LONG stops fired
+  // within 30 min on one alt dip). Counts this account's open non-exploration
+  // trades on this side; the explorer's small probes don't use up engine slots.
+  const sameDirectionCount = await Trade.countDocuments({
+    userId: toValidObjectId(userId), mode, accountType, side: "BUY", status: "OPEN",
+    entrySource: { $ne: "PAPER_EXPLORATION" },
+  });
   const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
+  const maxSameDirection = settings.riskConfig?.maxSameDirectionPositions ?? 3;
   const minConvictionThreshold = settings.autoTradeThreshold ? settings.autoTradeThreshold / 100 : 0.68;
-  const evaluation = evaluateLongEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, minConvictionThreshold });
+  const evaluation = evaluateLongEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold });
   if (!evaluation.ok) {
     if (decisionId) {
       const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";
@@ -1456,11 +1463,18 @@ export async function handleShort(
     status: "OPEN"
   }).lean();
   const existing = paper.getPosition(userId, symbol, mode, accountType) || dbExisting;
-  const openPositions = paper.getOpenPositions(userId, mode).filter(p => p.accountType === accountType);
-  const sameDirectionCount = openPositions.filter(p => p.side === "SELL").length;
+  // Correlated-exposure cap: crypto alts move together, so N same-side
+  // positions behave like one N-sized bet (2026-09-27: six LONG stops fired
+  // within 30 min on one alt dip). Counts this account's open non-exploration
+  // trades on this side; the explorer's small probes don't use up engine slots.
+  const sameDirectionCount = await Trade.countDocuments({
+    userId: toValidObjectId(userId), mode, accountType, side: "SELL", status: "OPEN",
+    entrySource: { $ne: "PAPER_EXPLORATION" },
+  });
   const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
+  const maxSameDirection = settings.riskConfig?.maxSameDirectionPositions ?? 3;
   const minConvictionThreshold = settings.shortScoreThreshold ? (100 - settings.shortScoreThreshold) / 100 : 0.68;
-  const evaluation = evaluateShortEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, minConvictionThreshold });
+  const evaluation = evaluateShortEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold });
   if (!evaluation.ok) {
     if (decisionId) {
       const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";

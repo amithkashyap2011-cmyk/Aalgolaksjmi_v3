@@ -27,6 +27,8 @@ export interface EntryEvaluationInput {
   symbol: string;
   sameDirectionCount?: number;
   maxConcurrent?: number;
+  /** Same-side cap; falls back to maxConcurrent when unset. */
+  maxSameDirection?: number;
   minConvictionThreshold?: number;
 }
 
@@ -47,8 +49,9 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
     return { ok: false, silent: false, reason: `Existing active position for ${symbol}` };
   }
 
-  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= maxConcurrent) {
-    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max ${maxConcurrent} active BUY positions)` };
+  const sameSideCap = input.maxSameDirection ?? maxConcurrent;
+  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= sameSideCap) {
+    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max ${sameSideCap} active BUY positions)` };
   }
 
   if (!aqeaDecision.riskApproved) {
@@ -112,8 +115,9 @@ export function evaluateShortEntry(input: EntryEvaluationInput): EntryEvaluation
     return { ok: false, silent: false, reason: `Existing active position for ${symbol}` };
   }
 
-  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= maxConcurrent) {
-    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max ${maxConcurrent} active SELL positions)` };
+  const sameSideCap = input.maxSameDirection ?? maxConcurrent;
+  if (input.sameDirectionCount !== undefined && input.sameDirectionCount >= sameSideCap) {
+    return { ok: false, silent: false, reason: `Correlated exposure cap reached (max ${sameSideCap} active SELL positions)` };
   }
 
   if (!aqeaDecision.riskApproved) {
