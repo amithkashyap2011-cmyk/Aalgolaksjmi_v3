@@ -4,7 +4,7 @@ import { Router } from "express";
 import { systemManager, SystemState } from "../services/systemManager.js";
 import mongoose from "mongoose";
 import os from "node:os";
-import { authGuard, adminGuard } from "../middleware/auth.js";
+import { authGuard, adminGuard, loopbackOnly } from "../middleware/auth.js";
 
 const router = Router();
 
@@ -12,10 +12,21 @@ const router = Router();
  * @route POST /system/register
  * @desc Allows external services (Quant Engine) to register their coordinates.
  */
-router.post("/register", (req, res) => {
+// Local-only: the server listens on all interfaces, and these two routes had
+// no auth — any device on the LAN could register a fake quant_engine URL and
+// feed the trading engine its own predictions (found 2026-09-27). The real
+// quant engine (quant_engine/runtime/registry_client.py) calls from 127.0.0.1.
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+router.post("/register", loopbackOnly, (req, res) => {
   const { name, url, version, health } = req.body;
   if (!name || !url) {
     return res.status(400).json({ error: "Name and URL required" });
+  }
+  let host = "";
+  try { host = new URL(String(url)).hostname; } catch { /* invalid */ }
+  if (!LOOPBACK_HOSTS.has(host)) {
+    return res.status(400).json({ error: "Service URL must point to this machine (127.0.0.1 / localhost)" });
   }
 
   systemManager.registerService({ name, url, version: version || "1.0.0", health: health || {} });
@@ -26,7 +37,7 @@ router.post("/register", (req, res) => {
  * @route POST /system/heartbeat
  * @desc Heartbeat endpoint for registered services.
  */
-router.post("/heartbeat", (req, res) => {
+router.post("/heartbeat", loopbackOnly, (req, res) => {
   const { name, health } = req.body;
   if (!name) return res.status(400).json({ error: "Name required" });
 
@@ -166,7 +177,7 @@ router.post("/quant/stop", authGuard, (_req, res) => {
  * @route POST /system/quant/restart
  * @desc Restart the quant engine.
  */
-router.post("/quant/restart", authGuard, (_req, res) => {
+router.post("/quant/restart", authGuard, adminGuard, (_req, res) => {
   systemManager.stopQuantEngine();
   systemManager.unregisterService("quant_engine");
   setTimeout(() => systemManager.startQuantEngine(), 1000);
@@ -177,7 +188,7 @@ router.post("/quant/restart", authGuard, (_req, res) => {
  * @route POST /system/server/restart
  * @desc Graceful server restart — relies on PM2 / tsx watch to bring it back up.
  */
-router.post("/server/restart", authGuard, (_req, res) => {
+router.post("/server/restart", authGuard, adminGuard, (_req, res) => {
   res.json({ status: "restarting" });
   setTimeout(() => process.exit(0), 300);
 });

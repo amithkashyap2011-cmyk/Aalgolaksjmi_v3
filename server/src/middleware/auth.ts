@@ -23,12 +23,24 @@ export const DEMO_USER_ID = "6a39c0e7a5e2995ed257ca68";
  */
 export function devBypassAllowed(req: AuthRequest): boolean {
   if (process.env.NODE_ENV === "production") return false;
-  const isLoop = (a: string) => a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
-  if (!isLoop(String((req as any).socket?.remoteAddress || ""))) return false;
+  return isLoopbackRequest(req);
+}
+
+const isLoopAddr = (a: string) => a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
+
+/** True only when the request originates on this machine (direct or via the local Vite proxy). */
+export function isLoopbackRequest(req: { socket?: { remoteAddress?: string }; headers?: Record<string, any> }): boolean {
+  if (!isLoopAddr(String(req.socket?.remoteAddress || ""))) return false;
   // Through the Vite dev proxy the peer is always loopback; the original
   // client is in X-Forwarded-For (proxy sets xfwd) and must be local too.
   const fwd = String(req.headers?.["x-forwarded-for"] || "").split(",").map((x) => x.trim()).filter(Boolean);
-  return fwd.every(isLoop);
+  return fwd.every(isLoopAddr);
+}
+
+/** Express guard: 403 unless the request comes from this machine. */
+export function loopbackOnly(req: any, res: Response, next: NextFunction): void {
+  if (isLoopbackRequest(req)) return next();
+  res.status(403).json({ error: "Local-only endpoint" });
 }
 
 export async function authGuard(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
