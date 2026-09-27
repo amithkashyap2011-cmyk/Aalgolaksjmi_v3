@@ -29,6 +29,9 @@ export interface EntryEvaluationInput {
   maxConcurrent?: number;
   /** Same-side cap; falls back to maxConcurrent when unset. */
   maxSameDirection?: number;
+  /** Overbought/oversold entry guard: LONG blocked above maxLongEntryRsi, SHORT below minShortEntryRsi. */
+  maxLongEntryRsi?: number;
+  minShortEntryRsi?: number;
   minConvictionThreshold?: number;
 }
 
@@ -67,6 +70,15 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
   const regime = aqeaDecision.decisionPath?.regime || "";
   if (["TRENDING_BEAR", "VOLATILE_BEAR", "EXTREME_BEAR"].includes(regime) && confNormalized < 0.75) {
     return { ok: false, silent: false, reason: `Counter-trend BUY rejected in BEARISH regime (${regime}) with sub-75% conviction (${Math.round(confNormalized * 100)}%)` };
+  }
+
+  // Don't chase: engine LONGs entered at RSI >= 70 lost money (19 trades,
+  // -$0.31) while RSI < 60 entries won 60% (+$18.18); after 2026-09-26 the
+  // engine was buying at RSI 70–92 and went 3W/10L. Wait for a pullback.
+  const entryRsi = Number(aqeaDecision.meta?.indicators?.rsi14);
+  const maxLongRsi = input.maxLongEntryRsi ?? 70;
+  if (Number.isFinite(entryRsi) && entryRsi > maxLongRsi) {
+    return { ok: false, silent: false, reason: `Overbought: BUY skipped at RSI ${entryRsi.toFixed(1)} > ${maxLongRsi} — waiting for a pullback` };
   }
 
   // Zero is an intentional no-trade instruction from the sizing engine, not
@@ -133,6 +145,13 @@ export function evaluateShortEntry(input: EntryEvaluationInput): EntryEvaluation
   const regime = aqeaDecision.decisionPath?.regime || "";
   if (["TRENDING_BULL", "VOLATILE_BULL", "EXTREME_BULL"].includes(regime) && confNormalized < 0.75) {
     return { ok: false, silent: false, reason: `Counter-trend SELL rejected in BULLISH regime (${regime}) with sub-75% conviction (${Math.round(confNormalized * 100)}%)` };
+  }
+
+  // Mirror of the BUY overbought guard: don't short into an oversold low.
+  const entryRsi = Number(aqeaDecision.meta?.indicators?.rsi14);
+  const minShortRsi = input.minShortEntryRsi ?? 30;
+  if (Number.isFinite(entryRsi) && entryRsi < minShortRsi) {
+    return { ok: false, silent: false, reason: `Oversold: SELL skipped at RSI ${entryRsi.toFixed(1)} < ${minShortRsi} — waiting for a bounce` };
   }
 
   // Keep the short path identical: never replace an intentional zero size

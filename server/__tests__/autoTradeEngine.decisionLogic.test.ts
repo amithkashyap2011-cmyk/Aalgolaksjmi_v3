@@ -186,3 +186,36 @@ describe.each([
     }
   });
 });
+
+// 2026-09-27: engine LONGs entered at RSI >= 70 lost money while RSI < 60
+// entries won 60%; after the 09-26 fixes it bought at RSI 70–92 (3W/10L).
+describe("overbought / oversold entry guard", () => {
+  const withRsi = (rsi: number | undefined, overrides: Partial<EntryEvaluationInput> = {}) => {
+    const base = baseInput();
+    return baseInput({ aqeaDecision: { ...base.aqeaDecision, meta: { indicators: { close: 50000, rsi14: rsi } } } as any, ...overrides });
+  };
+
+  test("BUY is skipped above the RSI cap (default 70)", () => {
+    const r = evaluateLongEntry(withRsi(92));
+    expect(r.ok).toBe(false);
+    if (!r.ok && !r.silent) expect(r.reason).toContain("Overbought: BUY skipped at RSI 92.0 > 70");
+  });
+
+  test("BUY is allowed at or below the cap, and when RSI is unknown", () => {
+    expect(evaluateLongEntry(withRsi(70)).ok).toBe(true);
+    expect(evaluateLongEntry(withRsi(55)).ok).toBe(true);
+    expect(evaluateLongEntry(withRsi(undefined)).ok).toBe(true);
+  });
+
+  test("the BUY cap is configurable", () => {
+    expect(evaluateLongEntry(withRsi(72, { maxLongEntryRsi: 75 })).ok).toBe(true);
+    expect(evaluateLongEntry(withRsi(72, { maxLongEntryRsi: 65 })).ok).toBe(false);
+  });
+
+  test("SELL is skipped below the RSI floor (default 30) and allowed above it", () => {
+    const r = evaluateShortEntry(withRsi(23));
+    expect(r.ok).toBe(false);
+    if (!r.ok && !r.silent) expect(r.reason).toContain("Oversold: SELL skipped at RSI 23.0 < 30");
+    expect(evaluateShortEntry(withRsi(45)).ok).toBe(true);
+  });
+});

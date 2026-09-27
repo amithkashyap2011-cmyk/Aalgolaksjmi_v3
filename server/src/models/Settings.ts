@@ -21,6 +21,8 @@ export interface IRiskConfig {
   defaultLeverage: number;    // x1‑x125
   maxConcurrentPositions: number; // max simultaneous open positions (1–30)
   maxSameDirectionPositions: number; // max engine positions on one side (BUY or SELL) per account — crypto alts move together
+  maxLongEntryRsi: number;   // skip engine BUY entries when RSI14 is above this (overbought)
+  minShortEntryRsi: number;  // skip engine SELL entries when RSI14 is below this (oversold)
 
   // V8.0 Institutional Risk
   maxPortfolioHeat: number;
@@ -149,6 +151,8 @@ const SettingsSchema = new Schema<ISettings>({
         defaultLeverage: { type: Number, default: 1 },
         maxConcurrentPositions: { type: Number, default: 15 },
         maxSameDirectionPositions: { type: Number, default: 3 },
+        maxLongEntryRsi: { type: Number, default: 70 },
+        minShortEntryRsi: { type: Number, default: 30 },
         maxPortfolioHeat: { type: Number, default: 40 },
         capitalPreservationMode: { type: Boolean, default: true },
         riskEngineEnabled: { type: Boolean, default: true },

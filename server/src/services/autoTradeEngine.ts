@@ -1197,7 +1197,11 @@ export async function handleLong(
   const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
   const maxSameDirection = settings.riskConfig?.maxSameDirectionPositions ?? 3;
   const minConvictionThreshold = settings.autoTradeThreshold ? settings.autoTradeThreshold / 100 : 0.68;
-  const evaluation = evaluateLongEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold });
+  const evaluation = evaluateLongEntry({
+    existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold,
+    maxLongEntryRsi: settings.riskConfig?.maxLongEntryRsi ?? 70,
+    minShortEntryRsi: settings.riskConfig?.minShortEntryRsi ?? 30,
+  });
   if (!evaluation.ok) {
     if (decisionId) {
       const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";
@@ -1476,7 +1480,11 @@ export async function handleShort(
   const maxConcurrent = settings.riskConfig?.maxConcurrentPositions || 10;
   const maxSameDirection = settings.riskConfig?.maxSameDirectionPositions ?? 3;
   const minConvictionThreshold = settings.shortScoreThreshold ? (100 - settings.shortScoreThreshold) / 100 : 0.68;
-  const evaluation = evaluateShortEntry({ existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold });
+  const evaluation = evaluateShortEntry({
+    existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold,
+    maxLongEntryRsi: settings.riskConfig?.maxLongEntryRsi ?? 70,
+    minShortEntryRsi: settings.riskConfig?.minShortEntryRsi ?? 30,
+  });
   if (!evaluation.ok) {
     if (decisionId) {
       const reason = "reason" in evaluation ? evaluation.reason : "Entry evaluation rejected";
