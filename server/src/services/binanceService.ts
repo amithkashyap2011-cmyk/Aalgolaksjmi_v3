@@ -32,6 +32,12 @@ const FUTURES_BASE = process.env.BINANCE_FUTURES_BASE_URL_OVERRIDE || "https://f
 // below is invoked synchronously at module load — a declaration positioned
 // after that call site would be in its temporal dead zone at call time.
 const REST_TIMEOUT_MS = 2_500;
+// Signed account/order calls (4 helpers below) get longer: they are few, not
+// on the per-symbol hot path, and a LIVE order aborted locally at 2.5s can
+// still fill on Binance — leaving the app unaware of a real position. On this
+// host, account reads intermittently needed >2.5s under memory pressure
+// (2026-09-27: "[wallet] Binance LIVE SPOT error: aborted due to timeout").
+const SIGNED_REST_TIMEOUT_MS = 8_000;
 
 /* Cache for synchronous lookups */
 const priceCache = new Map<string, number>();
@@ -267,7 +273,7 @@ async function signedGet<T>(path: string, apiKey: string, apiSecret: string, par
   qs.set("signature", hmacSign(qs.toString(), apiSecret));
   const res = await fetch(`${BASE}${path}?${qs}`, {
     headers: { "X-MBX-APIKEY": apiKey },
-    signal: AbortSignal.timeout(REST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
   });
   if (!res.ok) {
     const errText = await res.text();
@@ -287,7 +293,7 @@ async function signedPost<T>(path: string, apiKey: string, apiSecret: string, pa
   const res = await fetch(`${BASE}${path}?${qs}`, {
     method: "POST",
     headers: { "X-MBX-APIKEY": apiKey },
-    signal: AbortSignal.timeout(REST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
   });
   if (!res.ok) {
     const errText = await res.text();
@@ -307,7 +313,7 @@ async function signedFuturesPost<T>(path: string, apiKey: string, apiSecret: str
   const res = await fetch(`${FUTURES_BASE}${path}?${qs}`, {
     method: "POST",
     headers: { "X-MBX-APIKEY": apiKey },
-    signal: AbortSignal.timeout(REST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
   });
   if (!res.ok) {
     const errText = await res.text();
@@ -326,7 +332,7 @@ async function signedFuturesGet<T>(path: string, apiKey: string, apiSecret: stri
   qs.set("signature", hmacSign(qs.toString(), apiSecret));
   const res = await fetch(`${FUTURES_BASE}${path}?${qs}`, {
     headers: { "X-MBX-APIKEY": apiKey },
-    signal: AbortSignal.timeout(REST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
   });
   if (!res.ok) {
     const errText = await res.text();
