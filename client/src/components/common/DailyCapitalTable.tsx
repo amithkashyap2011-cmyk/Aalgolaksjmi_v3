@@ -83,7 +83,7 @@ export default function DailyCapitalTable({ endpoint, currency, hidden, title = 
               <tr>
                 <th style={{ ...th, textAlign: "left" }}>Day</th>
                 <th style={th} title="Most money in open trades at the same time that day — the capital actually used (cash is reused across trades)">Invested capital</th>
-                <th style={th} title="Trades closed that day (won / lost)">Closed</th>
+                <th style={th} title="Trades closed that day (won / lost) — includes trades opened on earlier days">Closed</th>
                 <th style={th} title="Net P/L of trades closed that day (after charges)">Closed P/L</th>
                 <th style={th} title="Still open at the end of the day (right now, for today)">Holding</th>
                 <th style={th} title="Current open P/L — shown for today only">Open P/L</th>
@@ -97,14 +97,14 @@ export default function DailyCapitalTable({ endpoint, currency, hidden, title = 
                     <td style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: isToday ? 800 : 600, color: isToday ? "#38bdf8" : "#e2e8f0" }}>{label(r.date)}</td>
                     <td style={{ ...td, fontWeight: 800 }}>
                       {money(r.peak)}
-                      <div style={sub}>{r.opened} trade{r.opened === 1 ? "" : "s"}{r.opened ? ` · entries ${money(r.invested)}` : ""}</div>
+                      <div style={sub}>{r.opened ? `${r.opened} opened · ${money(r.invested)} total` : "none opened"}</div>
                     </td>
-                    <td style={{ ...td, fontFamily: "inherit" }}>{r.closedCount ? `${r.closedCount} · ${r.won}W/${r.lost}L` : "—"}</td>
+                    <td style={{ ...td, fontFamily: "inherit" }}>{r.closedCount ? `${r.closedCount} closed · ${r.won}W/${r.lost}L` : "—"}</td>
                     <td style={{ ...td, color: hidden ? td.color : pnlColor(r.realizedNet), fontWeight: 800 }}>
                       {r.closedCount ? money(r.realizedNet, true) : "—"}
                       {r.charges > 0 && !hidden && <div style={sub}>charges {fmt(currency, r.charges)}</div>}
                     </td>
-                    <td style={td}>{r.holdingCount ? money(r.holdingCost) : "—"}<div style={sub}>{r.holdingCount ? `${r.holdingCount} open` : ""}</div></td>
+                    <td style={td}>{r.holdingCount ? money(r.holdingCost) : "—"}<div style={sub}>{r.holdingCount ? (isToday ? `${r.holdingCount} still open` : `${r.holdingCount} open at day end`) : ""}</div></td>
                     <td style={{ ...td, color: hidden || r.unrealized === null ? td.color : pnlColor(r.unrealized), fontWeight: 800 }}>
                       {r.unrealized === null || !r.holdingCount ? "—" : money(r.unrealized, true)}
                     </td>
