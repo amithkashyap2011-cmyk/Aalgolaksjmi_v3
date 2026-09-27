@@ -61,6 +61,31 @@ def _macro_f1(model: nn.Module, X: torch.Tensor, y: np.ndarray) -> tuple:
     return float(report["macro avg"]["f1-score"]), preds, report
 
 
+def _incumbent_f1(X_val_raw: np.ndarray, y_val: np.ndarray):
+    """Macro F1 of the currently served checkpoint on THIS run's validation
+    windows, normalized with the incumbent's own schema — so a new model is
+    only promoted if it is better on identical data (as train_cnn does). The
+    first 6h cycle after this model shipped overwrote a 0.433 checkpoint with a
+    0.427 one because the gate only checked "beats random, not collapsed"."""
+    if not CHECKPOINT_PATH.exists() or not SCHEMA_PATH.exists():
+        return None
+    try:
+        schema = json.loads(SCHEMA_PATH.read_text())
+        if schema.get("INPUT_VERSION") != INPUT_VERSION:
+            return None
+        means = np.array(schema["MEANS"], dtype=np.float32)
+        stds = np.array(schema["STDS"], dtype=np.float32)
+        incumbent = BiLSTM(input_features=len(schema["FEATURE_NAMES"]), hidden_dim=64, num_layers=2)
+        incumbent.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=torch.device("cpu")))
+        X = torch.from_numpy(_normalize(X_val_raw, means, stds).astype(np.float32))
+        f1, _, _ = _macro_f1(incumbent, X, y_val)
+        logger.info(f"[TrainLSTM] Incumbent macro F1 on the same validation set: {f1:.4f}")
+        return f1
+    except Exception as e:
+        logger.warning(f"[TrainLSTM] Could not score incumbent ({e}); treating as absent")
+        return None
+
+
 def train_lstm() -> dict:
     torch.set_num_threads(2)  # share the CPU with the live server + quant engine
     logger.info(f"[TrainLSTM] Fetching {TRAIN_BARS} bars/symbol of real history (CNN pipeline)...")
@@ -112,7 +137,9 @@ def train_lstm() -> dict:
     shares = np.bincount(preds, minlength=3) / max(len(preds), 1)
     majority = float(np.bincount(y_val, minlength=3).max() / len(y_val))
     collapsed = bool(shares.min() < MIN_CLASS_SHARE or shares.max() > MAX_CLASS_SHARE)
-    promote = bool(f1 >= MIN_PROMOTE_F1 and not collapsed)
+    incumbent_f1 = _incumbent_f1(data["X_val"], y_val)
+    beats_incumbent = incumbent_f1 is None or f1 > incumbent_f1
+    promote = bool(f1 >= MIN_PROMOTE_F1 and not collapsed and beats_incumbent)
 
     result = {
         "model": "LSTM_SEQUENCE_V1",
@@ -126,8 +153,12 @@ def train_lstm() -> dict:
         "prediction_shares": {c: round(float(s), 4) for c, s in zip(CLASSES, shares)},
         "per_class_f1": {c: round(float(report[c]["f1-score"]), 4) for c in CLASSES},
         "collapsed": collapsed,
+        "incumbent_val_macro_f1": None if incumbent_f1 is None else round(incumbent_f1, 4),
         "promoted": promote,
-        "reason": "ok" if promote else ("collapsed onto one class" if collapsed else f"macro F1 {f1:.4f} < {MIN_PROMOTE_F1}"),
+        "reason": "ok" if promote else (
+            "collapsed onto one class" if collapsed
+            else f"macro F1 {f1:.4f} < {MIN_PROMOTE_F1}" if f1 < MIN_PROMOTE_F1
+            else f"macro F1 {f1:.4f} does not beat incumbent {incumbent_f1:.4f} on the same validation set"),
     }
 
     if promote:
