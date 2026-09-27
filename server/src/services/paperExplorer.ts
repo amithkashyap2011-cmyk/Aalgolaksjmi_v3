@@ -19,6 +19,10 @@
  *     (EXPLORATION_TIME_EXIT): the signals predict a ~25-min move, and trades
  *     waiting days on wider levels kept all 3 slots taken (2026-09-25)
  *   - never touches LIVE; pauses whenever the auto-trader is PAUSED / KILLED
+ *   - LONG only since 2026-09-27: 28 exploration shorts went 7-21 (-$0.81);
+ *     price rose after 17 of 28 SELL signals in a flat market, and 3 stops
+ *     made 77% of the loss. The engine's own gated FUTURES shorts still run.
+ *     Re-enable with PAPER_EXPLORATION_SHORTS=true.
  *
  * Disable with PAPER_EXPLORATION=false.
  */
@@ -39,6 +43,14 @@ const DECISION_MAX_AGE_MS = 3 * 60_000;
 const SIZE_FRACTION = 0.05;
 const MIN_NOTIONAL = 6;
 const MAX_HOLD_MS = 2 * 60 * 60_000;
+const ALLOW_SHORTS = process.env.PAPER_EXPLORATION_SHORTS === "true";
+
+/** BUY/SELL/none for one symbol's latest probabilities; SELL only when shorts are allowed. */
+export function pickExplorationSide(buy: number, sell: number, allowShorts: boolean): "BUY" | "SELL" | null {
+  if (buy >= MIN_PROB && buy - sell >= MIN_LEAD) return "BUY";
+  if (allowShorts && sell >= MIN_PROB && sell - buy >= MIN_LEAD) return "SELL";
+  return null;
+}
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
@@ -91,8 +103,8 @@ export async function explorationTick(): Promise<void> {
       .filter((d) => now - d.at < DECISION_MAX_AGE_MS)
       .map((d) => {
         const buy = d.buyProbability ?? 0, sell = d.sellProbability ?? 0;
-        const side = buy >= MIN_PROB && buy - sell >= MIN_LEAD ? "BUY" : sell >= MIN_PROB && sell - buy >= MIN_LEAD ? "SELL" : null;
-        return { d, side, strength: Math.max(buy, sell) };
+        const side = pickExplorationSide(buy, sell, ALLOW_SHORTS);
+        return { d, side, strength: side === "SELL" ? sell : buy };
       })
       .filter((c) => c.side && !openSymbols.has(c.d.symbol) && !cooling.has(c.d.symbol))
       .sort((a, b) => b.strength - a.strength);
@@ -137,5 +149,5 @@ export function startPaperExplorer(intervalMs = 60_000): void {
   if (timer || process.env.NODE_ENV === "test" || process.env.PAPER_EXPLORATION === "false") return;
   timer = setInterval(() => { explorationTick(); }, intervalMs);
   timer.unref?.();
-  log(`started (≥${MIN_PROB * 100}% & ${MIN_LEAD * 100}-pt lead, max ${MAX_OPEN} open, ${SIZE_FRACTION * 100}% size, PAPER only)`);
+  log(`started (≥${MIN_PROB * 100}% & ${MIN_LEAD * 100}-pt lead, max ${MAX_OPEN} open, ${SIZE_FRACTION * 100}% size, ${ALLOW_SHORTS ? "long+short" : "long only"}, PAPER only)`);
 }
