@@ -91,6 +91,22 @@ const DEMO_USER_ID = "6a39c0e7a5e2995ed257ca68";
 export default function OrdersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { userId, activeMarket, setActiveMarket } = useAppStore();
+  // Live Binance ticks: open crypto rows reprice on every tick instead of
+  // freezing at the markPrice / unrealisedPnl the server sent at load time.
+  const livePrices = useAppStore((s) => s.livePrices);
+  const liveOpenRow = (o: any): { mark: number; pnl: number; pnlPct: number | null } => {
+    const serverPnl = Number(o.unrealisedPnl ?? o.pnl ?? 0);
+    const serverPct = o.unrealisedPnlPct != null ? Number(o.unrealisedPnlPct) : null;
+    const isCrypto = o.accountType === "SPOT" || o.accountType === "FUTURES";
+    const live = isCrypto ? Number(livePrices?.[o.symbol]) : NaN;
+    const qty = Math.abs(Number(o.quantity ?? o.qty ?? 0));
+    const entry = Number(o.entryPrice ?? 0);
+    if (!(live > 0) || !(qty > 0) || !(entry > 0)) return { mark: Number(o.markPrice), pnl: serverPnl, pnlPct: serverPct };
+    // Same rule as the dashboard tables (HomePage): SPOT gross, FUTURES net of 0.04%/side.
+    const gross = isLongSide(o.side) ? (live - entry) * qty : (entry - live) * qty;
+    const pnl = o.accountType === "FUTURES" ? gross - (entry + live) * qty * 0.0004 : gross;
+    return { mark: live, pnl, pnlPct: (pnl / (entry * qty)) * 100 };
+  };
   const { currencyMode, summary } = useDashboardStore();
   const inrRate = summary?.inrRate || 85;
 
@@ -556,7 +572,8 @@ export default function OrdersPage() {
                 <tbody>
                   {rows.map((o, i) => {
                     const id = o._id || String(i);
-                    const pnl = o.unrealisedPnl ?? o.pnl ?? 0;
+                    const live = liveOpenRow(o);
+                    const pnl = live.pnl;
                     return (
                       <tr key={id} style={{ borderBottom:`1px solid var(--ds-border)` }}>
                         <td style={{ padding:"10px 12px", fontWeight:700, color:"var(--ds-text)", fontFamily:"monospace" }}>{o.symbol}</td>
@@ -567,10 +584,10 @@ export default function OrdersPage() {
                         </td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.quantity ?? o.qty ?? "—"}</td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(o.entryPrice, o)}</td>
-                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(o.markPrice, o)}</td>
+                        <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(live.mark, o)}</td>
                         <td style={{ padding:"10px 12px", color: pnl >= 0 ? G : R, fontFamily:"monospace", fontWeight:700 }}>
                           {pnl >= 0 ? "+" : ""}{formatItemPnl(pnl, o)}
-                          {o.unrealisedPnlPct != null && <span style={{ opacity:0.7, marginLeft:4 }}>({o.unrealisedPnlPct >= 0 ? "+" : ""}{Number(o.unrealisedPnlPct).toFixed(2)}%)</span>}
+                          {live.pnlPct != null && <span style={{ opacity:0.7, marginLeft:4 }}>({live.pnlPct >= 0 ? "+" : ""}{live.pnlPct.toFixed(2)}%)</span>}
                         </td>
                         <td style={{ padding:"10px 12px", color:"var(--ds-text-faint)", fontSize:11 }}>{o.openedAt ? new Date(o.openedAt).toLocaleString() : "—"}</td>
                         <td style={{ padding:"10px 12px", textAlign:"right" }}>
@@ -645,10 +662,11 @@ export default function OrdersPage() {
                   {rows.map((o, i) => {
                     const id  = o._id || String(i);
                     const pnl = o.pnl ?? 0;
-                    const livePnl = o.unrealisedPnl ?? pnl;
+                    const isOpen = o.status === "OPEN";
+                    const live = isOpen ? liveOpenRow(o) : null;
+                    const livePnl = live ? live.pnl : (o.unrealisedPnl ?? pnl);
                     const isOpenRow = expanded === id;
                     const isArchived = !!o.archived;
-                    const isOpen = o.status === "OPEN";
                     return (
                       <Fragment key={id}>
                         <tr
@@ -683,7 +701,7 @@ export default function OrdersPage() {
 
                           <td style={{ padding:"10px 12px", fontFamily:"monospace", fontSize:11 }}>
                             {isOpen
-                              ? formatPrice(o.markPrice, o)
+                              ? formatPrice(live ? live.mark : o.markPrice, o)
                               : formatPrice(o.exitPrice, o)}
                           </td>
 
