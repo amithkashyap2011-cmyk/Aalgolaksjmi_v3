@@ -73,16 +73,18 @@ export class ExitEngine {
 
     // 1b. Volatility Expansion Early Micro-Stop: If position drawdown exceeds 3.5% before TP1, trigger early risk cut
     const unrealizedLossPct = isLong
-      ? (state.entryPrice - currentPrice) / Math.max(state.entryPrice, 1)
-      : (currentPrice - state.entryPrice) / Math.max(state.entryPrice, 1);
+      ? (state.entryPrice - currentPrice) / (state.entryPrice > 0 ? state.entryPrice : Number.EPSILON)
+      : (currentPrice - state.entryPrice) / (state.entryPrice > 0 ? state.entryPrice : Number.EPSILON);
     if (!state.tp1Hit && unrealizedLossPct >= 0.035) {
       return { shouldExit: true, type: "FULL", qtyPct: 1.0, reason: "VOLATILITY_EXPANSION_MICRO_STOP" };
     }
 
+    // (Ratios divide by the real entry price — a Math.max(entry, 1) floor made
+    // sub-$1 coins' % moves ~0, so these stops never fired for ADA/DOGE/PEPE…)
     // 1c. Instant Breakeven Elevation (+0.75x ATR Profit Lock): Never allow a winning move to become a loss
     const profitRatio = isLong
-      ? (currentPrice - state.entryPrice) / Math.max(state.entryPrice, 1)
-      : (state.entryPrice - currentPrice) / Math.max(state.entryPrice, 1);
+      ? (currentPrice - state.entryPrice) / (state.entryPrice > 0 ? state.entryPrice : Number.EPSILON)
+      : (state.entryPrice - currentPrice) / (state.entryPrice > 0 ? state.entryPrice : Number.EPSILON);
     const bePct = breakevenBufferPct(state.accountType);
     const feeBufferSL = isLong ? state.entryPrice * (1 + bePct) : state.entryPrice * (1 - bePct);
     const isBelowTp1 = isLong ? currentPrice < state.tp1 : currentPrice > state.tp1;

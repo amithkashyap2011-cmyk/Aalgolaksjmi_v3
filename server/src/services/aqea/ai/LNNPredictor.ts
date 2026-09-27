@@ -30,7 +30,7 @@ export class LNNPredictor extends BasePredictor {
       const rsi = features.market?.rsi ?? 50;
       const adx = features.market?.adx ?? 25;
       const atr = features.market?.atr ?? (close * 0.01);
-      const volRatio = atr / Math.max(close, 1);
+      const volRatio = atr / (close > 0 ? close : Number.EPSILON);
 
       // Continuous-time parameter adaptation
       // tau(x, I) dynamic time constant

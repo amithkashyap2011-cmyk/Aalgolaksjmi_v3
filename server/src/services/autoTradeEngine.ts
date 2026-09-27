@@ -878,6 +878,8 @@ async function processSymbol(
     userId,
     mode,
     accountType,
+    // Size on the stop that will really be placed (riskProfile above).
+    slDistancePct: riskProfile.sl > 0 && ctx.ind.close > 0 ? Math.abs(ctx.ind.close - riskProfile.sl) / ctx.ind.close : undefined,
   });
 
   riskProfile.positionSize = unified.positionSize;

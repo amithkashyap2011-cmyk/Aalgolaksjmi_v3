@@ -134,7 +134,7 @@ router.get("/current-weights", optionalAuth, async (req: AuthRequest, res) => {
 
     // 4. Momentum (MACD strength, RSI momentum, funding-driven bias)
     if (ind.macd && ind.macd.histogram !== null) {
-      momentum += Math.abs(ind.macd.histogram) * 2 / Math.max(ind.close, 1);
+      momentum += Math.abs(ind.macd.histogram) * 2 / (ind.close > 0 ? ind.close : Number.EPSILON);
     }
     if (ind.changePercent) {
       momentum += Math.abs(ind.changePercent) / 10;
@@ -241,7 +241,7 @@ router.get("/current-animal-weights", optionalAuth, async (req: AuthRequest, res
     }
 
     if (ind.adx14 !== null) {
-      w.cow = ind.adx14 < 18 && Math.abs(ind.close - vwap) / Math.max(ind.close, 1) < 0.002 ? 85 : 40;
+      w.cow = ind.adx14 < 18 && Math.abs(ind.close - vwap) / (ind.close > 0 ? ind.close : Number.EPSILON) < 0.002 ? 85 : 40;
     }
 
     const openPositionsCount = req.userId ? paper.getOpenPositions(req.userId, "PAPER").length : 0;

@@ -33,6 +33,13 @@ export interface SizingInput {
   userId: string;
   mode: "PAPER" | "LIVE";
   accountType: "SPOT" | "FUTURES";
+  /**
+   * Distance to the stop that will actually be placed, as a fraction of price
+   * (e.g. 0.02 for 2%). Risk sizing must use it: AdaptiveRiskEngine places
+   * SL = max(ATR×mult, riskConfig.defaultSL), which on most coins is 2%, while
+   * the 1.5×ATR fallback below assumes ~0.6% — up to ~3× the intended risk.
+   */
+  slDistancePct?: number;
 }
 
 export interface SizingOutput {
@@ -52,7 +59,7 @@ export class UnifiedSizingEngine {
    * all five factors: balance, Kelly, risk limits, portfolio heat, and regime.
    */
   static async compute(input: SizingInput): Promise<SizingOutput> {
-    const { balance, atr, price, regime, quality, portfolioHeat, userId, mode, accountType } = input;
+    const { balance, atr, price, regime, quality, portfolioHeat, userId, mode, accountType, slDistancePct } = input;
 
     // 1. Rolling Kelly from the engine's own last 30 closed trades on this account type
     const kelly = await this.computeRollingKelly(userId, mode, accountType);
@@ -61,8 +68,14 @@ export class UnifiedSizingEngine {
     const effectiveRiskPct = this.effectiveRiskFromKelly(kelly);
 
     // 2. SL distance as % of price — must match exitEngine SL = 1.5 ATR
-    const effectiveAtr = Math.max(atr, price * 0.004); // same 0.4% ATR floor as exitEngine
-    const slPct = (effectiveAtr * 1.5) / Math.max(price, 1);
+    // Divide by the real price. Math.max(price, 1) treated every sub-$1 coin
+    // (ADA, DOGE, XRP, PEPE, SHIB…) as $1, shrinking its stop % and ATR ratio
+    // by up to 10^6 — oversizing it and disabling the volatility scalar.
+    const safePrice = price > 0 ? price : Number.EPSILON;
+    const effectiveAtr = Math.max(atr, safePrice * 0.004); // same 0.4% ATR floor as exitEngine
+    const slPct = slDistancePct !== undefined && Number.isFinite(slDistancePct) && slDistancePct > 0
+      ? slDistancePct
+      : (effectiveAtr * 1.5) / safePrice;
 
     // 3. Base position size (risk-proportional to balance)
     // In PAPER mode with 0 balance, use standard $10,000 virtual baseline for hypothetical evidence sizing
@@ -72,7 +85,7 @@ export class UnifiedSizingEngine {
 
     // 3b. Volatility-Scaled Exposure Cap (VSE) — scales MAX_PORTFOLIO_EXPOSURE by asset relative volatility
     // Benchmark ATR ratio = 0.015 (1.5% ATR). High-volatility altcoins (e.g. ATR > 3.0%) receive smaller caps.
-    const atrRatio = effectiveAtr / Math.max(price, 1);
+    const atrRatio = effectiveAtr / safePrice;
     const benchmarkAtrRatio = 0.015;
     const volatilityScalar = Math.max(0.25, Math.min(1.0, benchmarkAtrRatio / atrRatio));
     const dynamicExposureCap = AQEA_CONFIG.MAX_PORTFOLIO_EXPOSURE * volatilityScalar;
