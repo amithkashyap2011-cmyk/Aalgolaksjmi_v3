@@ -13,8 +13,7 @@ import ppo_replay_buffer
 from rl_agent import ppo_agent as legacy_ppo_agent
 from cnn_predictor import cnn_predictor
 from gbm_predictor import gbm_predictor
-from lstm_predictor import LSTMPredictor
-lstm_predictor = LSTMPredictor()
+from lstm_predictor import lstm_predictor
 from ppo_execution_agent import ppo_agent
 from mambaPredictor import mamba_predictor
 from transformerPredictor import transformer_predictor

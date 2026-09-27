@@ -1,5 +1,5 @@
 """
-Runs one training cycle (CNN, PPO, shadow GBM) in its OWN process.
+Runs one training cycle (CNN, PPO, shadow GBM, shadow LSTM) in its OWN process.
 
 Training used to run in a thread inside the serving process. Python's GIL
 let it starve the /predict endpoints, so live decisions hit the server's 35s
@@ -26,12 +26,13 @@ logger = logging.getLogger("TrainingWorker")
 
 
 def run_cycle() -> dict:
-    result = {"cnn": None, "ppo": None, "gbm": None, "started_at": time.time()}
-    for name, fn in (("cnn", "train_cnn:train_cnn"), ("ppo", "train_ppo:train_ppo"), ("gbm", "train_gbm:train_gbm")):
+    result = {"cnn": None, "ppo": None, "gbm": None, "lstm": None, "started_at": time.time()}
+    for name, fn in (("cnn", "train_cnn:train_cnn"), ("ppo", "train_ppo:train_ppo"), ("gbm", "train_gbm:train_gbm"),
+                     ("lstm", "train_lstm:train_lstm")):
         mod, func = fn.split(":")
         try:
             f = getattr(__import__(mod), func)
-            result[name] = f(warm_start=True) if name != "gbm" else f()
+            result[name] = f(warm_start=True) if name in ("cnn", "ppo") else f()
         except Exception as e:  # one model failing never blocks the others
             logger.error(f"[TrainingWorker] {name} training failed: {e}")
             result[name] = {"promoted": False, "error": str(e)}

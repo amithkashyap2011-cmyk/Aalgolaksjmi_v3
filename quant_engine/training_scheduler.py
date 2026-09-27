@@ -78,6 +78,7 @@ def _run_training_cycle_blocking() -> dict:
     from cnn_predictor import cnn_predictor
     from ppo_execution_agent import ppo_agent
     from gbm_predictor import gbm_predictor
+    from lstm_predictor import lstm_predictor
 
     started = time.time()
     try:
@@ -93,7 +94,8 @@ def _run_training_cycle_blocking() -> dict:
         logger.error(f"[TrainingScheduler] Training worker failed: {e}")
         result = {"error": str(e)}
 
-    for name, reload in (("cnn", cnn_predictor.reload), ("ppo", ppo_agent.reload), ("gbm", gbm_predictor.reload)):
+    for name, reload in (("cnn", cnn_predictor.reload), ("ppo", ppo_agent.reload), ("gbm", gbm_predictor.reload),
+                         ("lstm", lstm_predictor.reload)):
         if (result.get(name) or {}).get("promoted"):
             try:
                 reload()
