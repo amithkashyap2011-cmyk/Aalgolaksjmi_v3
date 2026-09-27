@@ -1032,7 +1032,8 @@ async function processSymbol(
           sl: tradeSl,
           tp1Hit: pos.meta?.tp1Hit || false,
           tp2Hit: pos.meta?.tp2Hit || false,
-          tp3Hit: pos.meta?.tp3Hit || false
+          tp3Hit: pos.meta?.tp3Hit || false,
+          accountType
         },
         aqeaDecision,
         ctx.ind.close,
@@ -1066,7 +1067,8 @@ async function processSymbol(
           sl: tradeSl,
           tp1Hit: pos.meta?.tp1Hit || false,
           tp2Hit: pos.meta?.tp2Hit || false,
-          tp3Hit: pos.meta?.tp3Hit || false
+          tp3Hit: pos.meta?.tp3Hit || false,
+          accountType,
       }, pos.meta?.trailingStop);
 
       if (exitSignal.shouldExit) {

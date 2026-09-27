@@ -5,7 +5,7 @@
  */
 
 import { AQEADecision } from "./engine.js";
-import { TradeExitState } from "./exitEngine.js";
+import { TradeExitState, breakevenBufferPct } from "./exitEngine.js";
 
 export interface PositionManagementSignal {
   action: "CLOSE_FULL" | "CLOSE_PARTIAL" | "MODIFY_STOP" | "EXTEND_TP" | "HOLD";
@@ -167,7 +167,9 @@ export class PositionManager {
        }
     } else if (rMultiple >= 1.2) {
        // > 1.2R: Move to breakeven + slight spread coverage
-       const bePrice = isLong ? state.entryPrice + (atr * 0.2) : state.entryPrice - (atr * 0.2);
+       // Never below the round-trip fee buffer, or "breakeven" books a loss on SPOT.
+       const beOffset = Math.max(atr * 0.2, state.entryPrice * breakevenBufferPct(state.accountType));
+       const bePrice = isLong ? state.entryPrice + beOffset : state.entryPrice - beOffset;
        if ((isLong && bePrice > state.sl) || (!isLong && bePrice < state.sl)) {
           return { action: "MODIFY_STOP", qtyPct: 0, reason: "AI_PARTIAL_PROFIT", newStopLoss: bePrice };
        }

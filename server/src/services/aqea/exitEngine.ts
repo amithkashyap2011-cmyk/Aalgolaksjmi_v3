@@ -22,6 +22,19 @@ export interface TradeExitState {
   tp1Hit: boolean;
   tp2Hit: boolean;
   tp3Hit: boolean;
+  /** Sizes the breakeven fee buffer; unset keeps the futures-sized 0.1%. */
+  accountType?: "SPOT" | "FUTURES";
+}
+
+/**
+ * Breakeven stop offset from entry. It must clear the round-trip taker fees
+ * (+ a little slippage) or a "breakeven" exit still books a loss: SPOT pays
+ * 0.1% per side, so the old flat 0.1% buffer closed SPOT winners at a net
+ * loss (DOT 2026-09-27: SL 1.26026, exit 1.2600, -$0.0003). FUTURES pays
+ * 0.04% per side.
+ */
+export function breakevenBufferPct(accountType?: "SPOT" | "FUTURES"): number {
+  return accountType === "SPOT" ? 0.0025 : 0.001;
 }
 
 export class ExitEngine {
@@ -70,7 +83,8 @@ export class ExitEngine {
     const profitRatio = isLong
       ? (currentPrice - state.entryPrice) / Math.max(state.entryPrice, 1)
       : (state.entryPrice - currentPrice) / Math.max(state.entryPrice, 1);
-    const feeBufferSL = isLong ? state.entryPrice * 1.001 : state.entryPrice * 0.999;
+    const bePct = breakevenBufferPct(state.accountType);
+    const feeBufferSL = isLong ? state.entryPrice * (1 + bePct) : state.entryPrice * (1 - bePct);
     const isBelowTp1 = isLong ? currentPrice < state.tp1 : currentPrice > state.tp1;
     if (!state.tp1Hit && isBelowTp1 && profitRatio >= 0.005 && (isLong ? state.sl < feeBufferSL : state.sl > feeBufferSL)) {
       return { shouldExit: false, type: "NONE", qtyPct: 0, reason: "BREAKEVEN_ELEVATION", newStopLoss: feeBufferSL };
