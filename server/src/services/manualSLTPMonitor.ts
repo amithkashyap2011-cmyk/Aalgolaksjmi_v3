@@ -47,24 +47,30 @@ async function closePaperPosition(
     const fees = (entryPrice * quantity * feePct) + (exitPrice * quantity * feePct);
     const netPnl = grossPnl - fees;
 
-    // Remove position from paper state
-    paper.removePosition(userId, symbol, "PAPER", accountType);
+    // A position can't hand back less than nothing (liquidation floor).
+    const refund = Math.max(0, marginUsed + netPnl);
+    const closeFields = { status: "CLOSED", exitPrice, closedAt: new Date(), pnl: netPnl, grossPnl, feeCost: fees, netPnl, exitReason: reason };
 
-    // Credit wallet
-    const wallet = paper.getWallet(userId, "PAPER", accountType);
-    const currentUsdt = wallet.get("USDT") ?? 0;
-    const refund = marginUsed + netPnl;
-    await paper.setWalletBalance(userId, "PAPER", "USDT", Math.max(0, currentUsdt + refund), accountType);
-
-    // Update Trade document
     if (mongoose.connection.readyState === 1 && tradeId) {
-      await Trade.findByIdAndUpdate(tradeId, {
-        status: "CLOSED",
-        exitPrice,
-        closedAt: new Date(),
-        pnl: netPnl,
-        exitReason: reason,
-      });
+      // Claim OPEN → CLOSED and credit the wallet in one transaction, the same
+      // way /trading/close-position does. The auto-trade engine's own exit path
+      // can close this trade concurrently; without the claim both paths
+      // credited margin + PnL, minting phantom PAPER balance (found 2026-09-27).
+      const claimed = await paper.creditWalletAndCloseTrade(
+        userId, "PAPER", accountType, refund,
+        (session) => Trade.findOneAndUpdate({ _id: tradeId, status: "OPEN" }, { $set: closeFields }, { session, new: true }),
+      );
+      paper.removePosition(userId, symbol, "PAPER", accountType);
+      if (!claimed) {
+        log(`${reason} ${symbol} skipped — trade ${tradeId} was already closed by another exit path`);
+        return;
+      }
+    } else {
+      // No Trade document to claim (legacy in-memory position / DB down).
+      paper.removePosition(userId, symbol, "PAPER", accountType);
+      const wallet = paper.getWallet(userId, "PAPER", accountType);
+      const currentUsdt = wallet.get("USDT") ?? 0;
+      await paper.setWalletBalance(userId, "PAPER", "USDT", currentUsdt + refund, accountType);
     }
 
     const pnlStr = `${netPnl >= 0 ? "+" : ""}$${netPnl.toFixed(2)}`;
