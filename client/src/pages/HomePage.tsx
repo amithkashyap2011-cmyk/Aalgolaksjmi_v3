@@ -10,6 +10,7 @@ import { formatCurrency } from '../lib/currency';
 
 const KlineChart = lazy(() => import('../components/chart/KlineChart'));
 import * as api from '../lib/api';
+import { binanceIpHint } from "../lib/binanceIpHint";
 import {
   TrendingUp, TrendingDown, Activity, ShieldCheck,
   Target, Zap, RefreshCw, Brain, Eye, EyeOff, Wallet, RotateCcw,
@@ -73,6 +74,17 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
   // Per-tab wallet: holds totalDeposited specific to SPOT / FUTURES / combined
   const [tabWallet, setTabWallet]       = useState<{ totalDeposited: number } | null>(null);
   const appConnected = useAppStore((s) => s.connected);
+  // LIVE only: the latest Binance API-key rejection (with the IP Binance saw).
+  const [binanceAuth, setBinanceAuth] = useState<Awaited<ReturnType<typeof api.getBinanceAuth>>>({});
+  useEffect(() => {
+    if (mode !== "LIVE") { setBinanceAuth({}); return; }
+    let alive = true;
+    const poll = () => api.getBinanceAuth().then((r) => { if (alive) setBinanceAuth(r || {}); }).catch(() => {});
+    poll();
+    const id = setInterval(poll, 30_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [mode]);
+  const authRejection = binanceAuth.futures ?? binanceAuth.spot;
   const [capitalUsage, setCapitalUsage] = useState<{ deployed: number; trades: number; peak?: number } | null>(null);
 
   // Quick Order Station state
@@ -289,7 +301,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
           `${errMsg}\n\n` +
           `Would you like to Force Close (mark as CLOSED locally)?\n\n` +
           `• Click OK if you have already closed or sold this position directly on Binance.\n` +
-          `• Machine Public IP: 14.98.201.25 (whitelist this in Binance API Management if you want live orders).`
+          binanceIpHint(errMsg)
         );
         if (confirmForce) {
           try {
@@ -690,7 +702,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 <span style={{ color: "#94a3b8", fontSize: 10 }}>· Margin in use: ${terminalInvested.toFixed(2)}</span>
               )}
             </div>
-            {mode === "LIVE" && terminalEquity === 0 && (
+            {mode === "LIVE" && authRejection && (
               <div style={{
                 marginTop: 8,
                 padding: "6px 12px",
@@ -704,8 +716,12 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
                 gap: 8,
                 maxWidth: "fit-content"
               }}>
-                <span style={{ fontWeight: 800 }}>⚠️ Live Binance IP Restricted:</span>
-                <span>Your network IP changes dynamically (currently <strong>157.35.8.92</strong>). In Binance API Management, select <strong>"Unrestricted"</strong> to prevent IP rotation blocks, or switch to <strong>PAPER SIMULATOR</strong>.</span>
+                <span style={{ fontWeight: 800 }}>⚠️ Binance rejected the LIVE API key:</span>
+                {authRejection.requestIp ? (
+                  <span>Binance saw the request from <strong>{authRejection.requestIp}</strong>. If that isn't in your API key's IP list, your network is changing IP between connections — use a fixed IP (static broadband / dedicated VPN) or an <strong>Unrestricted</strong> key, or switch to <strong>PAPER SIMULATOR</strong>.</span>
+                ) : (
+                  <span>{authRejection.message} (code {authRejection.code}) — check the key, its IP list and its Spot/Futures permissions, or switch to <strong>PAPER SIMULATOR</strong>.</span>
+                )}
               </div>
             )}
           </div>

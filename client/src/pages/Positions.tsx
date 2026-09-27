@@ -3,6 +3,7 @@ import { useAppStore } from '../store/useAppStore';
 import { useDashboardStore } from '../store/useDashboardStore';
 import { formatCurrency } from '../lib/currency';
 import * as api from '../lib/api';
+import { binanceIpHint } from "../lib/binanceIpHint";
 import { Briefcase, RefreshCw, TrendingUp, TrendingDown, X, Check } from 'lucide-react';
 
 /* Theme-aware: structural colors come from design tokens (see design-tokens.css),
@@ -126,7 +127,7 @@ export default function Positions() {
           `${errMsg}\n\n` +
           `Would you like to Force Close (mark as CLOSED locally)?\n\n` +
           `• Click OK if you have already closed or sold this position directly on Binance.\n` +
-          `• Machine Public IP: 14.98.201.25 (whitelist this in Binance API Management if you want live orders).`
+          binanceIpHint(errMsg)
         );
         if (confirmForce) {
           try {

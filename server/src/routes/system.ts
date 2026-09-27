@@ -1,4 +1,5 @@
 import { getBinanceUsage } from "../services/binanceUsageMonitor.js";
+import { getBinanceAuthStatus } from "../services/binanceService.js";
 import { Router } from "express";
 import { systemManager, SystemState } from "../services/systemManager.js";
 import mongoose from "mongoose";
@@ -56,6 +57,11 @@ router.get("/status", (req, res) => {
 /** Binance REST calls per endpoint + reported weight (see binanceUsageMonitor). */
 router.get("/binance-usage", (_req, res) => {
   res.json(getBinanceUsage());
+});
+
+/** Latest Binance API-key rejection (-2015/-2014) per surface, with the IP Binance saw; {} when keys work. */
+router.get("/binance-auth", authGuard, (_req, res) => {
+  res.json(getBinanceAuthStatus());
 });
 
 router.get("/auto-trader-active", async (req, res) => {

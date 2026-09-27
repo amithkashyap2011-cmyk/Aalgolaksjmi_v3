@@ -138,6 +138,12 @@ export async function getHealth() {
   return request("/health");
 }
 
+export interface BinanceAuthRejection { surface: "spot" | "futures"; code: number; message: string; requestIp: string | null; at: number }
+/** Latest Binance API-key rejection per surface ({} when the keys work). */
+export async function getBinanceAuth(): Promise<Partial<Record<"spot" | "futures", BinanceAuthRejection>>> {
+  return request("/system/binance-auth");
+}
+
 /* ── Settings ───────────────────────────────────────── */
 export async function getSettings() {
   return request("/settings/get");

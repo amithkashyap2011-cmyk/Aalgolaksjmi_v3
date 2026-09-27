@@ -1777,13 +1777,16 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
       } catch (err: any) {
         const isIpOrAuth = err.message && (err.message.includes("-2015") || err.message.includes("401") || err.message.toLowerCase().includes("permission") || err.message.toLowerCase().includes("ip"));
         let helpfulMsg = `Binance LIVE Close Error: ${err.message}`;
+        const requestIp = binance.extractBinanceRequestIp(err.message);
         if (isIpOrAuth) {
-          helpfulMsg += " | IP / API Key restriction on Binance. Your current machine IP is 14.98.201.25. Add 14.98.201.25 to trusted IPs in Binance API Management, or choose Force Close if already closed on Binance.";
+          helpfulMsg += requestIp
+            ? ` | Binance saw this request from IP ${requestIp}. If your network changes IP between connections, one whitelisted IP won't hold — use a fixed IP or an Unrestricted key. Choose Force Close if already closed on Binance.`
+            : " | Binance rejected the API key (wrong key, IP not whitelisted, or missing permission). Choose Force Close if already closed on Binance.";
         }
         return res.status(400).json({
           error: helpfulMsg,
           canForceClose: true,
-          ip: "14.98.201.25",
+          ip: requestIp,
           code: -2015
         }) as any;
       }

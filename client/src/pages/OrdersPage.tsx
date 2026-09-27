@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useAppStore } from '../store/useAppStore';
 import { useDashboardStore } from '../store/useDashboardStore';
 import { formatCurrency, formatInrWithUsd, withInr } from '../lib/currency';
+import { binanceIpHint } from '../lib/binanceIpHint';
 import {
   ClipboardList, ChevronDown, ChevronRight, RefreshCw,
   Archive, Trash2, ArchiveRestore, Eye, EyeOff, AlertTriangle, X, XCircle,
@@ -310,7 +311,7 @@ export default function OrdersPage() {
           `${errMsg}\n\n` +
           `Would you like to Force Close (mark as CLOSED locally)?\n\n` +
           `• Click OK if you have already closed or sold this position directly on Binance.\n` +
-          `• Machine Public IP: 14.98.201.25 (whitelist this in Binance API Management if you want live orders).`
+          binanceIpHint(errMsg)
         );
         if (confirmForce) {
           const mode = (useAppStore.getState().mode as "PAPER" | "LIVE") || "PAPER";

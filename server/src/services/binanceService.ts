@@ -67,7 +67,42 @@ export function getRestBanRemainingMs(surface: BinanceSurface = "spot"): number 
   return Math.max(0, until - Date.now());
 }
 
+/**
+ * Binance -2015 / -2014 key rejections, per surface, cleared by the next
+ * successful signed call. Binance appends "request ip: x.x.x.x" to -2015 —
+ * the address it actually saw. On a carrier-NAT connection that rotates per
+ * connection (seen 2026-09-27: .5.186 vs .11.151 vs a hardcoded .8.92), so
+ * the UI shows this instead of any locally detected or hardcoded IP.
+ */
+export interface BinanceAuthRejection {
+  surface: BinanceSurface;
+  code: number;
+  message: string;
+  requestIp: string | null;
+  at: number;
+}
+const authRejections: Partial<Record<BinanceSurface, BinanceAuthRejection>> = {};
+
+export function extractBinanceRequestIp(text: string): string | null {
+  const m = /request ip:\s*([0-9a-fA-F.:]+)/i.exec(text || "");
+  return m ? m[1] : null;
+}
+
+export function getBinanceAuthStatus(): Partial<Record<BinanceSurface, BinanceAuthRejection>> {
+  return { ...authRejections };
+}
+
+function clearAuthRejection(surface: BinanceSurface): void {
+  delete authRejections[surface];
+}
+
 export function handleRestError(status: number, errorText: string, surface: BinanceSurface = "spot"): void {
+  const codeMatch = /"code"\s*:\s*(-?\d+)/.exec(errorText);
+  const code = codeMatch ? Number(codeMatch[1]) : 0;
+  if (code === -2015 || code === -2014) {
+    const msgMatch = /"msg"\s*:\s*"([^"]*)"/.exec(errorText);
+    authRejections[surface] = { surface, code, message: msgMatch ? msgMatch[1] : errorText.slice(0, 200), requestIp: extractBinanceRequestIp(errorText), at: Date.now() };
+  }
   if (status === 418 || status === 429 || errorText.includes("banned until") || errorText.includes("-1003")) {
     const match = errorText.match(/banned until (\d+)/i);
     let banEndTime = Date.now() + 5 * 60 * 1000; // Default 5 minutes
@@ -239,6 +274,7 @@ async function signedGet<T>(path: string, apiKey: string, apiSecret: string, par
     handleRestError(res.status, errText);
     throw new Error(`Binance ${res.status}: ${errText}`);
   }
+  clearAuthRejection("spot");
   return res.json() as Promise<T>;
 }
 
@@ -258,6 +294,7 @@ async function signedPost<T>(path: string, apiKey: string, apiSecret: string, pa
     handleRestError(res.status, errText);
     throw new Error(`Binance Spot ${res.status}: ${errText}`);
   }
+  clearAuthRejection("spot");
   return res.json() as Promise<T>;
 }
 
@@ -277,6 +314,7 @@ async function signedFuturesPost<T>(path: string, apiKey: string, apiSecret: str
     handleRestError(res.status, errText, "futures");
     throw new Error(`Binance Futures ${res.status}: ${errText}`);
   }
+  clearAuthRejection("futures");
   return res.json() as Promise<T>;
 }
 
@@ -295,6 +333,7 @@ async function signedFuturesGet<T>(path: string, apiKey: string, apiSecret: stri
     handleRestError(res.status, errText, "futures");
     throw new Error(`Binance Futures GET ${res.status}: ${errText}`);
   }
+  clearAuthRejection("futures");
   return res.json() as Promise<T>;
 }
 
