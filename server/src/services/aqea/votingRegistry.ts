@@ -29,7 +29,12 @@ export class FatalGovernanceError extends Error {
 export class VotingRegistry {
   private static governanceMap: Map<PredictorType, PredictorGovernance> = new Map([
     ["CNN", { type: "CNN", role: PredictorRole.AUTHORIZED, affectsTrading: true, persisted: true }],
-    ["LSTM", { type: "LSTM", role: PredictorRole.AUTHORIZED, affectsTrading: true, persisted: true }],
+    // LSTM_SEQUENCE_V1 is OUTPUT_COLLAPSED (+7.95 logit bias — see
+    // shadow/AqeaP16ShadowLedger.ts): on 2026-09-27 it said LONG 42,639 times
+    // at avg confidence 0.998 vs 492 SHORT in 24h. As an AUTHORIZED voter its
+    // constant LONG kept aiConsensusHold false and fed the LONG bias. Shadow
+    // until retrained; it still predicts and is graded in telemetry.
+    ["LSTM", { type: "LSTM", role: PredictorRole.SHADOW, affectsTrading: false, persisted: true }],
     // PPO_EXECUTION_V1's action space (SKIP_TRADE/NORMAL_SIZE/REDUCE_SIZE/
     // INCREASE_SIZE/CONSERVATIVE_EXIT/STANDARD_EXIT/AGGRESSIVE_EXIT) has no
     // directional (LONG/SHORT) content — it answers "how much"/"exit or
