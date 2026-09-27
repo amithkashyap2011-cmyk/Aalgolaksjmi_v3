@@ -147,7 +147,19 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
       // even in LIVE — which then fed the header equity with simulated funds.
       const activeMode = useAppStore.getState().mode || "PAPER";
       const [pos, hist, ens, walletRes] = await Promise.allSettled([
-        api.getOpenPositions(activeMode, activeAcct === "BOTH" ? "FUTURES" : activeAcct),
+        // "All" must load BOTH accounts: it used to query FUTURES only (for a
+        // BOTH or FUTURES account type), so open SPOT positions never showed
+        // and "In market now" read 0 while the Orders page listed them.
+        terminalTab === 'all' || activeAcct === "BOTH"
+          ? Promise.all([
+              api.getOpenPositions(activeMode, "SPOT").catch(() => []),
+              api.getOpenPositions(activeMode, "FUTURES").catch(() => []),
+            ]).then(([s, f]) => {
+              const merged = [...(Array.isArray(s) ? s : []), ...(Array.isArray(f) ? f : [])];
+              // Keyed de-dup: the FUTURES query can echo spot rows on some servers.
+              return [...new Map(merged.map((p: any) => [String(p._id ?? `${p.symbol}-${p.accountType}`), p])).values()];
+            })
+          : api.getOpenPositions(activeMode, activeAcct),
         api.getTradeHistory(activeMode, 12, 0, "CLOSED", "CRYPTO"),
         api.getEnsembleReport(symbol),
         // Fetch the tab-specific wallet so Capital Deposited reflects only
