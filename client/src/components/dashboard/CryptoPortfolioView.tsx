@@ -92,12 +92,90 @@ function toHolding(p: any, livePrices?: Props["livePrices"]): Holding {
   return { key: String(p._id ?? `${p.symbol}-${account}`), symbol: p.symbol, account, side, qty, entry, mark, leverage, cost, value, upnl };
 }
 
+// Shared by both paged tables below: text filter + page index.
+type Source = "ALL" | "ENGINE" | "EXPLORER" | "MANUAL";
+const sourceOf = (t: any): Exclude<Source, "ALL"> =>
+  t.entrySource === "PAPER_EXPLORATION" ? "EXPLORER" : t.entrySource === "MANUAL" || !t.entrySource ? "MANUAL" : "ENGINE";
+const SOURCE_LABEL: Record<Exclude<Source, "ALL">, string> = { ENGINE: "AI engine", EXPLORER: "Explorer", MANUAL: "Manual" };
+const exitReasonOf = (t: any): string => t.exitReason || t.meta?.exitReason || t.meta?.closeReason || "";
+
+/** Page numbers with ellipses: 1 … 4 5 6 … 12 */
+function pageList(page: number, pages: number): Array<number | "…"> {
+  const out: Array<number | "…"> = [];
+  for (let i = 1; i <= pages; i++) {
+    if (i === 1 || i === pages || Math.abs(i - page) <= 1) out.push(i);
+    else if (out[out.length - 1] !== "…") out.push("…");
+  }
+  return out;
+}
+
+function Pager({ page, pages, total, pageSize, onPage, onPageSize, sizes }: {
+  page: number; pages: number; total: number; pageSize: number;
+  onPage: (p: number) => void; onPageSize?: (n: number) => void; sizes?: number[];
+}) {
+  if (total === 0) return null;
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(total, page * pageSize);
+  const btn = (active: boolean, disabled = false): React.CSSProperties => ({
+    minWidth: 30, height: 28, padding: "0 8px", borderRadius: 6, border: `1px solid ${active ? "#3b82f6" : BORD}`,
+    background: active ? "rgba(59,130,246,0.18)" : CARD, color: disabled ? FAINT : active ? "#60a5fa" : TEXT,
+    fontSize: 11, fontWeight: 800, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+  });
+  return (
+    <div className="cp-pager" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+      <span style={{ fontSize: 11, color: FAINT }}>{from}–{to} of {total}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+        <button aria-label="Previous page" disabled={page <= 1} onClick={() => onPage(page - 1)} style={btn(false, page <= 1)}>‹</button>
+        {pageList(page, pages).map((p, i) => p === "…"
+          ? <span key={`e${i}`} style={{ color: FAINT, fontSize: 11, padding: "0 2px" }}>…</span>
+          : <button key={p} aria-label={`Page ${p}`} aria-current={p === page ? "page" : undefined} onClick={() => onPage(p)} style={btn(p === page)}>{p}</button>)}
+        <button aria-label="Next page" disabled={page >= pages} onClick={() => onPage(page + 1)} style={btn(false, page >= pages)}>›</button>
+        {onPageSize && sizes && (
+          <select aria-label="Rows per page" value={pageSize} onChange={(e) => onPageSize(Number(e.target.value))} style={{ ...controlStyle, height: 28, marginLeft: 4 }}>
+            {sizes.map((n) => <option key={n} value={n}>{n} / page</option>)}
+          </select>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const controlStyle: React.CSSProperties = {
+  height: 30, padding: "0 10px", borderRadius: 8, border: `1px solid ${BORD}`, background: "var(--ds-bg)",
+  color: TEXT, fontSize: 12, fontWeight: 600, minWidth: 0,
+};
+
+// Below 640px each table row becomes a card of label → value pairs.
+const RESPONSIVE_CSS = `
+@media (max-width: 480px) { .crypto-portfolio-page .cp-tab-hint { display: none; } }
+@media (max-width: 640px) {
+  .crypto-portfolio-page .cp-rtable thead { display: none; }
+  /* a global mobile rule gives every table min-width: 560px — cards must fit the screen */
+  .crypto-portfolio-page .cp-rtable, .crypto-portfolio-page .cp-rtable tbody { display: block; width: 100% !important; min-width: 0 !important; }
+  .crypto-portfolio-page .cp-rtable tr { display: block; border: 1px solid var(--ds-border); border-radius: 10px; padding: 6px 10px; margin-bottom: 8px; }
+  .crypto-portfolio-page .cp-rtable td { display: flex !important; justify-content: space-between; gap: 12px; border-top: none !important; padding: 4px 0 !important; white-space: normal !important; max-width: none !important; text-align: right; }
+  .crypto-portfolio-page .cp-rtable td::before { content: attr(data-label); color: var(--ds-text-faint); font-size: 10px; font-weight: 800; text-transform: uppercase; font-family: inherit; text-align: left; }
+  .crypto-portfolio-page .cp-filters > * { flex: 1 1 140px; }
+}`;
+
 export default function CryptoPortfolioView({ mode, balances, livePrices, inrRate }: Props) {
   const navigate = useNavigate();
   const [rawPositions, setRawPositions] = useState<any[]>([]);
   const [allClosed, setClosed] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<AccountTab>(readTab);
+  // Realized-by-coin table
+  const [coinQ, setCoinQ] = useState("");
+  const [coinSort, setCoinSort] = useState<"pnl" | "trades" | "winRate">("pnl");
+  const [coinPage, setCoinPage] = useState(1);
+  const COIN_PAGE_SIZE = 10;
+  // Closed-trades table
+  const [tradeQ, setTradeQ] = useState("");
+  const [sideF, setSideF] = useState<"ALL" | "LONG" | "SHORT">("ALL");
+  const [resultF, setResultF] = useState<"ALL" | "WIN" | "LOSS">("ALL");
+  const [sourceF, setSourceF] = useState<Source>("ALL");
+  const [tradePage, setTradePage] = useState(1);
+  const [tradePageSize, setTradePageSize] = useState(20);
   const selectTab = (t: AccountTab) => {
     setTab(t);
     try { localStorage.setItem(TAB_KEY, t); } catch { /* per-viewer convenience only */ }
@@ -165,13 +243,42 @@ export default function CryptoPortfolioView({ mode, balances, livePrices, inrRat
       row.pnl += num(t.pnl);
       m.set(k, row);
     }
-    return [...m.entries()].sort((a, b) => b[1].pnl - a[1].pnl);
-  }, [closed]);
+    const q = coinQ.trim().toUpperCase();
+    const rows = [...m.entries()].filter(([c]) => !q || c.includes(q));
+    const winRate = (r: { trades: number; wins: number }) => (r.trades ? r.wins / r.trades : 0);
+    return rows.sort((a, b) =>
+      coinSort === "trades" ? b[1].trades - a[1].trades
+      : coinSort === "winRate" ? winRate(b[1]) - winRate(a[1]) || b[1].trades - a[1].trades
+      : b[1].pnl - a[1].pnl);
+  }, [closed, coinQ, coinSort]);
+  const coinPages = Math.max(1, Math.ceil(perCoin.length / COIN_PAGE_SIZE));
+  const coinPageSafe = Math.min(coinPage, coinPages);
+  const perCoinPage = perCoin.slice((coinPageSafe - 1) * COIN_PAGE_SIZE, coinPageSafe * COIN_PAGE_SIZE);
 
-  const recentClosed = useMemo(
-    () => [...closed].sort((a, b) => new Date(b.closedAt ?? 0).getTime() - new Date(a.closedAt ?? 0).getTime()).slice(0, 50),
-    [closed],
-  );
+  const filteredClosed = useMemo(() => {
+    const q = tradeQ.trim().toUpperCase();
+    return [...closed]
+      .filter((t) => {
+        if (q && !coin(String(t.symbol)).includes(q)) return false;
+        const short = String(t.side).toUpperCase() === "SELL";
+        if (sideF === "LONG" && short) return false;
+        if (sideF === "SHORT" && !short) return false;
+        const p = num(t.pnl);
+        if (resultF === "WIN" && !(p > 0)) return false;
+        if (resultF === "LOSS" && !(p <= 0)) return false;
+        if (sourceF !== "ALL" && sourceOf(t) !== sourceF) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.closedAt ?? 0).getTime() - new Date(a.closedAt ?? 0).getTime());
+  }, [closed, tradeQ, sideF, resultF, sourceF]);
+  const tradePages = Math.max(1, Math.ceil(filteredClosed.length / tradePageSize));
+  const tradePageSafe = Math.min(tradePage, tradePages);
+  const closedPage = filteredClosed.slice((tradePageSafe - 1) * tradePageSize, tradePageSafe * tradePageSize);
+  const filteredPnl = filteredClosed.reduce((s, t) => s + num(t.pnl), 0);
+  const filteredWins = filteredClosed.filter((t) => num(t.pnl) > 0).length;
+  // Any filter or account-tab change starts back at page 1.
+  useEffect(() => { setCoinPage(1); }, [coinQ, coinSort, tab]);
+  useEffect(() => { setTradePage(1); }, [tradeQ, sideF, resultF, sourceF, tradePageSize, tab]);
 
   const tile = (label: string, value: string, sub?: string, color: string = TEXT) => (
     <div style={{ background: CARD, border: `1px solid ${BORD}`, borderRadius: 12, padding: "12px 14px", minWidth: 0 }}>
@@ -222,7 +329,7 @@ export default function CryptoPortfolioView({ mode, balances, livePrices, inrRat
         </div>
       </div>
 
-      <style>{"@media (max-width: 480px) { .crypto-portfolio-page .cp-tab-hint { display: none; } }"}</style>
+      <style>{RESPONSIVE_CSS}</style>
       <div role="tablist" aria-label="Account" style={{ display: "flex", gap: 6, flexWrap: "wrap", borderBottom: `1px solid ${BORD}` }}>
         {TABS.map((t) => {
           const active = tab === t.id;
@@ -294,49 +401,92 @@ export default function CryptoPortfolioView({ mode, balances, livePrices, inrRat
         </div>
       ))}
 
-      {section("Realized P&L by Coin", perCoin.length === 0 ? empty("No closed trades yet.") : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>{["Coin", "Trades", "Wins", "Win Rate", "Realized P&L"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
-            <tbody>
-              {perCoin.map(([c, r]) => (
-                <tr key={c}>
-                  <td style={{ ...td, fontWeight: 800, fontFamily: "inherit" }}>{c}</td>
-                  <td style={td}>{r.trades}</td>
-                  <td style={td}>{r.wins}</td>
-                  <td style={td}>{((r.wins / r.trades) * 100).toFixed(0)}%</td>
-                  <td style={{ ...td, color: r.pnl >= 0 ? G : R }}>{money(r.pnl)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {section("Realized P&L by Coin", closed.length === 0 ? empty("No closed trades yet.") : (
+        <div>
+          <div className="cp-filters" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            <input aria-label="Filter coins" placeholder="Search coin…" value={coinQ} onChange={(e) => setCoinQ(e.target.value)} style={{ ...controlStyle, flex: "1 1 160px" }} />
+            <select aria-label="Sort coins" value={coinSort} onChange={(e) => setCoinSort(e.target.value as typeof coinSort)} style={controlStyle}>
+              <option value="pnl">Sort: P&amp;L</option>
+              <option value="trades">Sort: Trades</option>
+              <option value="winRate">Sort: Win rate</option>
+            </select>
+          </div>
+          {perCoin.length === 0 ? empty("No coins match this filter.") : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="cp-rtable" style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{["Coin", "Trades", "Wins", "Win Rate", "Realized P&L"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {perCoinPage.map(([c, r]) => (
+                    <tr key={c}>
+                      <td data-label="Coin" style={{ ...td, fontWeight: 800, fontFamily: "inherit" }}>{c}</td>
+                      <td data-label="Trades" style={td}>{r.trades}</td>
+                      <td data-label="Wins" style={td}>{r.wins}</td>
+                      <td data-label="Win rate" style={td}>{((r.wins / r.trades) * 100).toFixed(0)}%</td>
+                      <td data-label="Realized P&L" style={{ ...td, color: r.pnl >= 0 ? G : R }}>{money(r.pnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <Pager page={coinPageSafe} pages={coinPages} total={perCoin.length} pageSize={COIN_PAGE_SIZE} onPage={setCoinPage} />
         </div>
       ))}
 
-      {section("Closed Trades", recentClosed.length === 0 ? empty("No closed trades yet.") : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>{["Closed", "Coin", "Account", "Side", "Quantity", "Entry", "Exit", "P&L", "Reason"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
-            <tbody>
-              {recentClosed.map((t) => {
-                const p = num(t.pnl);
-                return (
-                  <tr key={String(t._id)}>
-                    <td style={{ ...td, fontFamily: "inherit", color: FAINT }}>{t.closedAt ? new Date(t.closedAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
-                    <td style={{ ...td, fontWeight: 800, fontFamily: "inherit" }}>{coin(t.symbol)}</td>
-                    <td style={{ ...td, fontFamily: "inherit" }}>{t.accountType}</td>
-                    <td style={{ ...td, fontFamily: "inherit", color: String(t.side).toUpperCase() === "SELL" ? R : G }}>{String(t.side).toUpperCase() === "SELL" ? "SHORT" : "LONG"}</td>
-                    <td style={td}>{coinQty(Math.abs(num(t.quantity)))}</td>
-                    <td style={td}>{coinPrice(num(t.entryPrice))}</td>
-                    <td style={td}>{coinPrice(num(t.exitPrice))}</td>
-                    <td style={{ ...td, color: p >= 0 ? G : R }}>{money(p)}</td>
-                    <td style={{ ...td, fontFamily: "inherit", color: FAINT, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }} title={t.exitReason || ""}>{t.exitReason || "—"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {closed.length > recentClosed.length && <div style={{ fontSize: 11, color: FAINT, marginTop: 8 }}>Showing the latest {recentClosed.length} of {closed.length} closed trades.</div>}
+      {section("Closed Trades", closed.length === 0 ? empty("No closed trades yet.") : (
+        <div>
+          <div className="cp-filters" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            <input aria-label="Filter trades by coin" placeholder="Search coin…" value={tradeQ} onChange={(e) => setTradeQ(e.target.value)} style={{ ...controlStyle, flex: "1 1 160px" }} />
+            <select aria-label="Side" value={sideF} onChange={(e) => setSideF(e.target.value as typeof sideF)} style={controlStyle}>
+              <option value="ALL">All sides</option>
+              <option value="LONG">Long</option>
+              <option value="SHORT">Short</option>
+            </select>
+            <select aria-label="Result" value={resultF} onChange={(e) => setResultF(e.target.value as typeof resultF)} style={controlStyle}>
+              <option value="ALL">Wins &amp; losses</option>
+              <option value="WIN">Wins</option>
+              <option value="LOSS">Losses</option>
+            </select>
+            <select aria-label="Source" value={sourceF} onChange={(e) => setSourceF(e.target.value as Source)} style={controlStyle}>
+              <option value="ALL">All sources</option>
+              <option value="ENGINE">AI engine</option>
+              <option value="EXPLORER">Explorer</option>
+              <option value="MANUAL">Manual</option>
+            </select>
+          </div>
+          <div style={{ fontSize: 11, color: FAINT, marginBottom: 8 }}>
+            {filteredClosed.length} trade{filteredClosed.length === 1 ? "" : "s"} · {filteredWins}W/{filteredClosed.length - filteredWins}L ·{" "}
+            <span style={{ color: filteredPnl >= 0 ? G : R, fontWeight: 800 }}>{money(filteredPnl)}</span>
+          </div>
+          {filteredClosed.length === 0 ? empty("No trades match these filters.") : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="cp-rtable" style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{["Closed", "Coin", "Account", "Side", "Source", "Quantity", "Entry", "Exit", "P&L", "Reason"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {closedPage.map((t) => {
+                    const p = num(t.pnl);
+                    const short = String(t.side).toUpperCase() === "SELL";
+                    const reason = exitReasonOf(t);
+                    return (
+                      <tr key={String(t._id)}>
+                        <td data-label="Closed" style={{ ...td, fontFamily: "inherit", color: FAINT }}>{t.closedAt ? new Date(t.closedAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                        <td data-label="Coin" style={{ ...td, fontWeight: 800, fontFamily: "inherit" }}>{coin(t.symbol)}</td>
+                        <td data-label="Account" style={{ ...td, fontFamily: "inherit" }}>{t.accountType}</td>
+                        <td data-label="Side" style={{ ...td, fontFamily: "inherit", color: short ? R : G }}>{short ? "SHORT" : "LONG"}</td>
+                        <td data-label="Source" style={{ ...td, fontFamily: "inherit", color: FAINT }}>{SOURCE_LABEL[sourceOf(t)]}</td>
+                        <td data-label="Quantity" style={td}>{coinQty(Math.abs(num(t.quantity)))}</td>
+                        <td data-label="Entry" style={td}>{coinPrice(num(t.entryPrice))}</td>
+                        <td data-label="Exit" style={td}>{coinPrice(num(t.exitPrice))}</td>
+                        <td data-label="P&L" style={{ ...td, color: p >= 0 ? G : R }}>{money(p)}</td>
+                        <td data-label="Reason" style={{ ...td, fontFamily: "inherit", color: FAINT, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }} title={reason}>{reason || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <Pager page={tradePageSafe} pages={tradePages} total={filteredClosed.length} pageSize={tradePageSize} onPage={setTradePage} onPageSize={setTradePageSize} sizes={[10, 20, 50]} />
         </div>
       ))}
     </div>
