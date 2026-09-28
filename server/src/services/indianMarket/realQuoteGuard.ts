@@ -84,7 +84,7 @@ export function holdingMinutes(nowMs: number = Date.now()): number {
  * that move (1.67R), bounded to 12–40% / 20–80%.
  */
 export function volScaledStops(spot: number, strike: number, isCall: boolean, expiry: string, premium: number, nowMs: number = Date.now()): { slPct: number; tpPct: number; iv?: number } {
-  const dteYears = Math.max(0.5 / 365, (expiryCloseTime(expiry).getTime() - Date.now()) / (365 * 86400_000));
+  const dteYears = Math.max(0.5 / 365, (expiryCloseTime(expiry).getTime() - nowMs) / (365 * 86400_000));
   const iv = OptionChainService.impliedVolatility(premium, spot, strike, dteYears, isCall);
   if (!iv) return { slPct: 0.25, tpPct: 0.42 };
   const delta = Math.abs(OptionChainService.calculateBlackScholesGreeks(spot, strike, dteYears, iv, isCall).delta);
@@ -113,7 +113,7 @@ export function volScaledSpreadStops(spot: number, legs: any[], prices: number[]
   const [b, sl] = [legs[bi], legs[si]];
   if (b.instrumentType !== sl.instrumentType || !isOptionLeg(b) || b.expiry !== sl.expiry || !b.expiry) return undefined;
   const isCall = b.instrumentType === "CE";
-  const dteYears = Math.max(0.5 / 365, (expiryCloseTime(b.expiry).getTime() - Date.now()) / (365 * 86400_000));
+  const dteYears = Math.max(0.5 / 365, (expiryCloseTime(b.expiry).getTime() - nowMs) / (365 * 86400_000));
   const ivB = OptionChainService.impliedVolatility(prices[bi], spot, Number(b.strike), dteYears, isCall);
   const ivS = OptionChainService.impliedVolatility(prices[si], spot, Number(sl.strike), dteYears, isCall);
   const iv = ivB ?? ivS;

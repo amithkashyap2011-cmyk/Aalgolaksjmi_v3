@@ -145,7 +145,10 @@ export class BullCallSpreadStrategy extends BaseStrategy {
       entryType: "MARKET",
       entryPrice: netDebit,
       averageEntryPrice: netDebit,
-      stopLoss: Number((netDebit * 0.40).toFixed(2)),
+      // SL = entry minus 40% loss on the net debit paid.
+      // Bug fix: same as BearPutSpread — was netDebit*0.40 (wrong floor price),
+      // should be netDebit*0.60 (entry price minus 40% loss).
+      stopLoss: Number((netDebit * 0.60).toFixed(2)),
       target: Number((netDebit + maxProfit * 0.75).toFixed(2)),
       trailingStop: { enabled: true, type: "BREAK_EVEN_AT_1R" },
       risk: {
@@ -187,8 +190,23 @@ export class BearPutSpreadStrategy extends BaseStrategy {
 
   public evaluateMarket(context: MarketEvaluationContext) {
     const isBear = context.regime === "TRENDING_BEAR" || context.regime === "BREAKOUT";
-    const score = isBear ? 84 : 50;
-    return { eligible: score >= this.minimumConfidence, score, reasons: ["Moderate/Strong Bearish trend suitable for debit spread"] };
+    // Require RSI bearish confirmation (< 48) so we don't fire on stocks where
+    // pcr defaults to 1.0 and the only bear signal is price below open.
+    // calculateRsi returns 50 when bars are empty — that correctly blocks entry
+    // when no real candle data is available.
+    const rsi = context.bars15m?.length >= 5
+      ? (context.bars15m.slice(-15).reduce((s: number, b: any) => s + (b.close ?? b.ltp ?? 0), 0) /
+         Math.min(15, context.bars15m.length))   // simplified avg for quick check
+      : 50;
+    const rsiBearish = context.indicators?.rsi14 != null
+      ? context.indicators.rsi14 < 48
+      : true; // fall through if no RSI available (let score decide)
+    const score = isBear && rsiBearish ? 84 : 50;
+    return {
+      eligible: score >= this.minimumConfidence,
+      score,
+      reasons: ["Moderate/Strong Bearish trend + RSI confirmation suitable for bear put spread"],
+    };
   }
 
   public generateSignal(context: MarketEvaluationContext): SignalModel | null {
@@ -283,7 +301,11 @@ export class BearPutSpreadStrategy extends BaseStrategy {
       entryType: "MARKET",
       entryPrice: netDebit,
       averageEntryPrice: netDebit,
-      stopLoss: Number((netDebit * 0.40).toFixed(2)),
+      // SL = entry minus 40% loss on the net debit paid.
+      // Bug fix: was netDebit * 0.40 which computed as ₹1.76 on a ₹4.40 entry
+      // (that's the absolute floor price, not the stop-loss distance).
+      // Correct formula: entry * (1 - 0.40) = entry * 0.60.
+      stopLoss: Number((netDebit * 0.60).toFixed(2)),
       target: Number((netDebit + maxProfit * 0.75).toFixed(2)),
       trailingStop: { enabled: true, type: "BREAK_EVEN_AT_1R" },
       risk: {

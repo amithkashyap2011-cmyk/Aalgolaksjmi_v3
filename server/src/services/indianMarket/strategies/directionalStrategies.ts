@@ -366,6 +366,15 @@ export class LongFutureStrategy extends BaseStrategy {
     let score = 50;
     const reasons: string[] = [];
 
+    // Block late-session directional futures entries: INTRADAY_SQUARE_OFF fires
+    // at 15:15 IST leaving < 45 min for a 0.8% ATR move — produces forced exits
+    // at whatever price the market is at, not at SL or target.
+    const nowIST = new Date(Date.now() + 5.5 * 3600000);
+    const istHHMM = nowIST.getUTCHours() * 100 + nowIST.getUTCMinutes();
+    if (istHHMM >= 1430) {
+      return { eligible: false, score: 0, reasons: ["Late session: new LONG FUTURE entries blocked after 14:30 IST"] };
+    }
+
     if (context.regime === "TRENDING_BULL") {
       score += 25;
       reasons.push("Strong 15m Bullish Trend Regime");
@@ -501,6 +510,13 @@ export class ShortFutureStrategy extends BaseStrategy {
     const rsi = calculateRsi(context.bars15m);
     let score = 50;
     const reasons: string[] = [];
+
+    // Same late-session guard as LONG_FUTURE
+    const nowIST = new Date(Date.now() + 5.5 * 3600000);
+    const istHHMM = nowIST.getUTCHours() * 100 + nowIST.getUTCMinutes();
+    if (istHHMM >= 1430) {
+      return { eligible: false, score: 0, reasons: ["Late session: new SHORT FUTURE entries blocked after 14:30 IST"] };
+    }
 
     if (context.regime === "TRENDING_BEAR") {
       score += 25;
