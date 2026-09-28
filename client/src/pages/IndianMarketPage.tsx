@@ -1495,13 +1495,22 @@ export default function IndianMarketPage() {
                     onClick={async () => {
                       const next = !item.val;
                       const updated = { ...riskSettings, [item.key]: next };
-                      setRiskSettings(updated);
-                      await fetch("/api/indian-market/risk-settings", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(updated),
-                      });
-                      addToast(`Updated ${item.label}`, "info");
+                      try {
+                        const resp = await fetch("/api/indian-market/risk-settings", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(updated),
+                        });
+                        const data = await resp.json();
+                        if (resp.ok && data.success) {
+                          setRiskSettings(data.settings || updated);
+                          addToast(`Updated ${item.label}`, "success");
+                        } else {
+                          addToast(`Failed: ${data.error || data.message || resp.statusText}`, "error");
+                        }
+                      } catch {
+                        addToast(`Failed to update ${item.label}`, "error");
+                      }
                     }}
                     style={{
                       padding: "4px 10px",
