@@ -318,7 +318,8 @@ export class IndianRiskManager {
     accountCapital: number,
     availableMargin: number,
     userId: string = "guest-user",
-    bypassSessionCheck = false
+    bypassSessionCheck = false,
+    bypassAutoTradeCheck = false
   ): Promise<RiskValidationResult> {
     const settings = await this.getSettings(userId);
     const checks: Record<string, { passed: boolean; message: string }> = {};
@@ -407,27 +408,31 @@ export class IndianRiskManager {
     }
     checks["INTRADAY_CUTOFF"] = { passed: true, message: "Intraday entry window is open." };
 
-    // 4. AUTO-TRADE PERMISSION CHECK (for automated execution)
-    const isNifty = trade.underlying.includes("NIFTY") && !trade.underlying.includes("BANK");
-    const isBankNifty = trade.underlying.includes("BANK");
-    const isOption = trade.instrument === "CE" || trade.instrument === "PE";
-    const isFuture = trade.instrument === "FUTURE";
+    // 4. AUTO-TRADE PERMISSION CHECK (for automated execution only)
+    // Manual operator-initiated trades (from /execute-strategy) bypass these
+    // toggles — they should only gate the autonomous auto-trader daemon.
+    if (!bypassAutoTradeCheck) {
+      const isNifty = trade.underlying.includes("NIFTY") && !trade.underlying.includes("BANK");
+      const isBankNifty = trade.underlying.includes("BANK");
+      const isOption = trade.instrument === "CE" || trade.instrument === "PE";
+      const isFuture = trade.instrument === "FUTURE";
 
-    if (isNifty && !settings.niftyAutoTrade) {
-      checks["UNDERLYING_AUTO_TRADE"] = { passed: false, message: "NIFTY auto-trade is disabled in settings." };
-      return { approved: false, rejectionReason: "NIFTY_AUTO_TRADE_DISABLED", checks };
-    }
-    if (isBankNifty && !settings.bankNiftyAutoTrade) {
-      checks["UNDERLYING_AUTO_TRADE"] = { passed: false, message: "BANKNIFTY auto-trade is disabled in settings." };
-      return { approved: false, rejectionReason: "BANKNIFTY_AUTO_TRADE_DISABLED", checks };
-    }
-    if (isOption && !settings.optionsAutoTrade) {
-      checks["DERIVATIVE_AUTO_TRADE"] = { passed: false, message: "Options auto-trade is disabled in settings." };
-      return { approved: false, rejectionReason: "OPTIONS_AUTO_TRADE_DISABLED", checks };
-    }
-    if (isFuture && !settings.futuresAutoTrade) {
-      checks["DERIVATIVE_AUTO_TRADE"] = { passed: false, message: "Futures auto-trade is disabled in settings." };
-      return { approved: false, rejectionReason: "FUTURES_AUTO_TRADE_DISABLED", checks };
+      if (isNifty && !settings.niftyAutoTrade) {
+        checks["UNDERLYING_AUTO_TRADE"] = { passed: false, message: "NIFTY auto-trade is disabled in settings." };
+        return { approved: false, rejectionReason: "NIFTY_AUTO_TRADE_DISABLED", checks };
+      }
+      if (isBankNifty && !settings.bankNiftyAutoTrade) {
+        checks["UNDERLYING_AUTO_TRADE"] = { passed: false, message: "BANKNIFTY auto-trade is disabled in settings." };
+        return { approved: false, rejectionReason: "BANKNIFTY_AUTO_TRADE_DISABLED", checks };
+      }
+      if (isOption && !settings.optionsAutoTrade) {
+        checks["DERIVATIVE_AUTO_TRADE"] = { passed: false, message: "Options auto-trade is disabled in settings." };
+        return { approved: false, rejectionReason: "OPTIONS_AUTO_TRADE_DISABLED", checks };
+      }
+      if (isFuture && !settings.futuresAutoTrade) {
+        checks["DERIVATIVE_AUTO_TRADE"] = { passed: false, message: "Futures auto-trade is disabled in settings." };
+        return { approved: false, rejectionReason: "FUTURES_AUTO_TRADE_DISABLED", checks };
+      }
     }
     checks["AUTO_TRADE_TOGGLES"] = { passed: true, message: "All sub-toggles permitted." };
 

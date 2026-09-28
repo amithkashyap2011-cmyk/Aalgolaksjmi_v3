@@ -139,6 +139,7 @@ export function optionalAuth(req: AuthRequest, _res: Response, next: NextFunctio
   // instead of silently transacting against a real account.
   if (!req.userId && process.env.NODE_ENV !== "production") {
     req.userId = DEMO_USER_ID;
+    req.user = { id: DEMO_USER_ID, role: "ADMIN" };
   }
   next();
 }

@@ -445,7 +445,7 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
     const trade = strat.constructTrade(signal, context, availableMargin, 1.0);
     trade.mode = mode as any;
 
-    const riskCheck = await IndianRiskManager.validateTrade(trade, availableMargin, availableMargin, userId, true);
+    const riskCheck = await IndianRiskManager.validateTrade(trade, availableMargin, availableMargin, userId, true, true);
 
     if (!riskCheck.approved) {
       return res.status(400).json({ error: `RISK_REJECTED: ${riskCheck.rejectionReason}` });
