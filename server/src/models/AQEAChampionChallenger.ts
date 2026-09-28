@@ -70,7 +70,7 @@ const AQEAChampionChallengerSchema = new Schema({
   promotedTimestamp: { type: Number, default: null },
   demotedTimestamp: { type: Number, default: null },
   lastUpdated: { type: Number, required: true },
-  createdAt: { type: Date, default: Date.now, index: true }
+  createdAt: { type: Date, default: Date.now }
 }, {
   timestamps: true,
   versionKey: false

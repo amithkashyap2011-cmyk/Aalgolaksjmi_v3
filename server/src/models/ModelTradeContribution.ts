@@ -25,7 +25,7 @@ const ModelTradeContributionSchema: Schema = new Schema({
   tradeReturnR: { type: Number, required: true },
   calibrationFactor: { type: Number, default: 1.0 },
   contributionR: { type: Number, required: true },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const ModelTradeContribution = mongoose.models.ModelTradeContribution || mongoose.model<IModelTradeContribution>("ModelTradeContribution", ModelTradeContributionSchema);

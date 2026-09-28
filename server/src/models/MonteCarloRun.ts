@@ -19,7 +19,7 @@ const MonteCarloRunSchema: Schema = new Schema({
   bestCaseReturnPct: { type: Number, default: 42.5 },
   riskOfRuinPct: { type: Number, default: 0.0 },
   confidenceInterval95: { type: Object, default: { minReturnPct: 15.0, maxReturnPct: 45.0 } },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const MonteCarloRun = mongoose.models.MonteCarloRun || mongoose.model<IMonteCarloRun>("MonteCarloRun", MonteCarloRunSchema);

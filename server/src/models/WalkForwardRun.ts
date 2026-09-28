@@ -25,7 +25,7 @@ const WalkForwardRunSchema: Schema = new Schema({
   runId: { type: String, required: true, unique: true },
   config: { type: Object, required: true },
   metrics: { type: Object, required: true },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const WalkForwardRun = mongoose.models.WalkForwardRun || mongoose.model<IWalkForwardRun>("WalkForwardRun", WalkForwardRunSchema);

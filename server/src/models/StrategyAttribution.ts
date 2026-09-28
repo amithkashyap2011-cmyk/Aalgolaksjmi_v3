@@ -23,7 +23,7 @@ const StrategyAttributionSchema: Schema = new Schema({
   actualPnlUsdt: { type: Number, required: true },
   actualReturnR: { type: Number, required: true },
   holdingTimeHours: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const StrategyAttribution = mongoose.models.StrategyAttribution || mongoose.model<IStrategyAttribution>("StrategyAttribution", StrategyAttributionSchema);

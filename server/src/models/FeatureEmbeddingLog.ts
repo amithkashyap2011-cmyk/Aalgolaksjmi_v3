@@ -13,7 +13,7 @@ const FeatureEmbeddingLogSchema: Schema = new Schema({
   embeddingVector: { type: [Number], required: true },
   reconstructionLoss: { type: Number, default: 0.02 },
   sequenceLength: { type: Number, default: 64 },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const FeatureEmbeddingLog = mongoose.models.FeatureEmbeddingLog || mongoose.model<IFeatureEmbeddingLog>("FeatureEmbeddingLog", FeatureEmbeddingLogSchema);

@@ -47,7 +47,7 @@ const ShadowTradeSchema: Schema = new Schema({
   },
   executionQualityScore: { type: Number, default: 94 },
   exchangeType: { type: String, enum: ["BINANCE_TESTNET", "BYBIT_TESTNET", "OKX_DEMO"], default: "BINANCE_TESTNET" },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const ShadowTrade = mongoose.models.ShadowTrade || mongoose.model<IShadowTrade>("ShadowTrade", ShadowTradeSchema);

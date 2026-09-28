@@ -295,6 +295,17 @@ async function tick(): Promise<void> {
     }
   };
 
+  // Snapshot of which user:accountType keys this tick will touch — used to
+  // selectively unblock only keys that got stuck in this tick on timeout,
+  // rather than blanket-clearing ALL keys (which could release locks from
+  // other concurrent ticks or manual processUser calls).
+  const tickKeys = new Set(
+    [...autoEnabledUsers].map((key) => {
+      const { userId, accountType } = parseScanKey(key);
+      return `${userId}:${accountType || "FUTURES"}`;
+    })
+  );
+
   try {
     const globalTimeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error("Global tick exceeded 55000ms limit")), 55000)
@@ -305,8 +316,12 @@ async function tick(): Promise<void> {
     const isTimeout = err?.message?.includes("Global tick exceeded");
     if (isTimeout) {
       SchedulerAccounting.recordTickTimedOut(tickId);
-      // Clean active processing keys so future ticks are not permanently blocked by aborted execution
-      activeProcessingKeys.clear();
+      // Clean only the processing keys that belong to THIS tick so future
+      // ticks are not permanently blocked.  A blanket .clear() also wiped
+      // locks from other concurrent ticks / manual processUser invocations.
+      for (const key of tickKeys) {
+        activeProcessingKeys.delete(key);
+      }
     } else {
       SchedulerAccounting.recordTickErrored(tickId, err?.message || String(err));
     }

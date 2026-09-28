@@ -122,7 +122,7 @@ const AQEAForwardDecisionSchema: Schema = new Schema({
     riskResult: { type: Boolean, default: true },
     finalDecision: { type: String, enum: ["LONG", "SHORT", "HOLD"], required: true }
   },
-  createdAt: { type: Date, default: Date.now, index: true }
+  createdAt: { type: Date, default: Date.now }
 }, {
   timestamps: true,
   versionKey: false

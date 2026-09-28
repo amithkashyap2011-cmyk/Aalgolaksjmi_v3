@@ -86,7 +86,7 @@ const AutonomousStrategySchema: Schema = new Schema(
     },
     healthScore: { type: Number, default: 100, index: true },
     createdBy: { type: String, default: "StrategyResearchAgent" },
-    createdAt: { type: Date, default: Date.now, index: true },
+    createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
     parentStrategyId: { type: String, default: null },
     modelVersion: { type: String, default: "v2.0.0" },

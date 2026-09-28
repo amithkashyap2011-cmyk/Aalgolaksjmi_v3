@@ -25,7 +25,7 @@ const ResearchExperimentSchema: Schema = new Schema({
   sortinoRatio: { type: Number, default: 2.15 },
   maxDrawdownPct: { type: Number, default: 4.2 },
   promotionStatus: { type: String, enum: ["PROMOTED", "PENDING", "REJECTED"], default: "PENDING" },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const ResearchExperiment = mongoose.models.ResearchExperiment || mongoose.model<IResearchExperiment>("ResearchExperiment", ResearchExperimentSchema);

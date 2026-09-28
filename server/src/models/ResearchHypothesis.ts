@@ -32,7 +32,7 @@ const ResearchHypothesisSchema: Schema = new Schema({
     default: "GENERATED",
     index: true,
   },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const ResearchHypothesis = mongoose.models.ResearchHypothesis || mongoose.model<IResearchHypothesis>("ResearchHypothesis", ResearchHypothesisSchema);

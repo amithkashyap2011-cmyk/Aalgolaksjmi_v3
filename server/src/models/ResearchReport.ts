@@ -21,7 +21,7 @@ const ResearchReportSchema: Schema = new Schema({
   recommendation: { type: String, enum: ["APPROVE_PROMOTION", "REJECT_EXPERIMENT"], required: true },
   humanApproved: { type: Boolean, default: false },
   approvedAt: { type: Date },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const ResearchReport = mongoose.models.ResearchReport || mongoose.model<IResearchReport>("ResearchReport", ResearchReportSchema);

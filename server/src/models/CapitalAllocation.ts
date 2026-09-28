@@ -18,7 +18,7 @@ const CapitalAllocationSchema: Schema = new Schema({
   allocations: { type: Array, required: true },
   totalCapitalUsdt: { type: Number, required: true },
   portfolioHeatPct: { type: Number, required: true },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const CapitalAllocation = mongoose.models.CapitalAllocation || mongoose.model<ICapitalAllocation>("CapitalAllocation", CapitalAllocationSchema);

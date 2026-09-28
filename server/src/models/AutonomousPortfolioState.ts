@@ -39,7 +39,7 @@ const AutonomousPortfolioStateSchema: Schema = new Schema(
       default: "NORMAL",
     },
     stressResults: { type: Array, default: [] },
-    createdAt: { type: Date, default: Date.now, index: true },
+    createdAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );

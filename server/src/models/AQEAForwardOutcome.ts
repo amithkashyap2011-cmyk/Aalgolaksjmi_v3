@@ -62,7 +62,7 @@ const AQEAForwardOutcomeSchema: Schema = new Schema({
     totalCost: { type: Number, default: 0 }
   },
   resolvedTimestamp: { type: Number, required: true },
-  createdAt: { type: Date, default: Date.now, index: true }
+  createdAt: { type: Date, default: Date.now }
 }, {
   timestamps: true,
   versionKey: false

@@ -31,7 +31,7 @@ const ModelVersionSchema: Schema = new Schema({
   liveSharpe: { type: Number, default: 1.82 },
   totalEvaluatedTrades: { type: Number, default: 0 },
   approvalStatus: { type: String, enum: ["APPROVED", "PENDING", "REJECTED"], default: "APPROVED" },
-  createdAt: { type: Date, default: Date.now, index: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
 export const ModelVersion = mongoose.models.ModelVersion || mongoose.model<IModelVersion>("ModelVersion", ModelVersionSchema);

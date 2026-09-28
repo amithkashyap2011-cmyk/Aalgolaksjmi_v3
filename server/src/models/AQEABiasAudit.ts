@@ -132,7 +132,7 @@ const AQEABiasAuditSchema = new Schema({
     enum: ["NO_ACTION", "WEIGHT_PENALTY_APPLIED", "LIVE_HALTED_CRITICAL_BIAS"],
     default: "NO_ACTION"
   },
-  createdAt: { type: Date, default: Date.now, index: true }
+  createdAt: { type: Date, default: Date.now }
 }, {
   timestamps: true,
   versionKey: false
