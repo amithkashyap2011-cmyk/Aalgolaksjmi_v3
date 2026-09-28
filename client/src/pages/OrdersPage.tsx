@@ -7,6 +7,7 @@ import { binanceIpHint } from '../lib/binanceIpHint';
 import {
   ClipboardList, ChevronDown, ChevronRight, RefreshCw,
   Archive, Trash2, ArchiveRestore, Eye, EyeOff, AlertTriangle, X, XCircle,
+  Calendar, TrendingUp, TrendingDown, FilterX,
 } from 'lucide-react';
 import {
   archiveTrade, archiveAllTrades, clearArchivedTrades, closePosition,
@@ -182,6 +183,14 @@ export default function OrdersPage() {
   const [confirm, setConfirm]       = useState<{ action: "archive-all" | "clear" } | null>(null);
   const [actionMsg, setActionMsg]   = useState<string | null>(null);
 
+  // ── Filters (Date + P&L) ────────────────────────────────────────────────
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo,   setDateTo]   = useState("");
+  type PlFilter = "ALL" | "PROFIT" | "LOSS";
+  const [plFilter, setPlFilter] = useState<PlFilter>("ALL");
+
+  const clearFilters = () => { setDateFrom(""); setDateTo(""); setPlFilter("ALL"); };
+
   const activeUserId = (userId && userId !== "000000000000000000000000" && userId !== "mock-user-001") ? userId : DEMO_USER_ID;
 
   // userId/market settle across a few renders on mount (auth resolving,
@@ -218,8 +227,8 @@ export default function OrdersPage() {
     }
   };
 
-  // New view → back to page 1; page changes reload.
-  useEffect(() => { setPage(1); }, [showArchived, tab, market, pageSize]);
+  // New view → back to page 1; page changes reload. Also reset on filter change.
+  useEffect(() => { setPage(1); }, [showArchived, tab, market, pageSize, dateFrom, dateTo, plFilter]);
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [userId, showArchived, tab, market, page, pageSize]);
 
   const refreshCounts = () => {
@@ -249,10 +258,35 @@ export default function OrdersPage() {
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [market, activeUserId]);
 
+  // ── Client-side filtered rows (date + P&L) ──────────────────────────────
+  const filteredRows = useMemo(() => {
+    let result = rows;
+    if (dateFrom) {
+      const from = new Date(dateFrom).getTime();
+      result = result.filter((o) => {
+        const t = new Date(o.closedAt || o.openedAt || 0).getTime();
+        return t >= from;
+      });
+    }
+    if (dateTo) {
+      // include the full "to" day (add 1 day)
+      const to = new Date(dateTo).getTime() + 86400000;
+      result = result.filter((o) => {
+        const t = new Date(o.closedAt || o.openedAt || 0).getTime();
+        return t <= to;
+      });
+    }
+    if (plFilter === "PROFIT") result = result.filter((o) => (o.pnl ?? 0) > 0);
+    if (plFilter === "LOSS")   result = result.filter((o) => (o.pnl ?? 0) < 0);
+    return result;
+  }, [rows, dateFrom, dateTo, plFilter]);
+
   /* One row per fill: an entry fill for every order, plus an exit fill once it's closed */
   const fills = useMemo(() => {
+    const historyLike = tab === "HISTORY" || tab === "TRADES";
+    const source = historyLike ? filteredRows : rows;
     const out: any[] = [];
-    for (const o of rows) {
+    for (const o of source) {
       const entrySide = isLongSide(o.side) ? "BUY" : "SELL";
       out.push({
         id: `${o._id}-entry`, orderId: o._id, symbol: o.symbol, type: "ENTRY",
@@ -267,7 +301,7 @@ export default function OrdersPage() {
       }
     }
     return out.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-  }, [rows]);
+  }, [rows, filteredRows, tab]);
 
   const flash = (msg: string) => { setActionMsg(msg); setTimeout(() => setActionMsg(null), 3000); };
 
@@ -347,10 +381,11 @@ export default function OrdersPage() {
     finally { setClosingId(null); }
   };
 
-  const activeCount   = rows.filter((o) => !o.archived).length;
-  const archivedCount = rows.filter((o) =>  o.archived).length;
+  const activeCount   = filteredRows.filter((o) => !o.archived).length;
+  const archivedCount = filteredRows.filter((o) =>  o.archived).length;
   const marketColor = market === "INDIA" ? "#ea580c" : "#3b82f6";
   const isHistoryLike = tab === "HISTORY" || tab === "TRADES";
+  const hasActiveFilters = !!(dateFrom || dateTo || plFilter !== "ALL");
 
   const emptyCopy =
     tab === "OPEN"     ? { title: "No open orders", sub: "Pending orders appear here — this engine fills at market price instantly, so orders rarely sit open" } :
@@ -440,6 +475,118 @@ export default function OrdersPage() {
         <div style={{ background:`${A}0e`, border:`1px solid ${A}30`, borderRadius:8, padding:"10px 14px", fontSize:12, color:A, display:"flex", alignItems:"center", gap:8 }}>
           <Archive size={13} />
           Showing archived orders — hidden from the default view. Unarchive individual rows or permanently clear them.
+        </div>
+      )}
+
+      {/* ── Filter Bar (Date Range + P&L) — shown on HISTORY & TRADES tabs ── */}
+      {isHistoryLike && (
+        <div style={{
+          background: "var(--ds-surface)",
+          border: `1px solid ${hasActiveFilters ? marketColor + "50" : "var(--ds-border)"}`,
+          borderRadius: 12,
+          padding: "12px 14px",
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 10,
+          transition: "border-color 0.2s",
+        }}>
+          {/* Date From */}
+          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <Calendar size={13} color="var(--ds-text-faint)" />
+            <span style={{ fontSize:11, color:"var(--ds-text-faint)", fontWeight:600, whiteSpace:"nowrap" }}>From</span>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              style={{
+                background: "transparent",
+                border: `1px solid ${dateFrom ? marketColor + "70" : "var(--ds-border)"}`,
+                borderRadius: 7,
+                color: "var(--ds-text)",
+                fontSize: 11,
+                padding: "5px 8px",
+                cursor: "pointer",
+                colorScheme: "dark",
+              }}
+            />
+          </div>
+
+          {/* Date To */}
+          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <span style={{ fontSize:11, color:"var(--ds-text-faint)", fontWeight:600, whiteSpace:"nowrap" }}>To</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              style={{
+                background: "transparent",
+                border: `1px solid ${dateTo ? marketColor + "70" : "var(--ds-border)"}`,
+                borderRadius: 7,
+                color: "var(--ds-text)",
+                fontSize: 11,
+                padding: "5px 8px",
+                cursor: "pointer",
+                colorScheme: "dark",
+              }}
+            />
+          </div>
+
+          {/* Divider */}
+          <div style={{ width:1, height:22, background:"var(--ds-border)", margin:"0 2px" }} />
+
+          {/* P&L Buttons */}
+          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+            <span style={{ fontSize:11, color:"var(--ds-text-faint)", fontWeight:600, whiteSpace:"nowrap" }}>P&L</span>
+            {([
+              { key: "ALL",    label: "All",       icon: null,                         color: "var(--ds-text-muted)" },
+              { key: "PROFIT", label: "Profitable", icon: <TrendingUp  size={11} />, color: G },
+              { key: "LOSS",   label: "Loss",       icon: <TrendingDown size={11} />, color: R },
+            ] as const).map(({ key, label, icon, color }) => (
+              <button
+                key={key}
+                onClick={() => setPlFilter(key)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "5px 10px",
+                  borderRadius: 7,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  border: `1px solid ${plFilter === key ? color : "var(--ds-border)"}`,
+                  background: plFilter === key ? `${color}18` : "transparent",
+                  color: plFilter === key ? color : "var(--ds-text-faint)",
+                  transition: "all 0.15s",
+                }}
+              >
+                {icon}{label}
+              </button>
+            ))}
+          </div>
+
+          {/* Filtered count badge */}
+          {hasActiveFilters && (
+            <>
+              <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ fontSize:11, color: marketColor, fontWeight:700, background:`${marketColor}14`, padding:"3px 10px", borderRadius:6 }}>
+                  {filteredRows.length} of {rows.length} trades
+                </span>
+                <button
+                  onClick={clearFilters}
+                  title="Clear all filters"
+                  style={{
+                    display:"flex", alignItems:"center", gap:4,
+                    padding:"5px 10px", borderRadius:7, fontSize:11, fontWeight:700,
+                    border:`1px solid ${R}40`, background:`${R}0e`, color:R, cursor:"pointer",
+                  }}
+                >
+                  <FilterX size={11} /> Clear
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -646,8 +793,21 @@ export default function OrdersPage() {
             </div>
           )
         ) : (
-          rows.length === 0 ? (
-            <EmptyState title={emptyCopy.title} sub={emptyCopy.sub} />
+          filteredRows.length === 0 ? (
+            <EmptyState
+              title={hasActiveFilters ? "No trades match your filters" : emptyCopy.title}
+              sub={hasActiveFilters ? "Try adjusting the date range or P&L filter above" : emptyCopy.sub}
+              action={
+                hasActiveFilters ? (
+                  <button
+                    onClick={clearFilters}
+                    style={{ background: marketColor, color:"#fff", border:"none", padding:"8px 16px", borderRadius:8, fontSize:12, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:6 }}
+                  >
+                    <FilterX size={13} /> Clear Filters
+                  </button>
+                ) : null
+              }
+            />
           ) : (
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
@@ -659,7 +819,7 @@ export default function OrdersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((o, i) => {
+                  {filteredRows.map((o, i) => {
                     const id  = o._id || String(i);
                     const pnl = o.pnl ?? 0;
                     const isOpen = o.status === "OPEN";
