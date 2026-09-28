@@ -229,10 +229,16 @@ export class AutoPilotStateMachine {
             trailStage = "PROFIT_LOCK_15PCT";
           }
         }
-        // Tier 1: Peak gain >= +25% -> Shift to Breakeven (+ charges buffer:
-        // the larger of ₹0.50 or 2% of the premium)
+        // Tier 1: Peak gain >= +25% -> Shift to Breakeven (+ charges buffer).
+        // Buffer = larger of 2% of premium or ₹0.10, but CAPPED at 5% of entry.
+        // The old ₹0.50 floor was 27% of a ₹1.80 option → set SL = ₹2.30 the
+        // moment BREAKEVEN_SHIFT fired, causing an instant trigger on the same
+        // tick. Capping at 5% keeps the buffer proportional across all premium
+        // levels (₹0.09 on a ₹1.80 option, ₹2.50 on a ₹50 option).
         else if (peakGainPct >= 25) {
-          const bePrice = roundTo2(entryPrice + Math.max(0.50, entryPrice * 0.02));
+          const rawBuffer = Math.max(entryPrice * 0.02, 0.10);
+          const beBuffer = Math.min(rawBuffer, entryPrice * 0.05);
+          const bePrice = roundTo2(entryPrice + beBuffer);
           if (bePrice > candidateSl) {
             candidateSl = bePrice;
             trailStage = "BREAKEVEN_SHIFT";
@@ -267,7 +273,9 @@ export class AutoPilotStateMachine {
             trailStage = "PROFIT_LOCK_15PCT";
           }
         } else if (peakDropPct >= 25) {
-          const bePrice = roundTo2(entryPrice - Math.max(0.50, entryPrice * 0.02));
+          const rawBuffer = Math.max(entryPrice * 0.02, 0.10);
+          const beBuffer = Math.min(rawBuffer, entryPrice * 0.05);
+          const bePrice = roundTo2(entryPrice - beBuffer);
           if (bePrice < candidateSl) {
             candidateSl = bePrice;
             trailStage = "BREAKEVEN_SHIFT";
