@@ -952,6 +952,8 @@ export default function ZerodhaKiteTerminal({
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
+              flexWrap: "wrap",
+              rowGap: 4,
             }}
           >
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
@@ -973,6 +975,16 @@ export default function ZerodhaKiteTerminal({
               <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{bankNiftySpot.price > 0 ? bankNiftySpot.price.toLocaleString("en-IN") : "—"}</span>
               <span style={{ color: bankNiftySpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
                 {bankNiftySpot.change >= 0 ? "+" : ""}{bankNiftySpot.changePct}%
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }} data-testid="kite-header-sensex">
+              <span style={{ color: "#94a3b8", fontWeight: 700, fontSize: 11, letterSpacing: "0.02em" }}>SENSEX</span>
+              {marketSession && !marketSession.isOpen && (
+                <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 4px", borderRadius: 3, background: "rgba(245, 158, 11, 0.2)", color: "#f59e0b" }}>CLOSE</span>
+              )}
+              <span style={{ fontWeight: 800, color: "#fff", fontSize: 12 }}>{sensexSpot.price > 0 ? sensexSpot.price.toLocaleString("en-IN") : "—"}</span>
+              <span style={{ color: sensexSpot.change >= 0 ? "#10b981" : "#ef4444", fontSize: 11, fontWeight: 700 }}>
+                {sensexSpot.change >= 0 ? "+" : ""}{sensexSpot.changePct}%
               </span>
             </div>
           </div>

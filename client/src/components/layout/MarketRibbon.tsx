@@ -33,22 +33,11 @@ interface IndianTickerItem {
   score: number;
 }
 
-const DEFAULT_INDIAN_PULSE: IndianTickerItem[] = [
-  { symbol: "NIFTY 50", name: "NSE NIFTY Index", price: 24852.5, changePct: 0.48, decision: "LONG", score: 82 },
-  { symbol: "BANKNIFTY", name: "Bank Nifty Index", price: 51340.2, changePct: 0.35, decision: "LONG", score: 76 },
-  { symbol: "FINNIFTY", name: "Nifty Financial", price: 23145.0, changePct: 0.15, decision: "HOLD", score: 58 },
-  { symbol: "RELIANCE", name: "Reliance Ind", price: 2985.4, changePct: 1.12, decision: "LONG", score: 88 },
-  { symbol: "HDFCBANK", name: "HDFC Bank Ltd", price: 1642.8, changePct: -0.22, decision: "HOLD", score: 52 },
-  { symbol: "TCS", name: "Tata Consultancy", price: 4215.0, changePct: 0.85, decision: "LONG", score: 79 },
-  { symbol: "INFY", name: "Infosys Ltd", price: 1782.4, changePct: -0.45, decision: "SHORT", score: 71 },
-  { symbol: "ICICIBANK", name: "ICICI Bank Ltd", price: 1184.2, changePct: 0.62, decision: "LONG", score: 74 },
-];
-
 const MarketRibbon: React.FC = () => {
   const { headerData, fetchHeader, summary } = useDashboardStore();
   const activeMarket = useAppStore((s) => s.activeMarket);
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
-  const [indianPulse, setIndianPulse] = useState<IndianTickerItem[]>(DEFAULT_INDIAN_PULSE);
+  const [indianPulse, setIndianPulse] = useState<IndianTickerItem[]>([]) // no invented prices: empty until the first live poll;
 
   useEffect(() => {
     fetchHeader().catch(() => {});
@@ -102,6 +91,13 @@ const MarketRibbon: React.FC = () => {
                 // show CLOSED and keep the last signal as a tooltip.
                 const nse = checkIsIndianMarketOpen();
                 const nseClosed = !nse.isOpen && !nse.isPreMarket;
+                if (indianPulse.length === 0) {
+                  return (
+                    <div className="market-ribbon-item d-flex align-items-center px-4 py-1.5 shrink-0 font-mono h-100" style={{ color: "#94a3b8", fontSize: 11 }}>
+                      Loading live NSE / BSE prices…
+                    </div>
+                  );
+                }
                 return [...indianPulse, ...indianPulse].map((item, idx) => {
                   const isPositive = item.changePct >= 0;
                   const isLong = item.decision === "LONG";

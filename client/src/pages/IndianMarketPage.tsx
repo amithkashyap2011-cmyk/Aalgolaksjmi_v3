@@ -526,6 +526,8 @@ export default function IndianMarketPage() {
   // Spot price lookup
   const niftyStock = scanStocks.find((s) => s.symbol === "NIFTY50") || { price: 24530.20, change: 158.40, changePct: 0.65 };
   const bankNiftyStock = scanStocks.find((s) => s.symbol === "BANKNIFTY") || { price: 52140.50, change: 425.10, changePct: 0.82 };
+  // No invented fallback price for SENSEX: 0 renders as "—" until live data arrives.
+  const sensexStock: any = scanStocks.find((s) => s.symbol === "SENSEX") || { price: 0, change: 0, changePct: 0 };
 
   // Render Kite Simple Mode if selected
   if (terminalMode === "KITE_SIMPLE") {
@@ -1174,6 +1176,42 @@ export default function IndianMarketPage() {
             <span>Lot: 15</span>
             <span>PCR: {optionChain?.underlying === "BANKNIFTY" ? optionChain.pcr : "1.08"}</span>
             <span>Max Pain: {optionChain?.underlying === "BANKNIFTY" ? optionChain.maxPainStrike : "52000"}</span>
+          </div>
+        </div>
+
+        {/* SENSEX Spot */}
+        <div
+          onClick={() => setSelectedUnderlying("SENSEX")}
+          data-testid="indian-sensex-card"
+          style={{
+            background: selectedUnderlying === "SENSEX" ? "rgba(59,130,246,0.12)" : "#0f172a",
+            border: `1px solid ${selectedUnderlying === "SENSEX" ? "#3b82f6" : "rgba(255,255,255,0.06)"}`,
+            borderRadius: 12,
+            padding: "12px 16px",
+            cursor: "pointer",
+            transition: "all 0.15s",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8" }}>SENSEX (BSE)</span>
+              {marketSession && !marketSession.isOpen && (
+                <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 5px", borderRadius: 4, background: "rgba(245, 158, 11, 0.15)", color: "#f59e0b", border: "1px solid rgba(245, 158, 11, 0.3)" }}>
+                  FROZEN (CLOSE)
+                </span>
+              )}
+            </div>
+            <span style={{ fontSize: 11, color: sensexStock.change >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>
+              {sensexStock.price > 0 ? `${sensexStock.change >= 0 ? "+" : ""}${sensexStock.changePct}%` : ""}
+            </span>
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", marginTop: 4 }}>
+            {sensexStock.price > 0 ? formatINR(sensexStock.price) : "—"}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginTop: 6 }}>
+            <span>Lot: {sensexStock.lotSize ?? "—"}</span>
+            <span>PCR: {optionChain?.underlying === "SENSEX" ? optionChain.pcr : "—"}</span>
+            <span>Max Pain: {optionChain?.underlying === "SENSEX" ? optionChain.maxPainStrike : "—"}</span>
           </div>
         </div>
 
