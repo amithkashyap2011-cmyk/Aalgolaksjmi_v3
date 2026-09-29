@@ -29,7 +29,7 @@ const BayesianGateRecordSchema = new Schema<IBayesianGateRecord>(
 );
 
 export const BayesianGateRecord =
-  mongoose.models.BayesianGateRecord ||
+  mongoose.models?.BayesianGateRecord ||
   mongoose.model<IBayesianGateRecord>("BayesianGateRecord", BayesianGateRecordSchema);
 
 export default BayesianGateRecord;

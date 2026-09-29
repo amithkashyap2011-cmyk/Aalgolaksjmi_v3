@@ -41,6 +41,7 @@ import { TradingKillSwitch } from "../services/indianMarket/security/tradingKill
 import { OrderValidator } from "../services/indianMarket/security/orderValidator.js";
 import { DataIntegrityScanner } from "../services/indianMarket/security/dataIntegrityScanner.js";
 import { optionalAuth, type AuthRequest } from "../middleware/auth.js";
+import { buildEntryTelemetryReport } from "../services/indianMarket/entryTelemetry.js";
 import { requirePermission } from "../middleware/rbac.js";
 
 const router = express.Router();
@@ -267,6 +268,21 @@ router.get("/strategy-router", (req, res) => {
     const realIndicators = hasFreshRealIndicators(key);
     const analysis = StrategyRouter.classifyRegime(ticker.ltp, [], pcr, realIndicators ? { adx14: ticker.adx14, open: ticker.open } : undefined);
     res.json({ success: true, underlying, analysis, realIndicators });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/indian-market/entry-telemetry?days=14
+ * Post-entry telemetry: how entries' value moved at +5/15/30 min vs the final
+ * P&L, per strategy. Scoped to the caller's own account.
+ */
+router.get("/entry-telemetry", async (req: AuthRequest, res) => {
+  try {
+    const userId = resolveIndianUserId(req.userId || (req.query.userId as string));
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
+    res.json({ success: true, ...(await buildEntryTelemetryReport(userId, days)) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -13,6 +13,7 @@
  */
 
 import { chargesAtClose } from "./tradeCharges.js";
+import { observeEntry, forgetEntry } from "./entryTelemetry.js";
 import {
   AuthoritativePosition,
   AuthoritativeLedger,
@@ -157,6 +158,7 @@ export class AutoPilotStateMachine {
 
     // 2. Guard: If position is already closed, ignore
     if (tradeDoc.status === "CLOSED") {
+      forgetEntry(tradeId);
       return { ...defaultResult, newState: "CLOSED", exitOrderStatus: "FILLED", reason: "POSITION_ALREADY_CLOSED" };
     }
 
@@ -183,6 +185,8 @@ export class AutoPilotStateMachine {
     }
 
     const currentLtp = roundTo2(tick.ltp);
+    // Post-entry telemetry (fire-and-forget; never affects the exit decision).
+    observeEntry(tradeDoc, currentLtp);
     const isLong = tradeDoc.side === "BUY";
     const entryPrice = Number(tradeDoc.entryPrice || 0);
     let sl = Number(tradeDoc.sl || tradeDoc.stopLoss || 0);
