@@ -3,11 +3,11 @@ import { InstrumentMaster } from '../../src/services/indian/InstrumentMaster.js'
 
 describe('Indian Instrument Master & Contract Specifications', () => {
   it('correctly resolves lot size for NSE and BSE indices', () => {
-    expect(InstrumentMaster.getLotSize('NIFTY')).toBe(75);
-    expect(InstrumentMaster.getLotSize('NIFTY50')).toBe(75);
-    expect(InstrumentMaster.getLotSize('BANKNIFTY')).toBe(15);
-    expect(InstrumentMaster.getLotSize('FINNIFTY')).toBe(25);
-    expect(InstrumentMaster.getLotSize('SENSEX')).toBe(10);
+    expect(InstrumentMaster.getLotSize('NIFTY')).toBe(65);
+    expect(InstrumentMaster.getLotSize('NIFTY50')).toBe(65);
+    expect(InstrumentMaster.getLotSize('BANKNIFTY')).toBe(30);
+    expect(InstrumentMaster.getLotSize('FINNIFTY')).toBe(60);
+    expect(InstrumentMaster.getLotSize('SENSEX')).toBe(20);
   });
 
   it('correctly resolves strike intervals for indices and stocks', () => {

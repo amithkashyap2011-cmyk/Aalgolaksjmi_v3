@@ -17,7 +17,7 @@ import {
 } from "./strategyTypes.js";
 import { ExpiryResolver } from "./expiryResolver.js";
 import { StrikeSelector } from "./strikeSelector.js";
-import { optionContracts } from "./angelOne/optionContracts.js";
+import { optionContracts, exchangeLotSize } from "./angelOne/optionContracts.js";
 import { INDIAN_SYMBOLS } from "../../config/indianSymbols.js";
 
 export interface UnderlyingContractSpec {
@@ -37,7 +37,7 @@ export const UNDERLYING_SPECS: Record<string, UnderlyingContractSpec> = {
     name: "NIFTY 50 INDEX",
     cashExchange: "NSE",
     derivativesExchange: "NFO",
-    lotSize: 75,
+    lotSize: 65,
     tickSize: 0.05,
     strikeStep: 50,
     category: "INDEX",
@@ -47,7 +47,7 @@ export const UNDERLYING_SPECS: Record<string, UnderlyingContractSpec> = {
     name: "NIFTY 50 INDEX",
     cashExchange: "NSE",
     derivativesExchange: "NFO",
-    lotSize: 75,
+    lotSize: 65,
     tickSize: 0.05,
     strikeStep: 50,
     category: "INDEX",
@@ -57,7 +57,7 @@ export const UNDERLYING_SPECS: Record<string, UnderlyingContractSpec> = {
     name: "NIFTY BANK INDEX",
     cashExchange: "NSE",
     derivativesExchange: "NFO",
-    lotSize: 15,
+    lotSize: 30,
     tickSize: 0.05,
     strikeStep: 100,
     category: "INDEX",
@@ -67,7 +67,7 @@ export const UNDERLYING_SPECS: Record<string, UnderlyingContractSpec> = {
     name: "NIFTY FINANCIAL SERVICES INDEX",
     cashExchange: "NSE",
     derivativesExchange: "NFO",
-    lotSize: 25,
+    lotSize: 60,
     tickSize: 0.05,
     strikeStep: 50,
     category: "INDEX",
@@ -87,7 +87,7 @@ export const UNDERLYING_SPECS: Record<string, UnderlyingContractSpec> = {
     name: "BSE SENSEX INDEX",
     cashExchange: "BSE",
     derivativesExchange: "BFO",
-    lotSize: 10,
+    lotSize: 20,
     tickSize: 0.05,
     strikeStep: 100,
     category: "INDEX",
@@ -107,7 +107,7 @@ export const UNDERLYING_SPECS: Record<string, UnderlyingContractSpec> = {
     name: "Reliance Industries Ltd",
     cashExchange: "NSE",
     derivativesExchange: "NFO",
-    lotSize: 250,
+    lotSize: 500,
     tickSize: 0.05,
     strikeStep: 20,
     category: "STOCK",
@@ -117,7 +117,7 @@ export const UNDERLYING_SPECS: Record<string, UnderlyingContractSpec> = {
     name: "HDFC Bank Ltd",
     cashExchange: "NSE",
     derivativesExchange: "NFO",
-    lotSize: 550,
+    lotSize: 650,
     tickSize: 0.05,
     strikeStep: 10,
     category: "STOCK",
@@ -157,20 +157,23 @@ export class InstrumentMaster {
    */
   public static getSpec(underlying: UnderlyingSymbol): UnderlyingContractSpec {
     const norm = this.normalizeUnderlying(underlying);
+    const base = this.staticSpec(norm, underlying);
+    // Live exchange lot wins over the static table (which drifts).
+    const live = exchangeLotSize(norm);
+    return live && live !== base.lotSize ? { ...base, lotSize: live } : base;
+  }
+
+  private static staticSpec(norm: UnderlyingSymbol, underlying: UnderlyingSymbol): UnderlyingContractSpec {
     const spec = UNDERLYING_SPECS[norm] || UNDERLYING_SPECS[underlying];
     if (spec) return spec;
 
-    // Default fallback spec for equities. Lot size must be the exchange lot
-    // (Angel One contracts, then the static table) — a 1-lot fallback sized
-    // spreads to arbitrary quantities (e.g. 14,334 TATASTEEL) that no real
-    // order can carry.
-    const lotSize = optionContracts.getLotSize(norm) || INDIAN_SYMBOLS[norm]?.lotSize || 1;
+    // Default fallback spec for equities: the static symbol table's lot, else 1.
     return {
       underlying: norm,
       name: norm,
       cashExchange: "NSE",
       derivativesExchange: "NFO",
-      lotSize,
+      lotSize: INDIAN_SYMBOLS[norm]?.lotSize || 1,
       tickSize: 0.05,
       strikeStep: StrikeSelector.getStrikeStep(norm),
       category: "STOCK",

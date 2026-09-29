@@ -88,10 +88,10 @@ describe("PHASE 5: Production Security & Trading Safety Audit", () => {
       const validLot = OrderValidator.validateOrder({
         symbol: "NIFTY",
         side: "BUY",
-        quantity: 75, // 1 lot of 75
+        quantity: 65, // 1 lot of 65 (exchange lot; was 75 before the 2026 revision)
       });
       expect(validLot.isValid).toBe(true);
-      expect(validLot.sanitizedQuantity).toBe(75);
+      expect(validLot.sanitizedQuantity).toBe(65);
     });
 
     test("rejects quantities exceeding exchange freeze limits", () => {

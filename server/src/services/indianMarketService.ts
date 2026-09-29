@@ -204,7 +204,7 @@ export class IndianMarketService {
       decision,
       regimeAnalysis,
       priceINR: this.formatINR(close),
-      lotSize: config?.lotSize || InstrumentMaster.getSpec(normSym).lotSize,
+      lotSize: InstrumentMaster.getSpec(normSym).lotSize, // live exchange lot first
       optionChainSummary: optionChain
         ? {
             pcr: optionChain.pcr,

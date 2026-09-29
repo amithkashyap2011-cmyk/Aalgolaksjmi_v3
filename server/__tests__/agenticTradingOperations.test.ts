@@ -217,8 +217,11 @@ describe("PHASE 8 — Agentic AI Trading Operations & Safety Suite", () => {
 
       // Verify ExecutionAgent slices quantity into compliant blocks
       const executionAgent = new ExecutionAgent();
-      const slices = executionAgent.sliceOrderQuantity("NIFTY", 3600);
-      expect(slices).toEqual([1800, 1800]);
+      // Freeze limit 1,800 is not a multiple of the 65-unit lot, so each slice
+      // is capped at 27 lots = 1,755. 3,510 = 54 lots -> two compliant slices.
+      const slices = executionAgent.sliceOrderQuantity("NIFTY", 3510);
+      expect(slices).toEqual([1755, 1755]);
+      expect(slices.every((q) => q % 65 === 0 && q <= 1800)).toBe(true);
     });
   });
 

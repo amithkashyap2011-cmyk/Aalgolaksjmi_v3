@@ -208,4 +208,28 @@ class OptionContractRegistry {
 }
 
 export const optionContracts = new OptionContractRegistry();
+
+/**
+ * Normalises an app symbol (NIFTY50, "NIFTY 50", NIFTYBANK, ...) to the key the
+ * contract registry uses.
+ */
+export function normalizeContractUnderlying(symbol: string): string {
+  const s = String(symbol || "").toUpperCase().replace(/[\s_-]+/g, "");
+  if (s.startsWith("BANKNIFTY") || s === "NIFTYBANK") return "BANKNIFTY";
+  if (s.startsWith("FINNIFTY")) return "FINNIFTY";
+  if (s.startsWith("MIDCPNIFTY")) return "MIDCPNIFTY";
+  if (s.startsWith("SENSEX")) return "SENSEX";
+  if (s.startsWith("NIFTY")) return "NIFTY";
+  return s;
+}
+
+/**
+ * Current exchange lot size for an underlying, from the loaded Angel One
+ * contracts; undefined until they load. Every static lot table is only a
+ * fallback for this — the static values drifted badly (KOTAKBANK 400 vs 2000,
+ * TATASTEEL 5500 vs 2750), so readers must try this first.
+ */
+export function exchangeLotSize(symbol: string): number | undefined {
+  return optionContracts.getLotSize(normalizeContractUnderlying(symbol));
+}
 export const OPTION_UNDERLYINGS = Object.keys(UNDERLYINGS);

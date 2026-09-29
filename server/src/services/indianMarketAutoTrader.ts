@@ -114,7 +114,7 @@ export class IndianMarketAutoTrader {
               strategy: evalResult.decision.strategy,
               regime: evalResult.decision.regime,
               reasons: evalResult.decision.reasons || [],
-              lotSize: config.lotSize || 1,
+              lotSize: InstrumentMaster.getSpec(symbol as any).lotSize || config.lotSize || 1,
             } as AICandidate;
           }
           return null;

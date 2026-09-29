@@ -13,6 +13,7 @@
 import { INDIAN_SYMBOLS, SUPPORTED_INDIAN_SYMBOLS } from "../../../config/indianSymbols.js";
 import { TradeStatus } from "../../../models/Trade.js";
 import { IndianAuditLogger } from "../auditLogger.js";
+import { exchangeLotSize } from "../angelOne/optionContracts.js";
 
 export interface OrderValidationInput {
   symbol: string;
@@ -85,7 +86,8 @@ export class OrderValidator {
           config = INDIAN_SYMBOLS["NIFTY50"];
         }
       }
-      const lotSize = config?.lotSize || (input.symbol.includes("BANK") ? 15 : (input.symbol.includes("NIFTY") ? 25 : 1));
+      // Live exchange lot first (the static table drifts), then the static table.
+      const lotSize = exchangeLotSize(input.symbol) || config?.lotSize || (input.symbol.includes("BANK") ? 30 : (input.symbol.includes("NIFTY") ? 65 : 1));
 
       // Index derivative contracts must strictly conform to lot size multiples
       const isIndexDerivative = 

@@ -222,7 +222,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
       agentRole: "STRATEGY_AGENT",
       action: "BUY" as const,
       instrument: symbol,
-      quantity: 75, // 1 lot of NIFTY
+      quantity: 65, // 1 lot of NIFTY (exchange lot 65)
       price: 120.00,
       accountId: "guest-user",
       orderType: "LIMIT" as const,
@@ -232,7 +232,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
       model: "deterministic_quant_v3",
       policyVersion: "v3.2-prod",
     };
-    expect(proposal.quantity).toBe(75);
+    expect(proposal.quantity).toBe(65);
 
     // ── Step 6: Autonomous Portfolio Intelligence & Risk Budget Check ─
     const capital = AuthoritativeCapitalManager.getCapitalState();
@@ -246,13 +246,13 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
         underlying: "NIFTY",
         entryPrice: 120.00,
         stopLossPrice: 105.00,
-        lotSize: 75,
+        lotSize: 65,
         model: "FIXED_RISK",
       },
       capital.netEquity,
       100000
     );
-    expect(sizing.suggestedQuantity % 75).toBe(0);
+    expect(sizing.suggestedQuantity % 65).toBe(0);
 
     const sim = PreTradePortfolioSimulator.simulateTrade([], capital, reserves, {
       strategyId: signal.strategyId,
@@ -288,7 +288,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
     // ── Step 9: Order Validation & Idempotency Check ──────────────────
     const spec = InstrumentMaster.getSpec(symbol);
     expect(spec).toBeDefined();
-    expect(proposal.quantity % (spec?.lotSize || 75)).toBe(0);
+    expect(proposal.quantity % (spec?.lotSize || 65)).toBe(0);
 
     // ── Step 10: Broker Order Placement & Fill ────────────────────────
     const brokerOrderReq: BrokerOrderRequest = {
@@ -306,7 +306,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
     const fillResponse = await broker.placeOrder("guest-user", brokerOrderReq);
     expect(fillResponse.status).toBe("COMPLETE");
     expect(fillResponse.averagePrice).toBe(120.00);
-    expect(fillResponse.filledQty).toBe(75);
+    expect(fillResponse.filledQty).toBe(65);
     expect(broker.openBrokerPositions.has(symbol)).toBe(true);
 
     // ── Step 11: Position State Machine & Watermark Tracking ──────────
@@ -316,7 +316,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
       symbol,
       side: "BUY",
       entryPrice: 120.00,
-      quantity: 75,
+      quantity: 65,
       sl: 105.00,
       tp: 150.00,
       status: "OPEN",
@@ -337,8 +337,8 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
     expect(tradeDoc.meta.highestLtp).toBe(135.00);
 
     // ── Step 12: Unrealized P&L Evaluation ─────────────────────────────
-    const unrealizedAt135 = AuthoritativeLedger.calculateUnrealizedPnl("BUY", 120.00, 135.00, 75, 1);
-    expect(unrealizedAt135).toBe(1125.00); // (135 - 120) * 75
+    const unrealizedAt135 = AuthoritativeLedger.calculateUnrealizedPnl("BUY", 120.00, 135.00, 65, 1);
+    expect(unrealizedAt135).toBe(975.00); // (135 - 120) * 65
 
     // ── Step 13: Target Hit & Auto-Pilot Trigger ───────────────────────
     const tick150: TickData = { symbol, ltp: 150.00, timestamp: Date.now() };
@@ -352,18 +352,18 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
     expect(broker.ordersPlaced.length).toBe(2); // Entry BUY + Exit SELL
 
     // ── Step 15: Authoritative Ledger & Statutory Charges ──────────────
-    const grossPnl = AuthoritativeLedger.calculateRealizedPnl("BUY", 120.00, 150.00, 75, 1);
-    expect(grossPnl).toBe(2250.00); // (150 - 120) * 75
+    const grossPnl = AuthoritativeLedger.calculateRealizedPnl("BUY", 120.00, 150.00, 65, 1);
+    expect(grossPnl).toBe(1950.00); // (150 - 120) * 65
 
     // Cost model breakdown
-    const costBreakdown = IndianCostModel.calculateRoundTripCost("OPTION", 120.00, 150.00, 75, true);
+    const costBreakdown = IndianCostModel.calculateRoundTripCost("OPTION", 120.00, 150.00, 65, true);
     expect(costBreakdown.totalRoundTripCost).toBeGreaterThan(0);
     expect(costBreakdown.exitCost.stt).toBeGreaterThan(0); // STT applies on options sell
     expect(costBreakdown.exitCost.gst).toBeGreaterThan(0);
 
     const netRealizedPnl = costBreakdown.netPnl;
     expect(netRealizedPnl).toBeLessThan(grossPnl);
-    expect(netRealizedPnl).toBeGreaterThan(2100);
+    expect(netRealizedPnl).toBeGreaterThan(1800);
 
     // Update Authoritative Capital (gross realized P&L, charges deducted deterministically)
     AuthoritativeCapitalManager.updateCapital({
@@ -384,8 +384,8 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
     expect(posRecon.discrepancies.length).toBe(0);
 
     const internalOrders = [
-      { orderId: broker.ordersPlaced[0].tag || "entry", status: "COMPLETE", quantity: 75 },
-      { orderId: broker.ordersPlaced[1].tag || "exit", status: "COMPLETE", quantity: 75 },
+      { orderId: broker.ordersPlaced[0].tag || "entry", status: "COMPLETE", quantity: 65 },
+      { orderId: broker.ordersPlaced[1].tag || "exit", status: "COMPLETE", quantity: 65 },
     ];
     const brokerOrders = await broker.getOrders("guest-user");
     const orderRecon = await IndianReconciliationService.reconcileOrders(
@@ -394,8 +394,8 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
     );
     // Since brokerOrders has auto-generated order IDs, let's verify exact match with matching order IDs
     const matchedBrokerOrders = [
-      { orderId: broker.ordersPlaced[0].tag || "entry", status: "COMPLETE", quantity: 75 },
-      { orderId: broker.ordersPlaced[1].tag || "exit", status: "COMPLETE", quantity: 75 },
+      { orderId: broker.ordersPlaced[0].tag || "entry", status: "COMPLETE", quantity: 65 },
+      { orderId: broker.ordersPlaced[1].tag || "exit", status: "COMPLETE", quantity: 65 },
     ];
     const matchedRecon = await IndianReconciliationService.reconcileOrders(internalOrders, matchedBrokerOrders);
     expect(matchedRecon.matched).toBe(true);
@@ -435,7 +435,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
       symbol,
       side: "BUY",
       entryPrice: 300.00,
-      quantity: 30, // 2 lots of BANKNIFTY
+      quantity: 30, // 1 lot of BANKNIFTY (exchange lot 30)
       sl: 260.00,
       tp: 380.00,
       status: "OPEN",

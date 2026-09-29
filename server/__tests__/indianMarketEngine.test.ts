@@ -20,23 +20,23 @@ describe("Indian Derivatives Quantitative Trading Engine", () => {
   // ─── 1. INSTRUMENT MASTER & LOT SIZES ─────────────────────────────
   test("InstrumentMaster resolves dynamic specs and symbols for NIFTY and BANKNIFTY", () => {
     const niftySpec = InstrumentMaster.getSpec("NIFTY");
-    expect(niftySpec.lotSize).toBe(75);
+    expect(niftySpec.lotSize).toBe(65);
     expect(niftySpec.strikeStep).toBe(50);
     expect(niftySpec.derivativesExchange).toBe("NFO");
 
     const bankNiftySpec = InstrumentMaster.getSpec("BANKNIFTY");
-    expect(bankNiftySpec.lotSize).toBe(15);
+    expect(bankNiftySpec.lotSize).toBe(30);
     expect(bankNiftySpec.strikeStep).toBe(100);
 
     const testDate = new Date("2026-08-27T00:00:00.000Z");
     const callInst = InstrumentMaster.resolveInstrument("NIFTY", "CE", testDate, 24500);
     expect(callInst.tradingSymbol).toBe("NIFTY26AUG24500CE");
-    expect(callInst.lotSize).toBe(75);
+    expect(callInst.lotSize).toBe(65);
     expect(callInst.token).toBeDefined();
 
     const futInst = InstrumentMaster.resolveInstrument("BANKNIFTY", "FUTURE", testDate);
     expect(futInst.tradingSymbol).toBe("BANKNIFTY26AUGFUT");
-    expect(futInst.lotSize).toBe(15);
+    expect(futInst.lotSize).toBe(30);
   });
 
   // ─── 2. DYNAMIC EXPIRY RESOLVER ──────────────────────────────────
@@ -144,7 +144,7 @@ describe("Indian Derivatives Quantitative Trading Engine", () => {
       if (signal) {
         const trade = longFutStrat.constructTrade(signal, context, 500000, 1.0);
         expect(trade.instrument).toBe("FUTURE");
-        expect(trade.lotSize).toBe(75);
+        expect(trade.lotSize).toBe(65);
       }
     }
   });

@@ -5,6 +5,7 @@
  */
 
 import { IndianUnderlying, IndianInstrumentType, IndianExchange } from "./types.js";
+import { exchangeLotSize } from "../indianMarket/angelOne/optionContracts.js";
 
 export interface IndianInstrumentSpec {
   symbol: string;
@@ -25,7 +26,7 @@ export class InstrumentMaster {
       underlying: "NIFTY",
       name: "NIFTY 50 INDEX",
       exchange: "NFO",
-      lotSize: 75,
+      lotSize: 65,
       tickSize: 0.05,
       strikeInterval: 50,
       category: "INDEX_OPTION",
@@ -35,7 +36,7 @@ export class InstrumentMaster {
       underlying: "NIFTY",
       name: "NIFTY 50 INDEX",
       exchange: "NFO",
-      lotSize: 75,
+      lotSize: 65,
       tickSize: 0.05,
       strikeInterval: 50,
       category: "INDEX_OPTION",
@@ -45,7 +46,7 @@ export class InstrumentMaster {
       underlying: "BANKNIFTY",
       name: "NIFTY BANK INDEX",
       exchange: "NFO",
-      lotSize: 15,
+      lotSize: 30,
       tickSize: 0.05,
       strikeInterval: 100,
       category: "INDEX_OPTION",
@@ -55,7 +56,7 @@ export class InstrumentMaster {
       underlying: "FINNIFTY",
       name: "NIFTY FINANCIAL SERVICES",
       exchange: "NFO",
-      lotSize: 25,
+      lotSize: 60,
       tickSize: 0.05,
       strikeInterval: 50,
       category: "INDEX_OPTION",
@@ -75,7 +76,7 @@ export class InstrumentMaster {
       underlying: "SENSEX",
       name: "BSE SENSEX INDEX",
       exchange: "BFO",
-      lotSize: 10,
+      lotSize: 20,
       tickSize: 0.05,
       strikeInterval: 100,
       category: "INDEX_OPTION",
@@ -86,7 +87,7 @@ export class InstrumentMaster {
       underlying: "RELIANCE",
       name: "Reliance Industries Ltd",
       exchange: "NFO",
-      lotSize: 250,
+      lotSize: 500,
       tickSize: 0.05,
       strikeInterval: 20,
       category: "STOCK_OPTION",
@@ -96,7 +97,7 @@ export class InstrumentMaster {
       underlying: "HDFCBANK",
       name: "HDFC Bank Ltd",
       exchange: "NFO",
-      lotSize: 550,
+      lotSize: 650,
       tickSize: 0.05,
       strikeInterval: 10,
       category: "STOCK_OPTION",
@@ -116,7 +117,7 @@ export class InstrumentMaster {
       underlying: "TCS",
       name: "Tata Consultancy Services",
       exchange: "NFO",
-      lotSize: 175,
+      lotSize: 225,
       tickSize: 0.05,
       strikeInterval: 20,
       category: "STOCK_OPTION",
@@ -146,7 +147,7 @@ export class InstrumentMaster {
       underlying: "TATASTEEL",
       name: "Tata Steel Ltd",
       exchange: "NFO",
-      lotSize: 5500,
+      lotSize: 2750,
       tickSize: 0.05,
       strikeInterval: 1,
       category: "STOCK_OPTION",
@@ -156,7 +157,9 @@ export class InstrumentMaster {
   public static getSpec(underlying: string): IndianInstrumentSpec {
     const key = underlying.toUpperCase().replace(/\s+/g, "");
     const spec = this.specs.get(key) || this.specs.get("NIFTY");
-    return spec!;
+    // Live exchange lot wins over the static table (which drifts).
+    const live = exchangeLotSize(key);
+    return live && live !== spec!.lotSize ? { ...spec!, lotSize: live } : spec!;
   }
 
   public static getLotSize(underlying: string): number {

@@ -42,11 +42,11 @@ describe('Indian Pre-Trade Risk Manager & Guardrails', () => {
 
   it('correctly calculates position size rounded to exchange lot size', () => {
     // ₹100,000 capital, 2% risk = ₹2,000 risk capital
-    // SL distance = 20 pts. Lot size = 75. Loss per lot = 20 * 75 = ₹1,500.
-    // 2000 / 1500 = 1 lot = 75 shares.
+    // SL distance = 20 pts. Lot size = 65. Loss per lot = 20 * 65 = ₹1,300.
+    // 2000 / 1300 = 1 lot = 65 shares.
     const size = IndianRiskManager.calculatePositionSize('NIFTY', 100000, 24500, 24480, 0.02, 5);
     expect(size.lots).toBe(1);
-    expect(size.quantity).toBe(75);
-    expect(size.riskAmountINR).toBe(1500);
+    expect(size.quantity).toBe(65);
+    expect(size.riskAmountINR).toBe(1300);
   });
 });
