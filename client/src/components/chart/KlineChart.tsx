@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Highcharts from "highcharts/highstock";
 import HighchartsReact from "./highchartsReact";
-import { ensureHighchartsConfigured } from "../../lib/chartSetup";
+import { ensureHighchartsConfigured, VIEWER_TIMEZONE } from "../../lib/chartSetup";
 import * as api from "../../lib/api";
 import { socket, subscribeTicker, unsubscribeTicker, type TickData } from "../../lib/socket";
 import { RefreshCw, Activity } from "lucide-react";
@@ -153,7 +153,7 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
     chart: { backgroundColor: "#070d1a", animation: false, height },
     // Highstock is a separate bundle from the "highcharts" instance that
     // chartSetup configures, so local time has to be set here too.
-    time: { useUTC: false },
+    time: { timezone: VIEWER_TIMEZONE },
     accessibility: { enabled: false },
     credits: { enabled: false },
     rangeSelector: { enabled: false },

@@ -3,6 +3,14 @@ import "@testing-library/jest-dom/vitest";
 import React from "react";
 import { vi } from "vitest";
 
+/* ── jsdom has no CSS.supports(); Highcharts 13 calls it while loading. Real
+ *    browsers all provide it, so this only fills a test-environment gap. ── */
+const cssApi: any = (globalThis as any).CSS ?? {};
+if (typeof cssApi.supports !== "function") {
+  cssApi.supports = () => false;
+  (globalThis as any).CSS = cssApi;
+}
+
 /* ── Mock socket.io-client to prevent WebSocket connection errors ── */
 vi.mock("socket.io-client", () => ({
   io: vi.fn(() => ({
