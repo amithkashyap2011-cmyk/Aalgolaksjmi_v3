@@ -87,7 +87,7 @@ router.get("/registry", authGuard, async (req: AuthRequest, res) => {
 router.get("/strategy/:id", authGuard, async (req: AuthRequest, res) => {
   try {
     const registry = AutonomousStrategyRegistry.getInstance();
-    const strat = registry.getStrategy(req.params.id);
+    const strat = registry.getStrategy(req.params.id as string);
     if (!strat) {
       res.status(404).json({ success: false, error: "Strategy not found" });
       return;

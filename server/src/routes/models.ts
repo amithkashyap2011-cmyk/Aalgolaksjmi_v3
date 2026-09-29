@@ -351,7 +351,7 @@ router.get("/", async (req: AuthRequest, res) => {
 /* ── Toggle model enable/disable ── */
 router.post("/:id/toggle", authGuard, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const { enabled } = req.body;
     if (typeof enabled !== "boolean") {
       return res.status(400).json({ error: "enabled (boolean) is required" });
@@ -397,7 +397,7 @@ router.post("/:id/toggle", authGuard, async (req: AuthRequest, res) => {
 /* ── Update single model weight ── */
 router.post("/:id/weight", authGuard, adminGuard, (req, res) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params as { id: string };
     const { weight } = req.body;
     if (typeof weight !== "number" || weight < 0 || weight > 1) {
       return res.status(400).json({ error: "weight (0-1) is required" });

@@ -85,7 +85,7 @@ router.post("/emergency-stop", requirePermission("EMERGENCY_STOP"), (req: AuthRe
  */
 router.post("/agent/:agentId/toggle", requirePermission("CHANGE_STRATEGY"), (req: AuthRequest, res) => {
   try {
-    const { agentId } = req.params;
+    const { agentId } = req.params as { agentId: string };
     const { enabled } = req.body;
     const authorizedBy = req.userId || "ADMIN_USER";
 
@@ -107,7 +107,7 @@ router.post("/agent/:agentId/toggle", requirePermission("CHANGE_STRATEGY"), (req
  */
 router.post("/agent/:agentId/reset", requirePermission("RESET_SYSTEM"), (req: AuthRequest, res) => {
   try {
-    const { agentId } = req.params;
+    const { agentId } = req.params as { agentId: string };
     const authorizedBy = req.userId || "ADMIN_USER";
 
     const kernel = AgentKernel.getInstance();
@@ -142,7 +142,7 @@ router.get("/proposals", (_req, res) => {
  */
 router.post("/proposal/:proposalId/approve", requirePermission("APPROVE_AI_PROPOSAL"), (req: AuthRequest, res) => {
   try {
-    const { proposalId } = req.params;
+    const { proposalId } = req.params as { proposalId: string };
     const authorizedBy = req.userId || "OPERATOR";
 
     const kernel = AgentKernel.getInstance();
@@ -159,7 +159,7 @@ router.post("/proposal/:proposalId/approve", requirePermission("APPROVE_AI_PROPO
  */
 router.post("/proposal/:proposalId/reject", requirePermission("APPROVE_AI_PROPOSAL"), (req: AuthRequest, res) => {
   try {
-    const { proposalId } = req.params;
+    const { proposalId } = req.params as { proposalId: string };
     const reason = req.body?.reason || "Rejected by operator";
     const authorizedBy = req.userId || "OPERATOR";
 

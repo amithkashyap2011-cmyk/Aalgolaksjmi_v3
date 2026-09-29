@@ -209,6 +209,11 @@ app.use(["/trading/cancel", "/api/trading/cancel"], orderCancellationLimiter);
 app.use(["/agent-control", "/api/agent-control", "/agent", "/api/agent"], administrativeMutationLimiter);
 
 app.use(express.json());
+// Express 5 compatibility: req.body is undefined (not {}) when a request carries
+// no body, and ~45 handlers read req.body.<field> directly; the default query
+// parser also stopped parsing nested keys (a[b]=c). Keep the Express 4 behaviour.
+app.use((req, _res, next) => { if (req.body === undefined) req.body = {}; next(); });
+app.set("query parser", "extended");
 
 // Was no operational metrics anywhere — no visibility into memory/CPU/
 // event-loop trends, request latency, or open-position counts without
