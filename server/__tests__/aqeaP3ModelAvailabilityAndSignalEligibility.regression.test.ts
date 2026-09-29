@@ -75,15 +75,32 @@ describe("AQEA 2026-27 P3 Model Availability & Signal Eligibility Regression Sui
 
   // TC03: model timeout classified correctly
   test("TC03: model timeout classified correctly", async () => {
-    const pred = await ModelInferenceBridge.executeRemoteInference({
-      endpoint: "/research/predict/mamba",
-      payload: { sequence: [] },
-      modelName: "TIMEOUT_MODEL",
-      modelVersion: "1.0.0",
-      architecture: "TEST_TIMEOUT",
-      isTrained: true,
-      timeoutMs: 1 // Instant timeout
-    });
+    // A 1ms timeout raced a real connection attempt: when the socket was refused
+    // in the same millisecond (before the abort timer fired), the call was
+    // classified UNAVAILABLE and this test flaked under full-suite load. Hang
+    // fetch until aborted so the timeout path is deterministic.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((_url: any, init?: any) => new Promise((_res, rej) => {
+      init?.signal?.addEventListener("abort", () => {
+        const e: any = new Error("This operation was aborted");
+        e.name = "AbortError";
+        rej(e);
+      });
+    })) as any;
+    let pred: any;
+    try {
+      pred = await ModelInferenceBridge.executeRemoteInference({
+        endpoint: "/research/predict/mamba",
+        payload: { sequence: [] },
+        modelName: "TIMEOUT_MODEL",
+        modelVersion: "1.0.0",
+        architecture: "TEST_TIMEOUT",
+        isTrained: true,
+        timeoutMs: 1 // Instant timeout
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
     expect(pred.inferenceMode).toBe("UNAVAILABLE");
     expect(pred.error).toContain("MODEL_SERVICE_TIMEOUT");
   });

@@ -255,7 +255,7 @@ export class AutoPilotStateMachine {
           tradeDoc.meta.trailingStage = trailStage;
           sl = candidateSl;
           try {
-            if (typeof tradeDoc.save === "function") await tradeDoc.save();
+            if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
           } catch {}
         }
       } else {
@@ -292,7 +292,7 @@ export class AutoPilotStateMachine {
           tradeDoc.meta.trailingStage = trailStage;
           sl = candidateSl;
           try {
-            if (typeof tradeDoc.save === "function") await tradeDoc.save();
+            if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
           } catch {}
         }
       }
@@ -335,7 +335,7 @@ export class AutoPilotStateMachine {
       tradeDoc.meta.highestLtp = Math.max(tradeDoc.meta.highestLtp || tradeDoc.entryPrice, currentLtp);
       tradeDoc.markModified?.("meta");
       try {
-        if (typeof tradeDoc.save === "function") await tradeDoc.save();
+        if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
       } catch (err: any) {
         // Safe degrade: database transient failure does not interrupt tick processing
       }
@@ -412,7 +412,7 @@ export class AutoPilotStateMachine {
       if (!tradeDoc.meta) tradeDoc.meta = {};
       tradeDoc.meta.triggerStatus = "HIT";
       tradeDoc.meta.exitOrderStatus = "NONE";
-      if (typeof tradeDoc.save === "function") await tradeDoc.save();
+      if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
       return {
         tradeId,
         symbol,
@@ -431,7 +431,7 @@ export class AutoPilotStateMachine {
       tradeDoc.meta.isExitPending = true;
       tradeDoc.meta.exitOrderStatus = "SUBMITTED";
       tradeDoc.meta.exitIntentTime = new Date().toISOString();
-      if (typeof tradeDoc.save === "function") await tradeDoc.save();
+      if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
 
       const origQty = tradeDoc.origQty || tradeDoc.quantity || 0;
       const alreadyFilled = tradeDoc.meta?.filledExitQty || 0;
@@ -478,7 +478,7 @@ export class AutoPilotStateMachine {
         tradeDoc.meta.max_retry_count = 3;
         tradeDoc.meta.retry_backoff = Math.min(60000, 1000 * Math.pow(2, tradeDoc.meta.retry_count));
         tradeDoc.meta.rejectionReason = orderRes.rejectionReason || "BROKER_REJECTED";
-        if (typeof tradeDoc.save === "function") await tradeDoc.save();
+        if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
 
         IndianAuditLogger.log({
           eventType: "EXIT_ORDER_REJECTED",
@@ -602,7 +602,7 @@ export class AutoPilotStateMachine {
         tradeDoc.closedAt = new Date();
         tradeDoc.meta.isExitPending = false;
         tradeDoc.meta.exitOrderStatus = "FILLED";
-        if (typeof tradeDoc.save === "function") await tradeDoc.save();
+        if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
 
         if (paper && typeof paper.removePosition === "function") {
           // Positions are keyed by the trade's INDIAN_* accountType — removing
@@ -645,7 +645,7 @@ export class AutoPilotStateMachine {
         tradeDoc.quantity = remainingQty;
         tradeDoc.meta.isExitPending = false;
         tradeDoc.meta.exitOrderStatus = "PARTIALLY_FILLED";
-        if (typeof tradeDoc.save === "function") await tradeDoc.save();
+        if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
 
         IndianAuditLogger.log({
           eventType: "EXIT_PARTIAL_FILL",
@@ -685,7 +685,7 @@ export class AutoPilotStateMachine {
       tradeDoc.meta.isExitPending = false;
       tradeDoc.meta.exitOrderStatus = "REJECTED";
       try {
-        if (typeof tradeDoc.save === "function") await tradeDoc.save();
+        if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
       } catch {}
 
       IndianAuditLogger.log({
@@ -730,6 +730,7 @@ export class AutoPilotStateMachine {
         trade.meta.exitOrderStatus = "CANCELLED";
         trade.meta.recoveryNote = "Reset to OPEN during startup reconciliation";
       }
+      trade.markModified?.("meta");
       await trade.save();
       recoveredCount++;
     }

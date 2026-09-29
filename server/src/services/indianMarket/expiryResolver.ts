@@ -136,8 +136,8 @@ export class ExpiryResolver {
     // NIFTY weeklies are Tuesdays and BANKNIFTY/FINNIFTY/stocks are monthly.
     const real = optionContracts.getExpiries(underlying, referenceDate);
     if (real.length > 0) {
-      const toResult = (e: string) => ({ expiry: e, date: expiryCloseTime(e), isMonthly: optionContracts.isMonthlyExpiry(underlying, e) });
-      const monthlies = real.filter((e) => optionContracts.isMonthlyExpiry(underlying, e));
+      const toResult = (e: string) => ({ expiry: e, date: expiryCloseTime(e), isMonthly: optionContracts.isMonthlyExpiry(underlying, e, referenceDate) });
+      const monthlies = real.filter((e) => optionContracts.isMonthlyExpiry(underlying, e, referenceDate));
       switch (config.type) {
         case "NEXT_EXPIRY": return toResult(real[1] ?? real[0]);
         case "MONTHLY": return toResult(monthlies[0] ?? real[0]);

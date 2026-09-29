@@ -34,6 +34,7 @@ export class MetaAlphaPerformanceTracker {
         
         if (!shadowDecision.meta) shadowDecision.meta = {};
         shadowDecision.meta.isCorrect = isCorrect;
+        shadowDecision.markModified("meta");
         
         await shadowDecision.save();
         console.log(`[META_ALPHA_TRACKER] Recorded outcome for ${symbol}: ${outcome} (PnL: ${pnl})`);

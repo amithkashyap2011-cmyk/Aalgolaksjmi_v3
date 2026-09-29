@@ -120,7 +120,8 @@ export class RiskEngine {
        return this.reject("PORTFOLIO_EXPOSURE_LIMIT_REACHED");
     }
 
-    // 4. Daily / Weekly / Monthly Drawdown Checks
+    // 4. Daily / Weekly / Monthly Drawdown Checks (denominator = equity, not free cash:
+    // dividing by free cash overstated drawdown as capital got deployed).
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const weekStart = new Date(todayStart);
@@ -156,7 +157,7 @@ export class RiskEngine {
     const openUnrealizedLoss = openTrades.reduce((s, t) => s + Math.min(0, (t.pnl ?? 0)), 0);
 
     const dailyPnl = closedToday.reduce((s, t) => s + (t.pnl ?? 0), 0) + openUnrealizedLoss;
-    if (dailyPnl < 0 && Math.abs(dailyPnl) / effectiveBalance > AQEA_CONFIG.DAILY_DRAWDOWN_LIMIT) {
+    if (dailyPnl < 0 && Math.abs(dailyPnl) / equity > AQEA_CONFIG.DAILY_DRAWDOWN_LIMIT) {
        return this.reject("DAILY_DRAWDOWN_BREACH");
     }
 
@@ -164,13 +165,13 @@ export class RiskEngine {
     const monthlyPnl = closedThisMonth.reduce((s, t) => s + (t.pnl ?? 0), 0);
     const allTimePnl = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
 
-    if (weeklyPnl < 0 && Math.abs(weeklyPnl) / effectiveBalance > AQEA_CONFIG.WEEKLY_DRAWDOWN_LIMIT) {
+    if (weeklyPnl < 0 && Math.abs(weeklyPnl) / equity > AQEA_CONFIG.WEEKLY_DRAWDOWN_LIMIT) {
        return this.reject("WEEKLY_DRAWDOWN_BREACH");
     }
-    if (monthlyPnl < 0 && Math.abs(monthlyPnl) / effectiveBalance > AQEA_CONFIG.MONTHLY_DRAWDOWN_LIMIT) {
+    if (monthlyPnl < 0 && Math.abs(monthlyPnl) / equity > AQEA_CONFIG.MONTHLY_DRAWDOWN_LIMIT) {
        return this.reject("MONTHLY_DRAWDOWN_BREACH");
     }
-    if (allTimePnl < 0 && Math.abs(allTimePnl) / effectiveBalance > AQEA_CONFIG.PORTFOLIO_DRAWDOWN_LIMIT) {
+    if (allTimePnl < 0 && Math.abs(allTimePnl) / equity > AQEA_CONFIG.PORTFOLIO_DRAWDOWN_LIMIT) {
        return this.reject("PORTFOLIO_DRAWDOWN_BREACH");
     }
 

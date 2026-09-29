@@ -153,9 +153,9 @@ class OptionContractRegistry {
   }
 
   /** True when `expiry` is the last listed expiry of its calendar month. */
-  isMonthlyExpiry(underlying: string, expiry: string): boolean {
+  isMonthlyExpiry(underlying: string, expiry: string, now: Date = new Date()): boolean {
     const month = expiry.slice(0, 7);
-    const sameMonth = this.getExpiries(underlying).filter((e) => e.startsWith(month));
+    const sameMonth = this.getExpiries(underlying, now).filter((e) => e.startsWith(month));
     return sameMonth[sameMonth.length - 1] === expiry;
   }
 
