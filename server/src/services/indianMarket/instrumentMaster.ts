@@ -18,6 +18,7 @@ import {
 import { ExpiryResolver } from "./expiryResolver.js";
 import { StrikeSelector } from "./strikeSelector.js";
 import { optionContracts } from "./angelOne/optionContracts.js";
+import { INDIAN_SYMBOLS } from "../../config/indianSymbols.js";
 
 export interface UnderlyingContractSpec {
   underlying: UnderlyingSymbol;
@@ -159,13 +160,17 @@ export class InstrumentMaster {
     const spec = UNDERLYING_SPECS[norm] || UNDERLYING_SPECS[underlying];
     if (spec) return spec;
 
-    // Default fallback spec for equities
+    // Default fallback spec for equities. Lot size must be the exchange lot
+    // (Angel One contracts, then the static table) — a 1-lot fallback sized
+    // spreads to arbitrary quantities (e.g. 14,334 TATASTEEL) that no real
+    // order can carry.
+    const lotSize = optionContracts.getLotSize(norm) || INDIAN_SYMBOLS[norm]?.lotSize || 1;
     return {
       underlying: norm,
       name: norm,
       cashExchange: "NSE",
       derivativesExchange: "NFO",
-      lotSize: 1,
+      lotSize,
       tickSize: 0.05,
       strikeStep: StrikeSelector.getStrikeStep(norm),
       category: "STOCK",
@@ -241,12 +246,15 @@ export class InstrumentMaster {
   ): InstrumentMasterItem {
     const spec = this.getSpec(underlying);
     const expiryStr = ExpiryResolver.formatDate(expiryDate);
-    const strikeVal = strike ? Math.round(strike) : 0;
+    // Keep listed half-point strikes (e.g. TATASTEEL 187.5) intact for the real
+    // contract lookup; rounding to 188 missed the contract and fell back to a
+    // synthetic symbol/token with lot size 1. Only the synthetic symbol rounds.
+    const strikeVal = strike ? Math.round(strike * 100) / 100 : 0;
     const tradingSymbol = this.formatTradingSymbol(
       spec.underlying,
       expiryDate,
       instrumentType,
-      strikeVal
+      Math.round(strikeVal)
     );
     const token = this.generateToken(spec.derivativesExchange, tradingSymbol);
 

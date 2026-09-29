@@ -57,6 +57,10 @@ export function tradeDirection(t: any): "BULL" | "BEAR" | "NEUTRAL" {
   return "NEUTRAL";
 }
 
+const POST_LOSS_COOLDOWN_MIN = 45;
+const MIN_SPREAD_DEBIT = 1.0;
+const MIN_SPREAD_STOP_DISTANCE = 0.4;
+
 export class IndianRiskManager {
   // In-memory trade cooldown & duplicate fingerprints
   private static recentTradeFingerprints = new Map<string, number>();
@@ -281,6 +285,18 @@ export class IndianRiskManager {
           return "CONFLICTING_OPEN_POSITION";
         }
       }
+      // Post-stop cooldown per underlying + direction (any strategy/strike). The
+      // in-memory strike cooldown is wiped on restart and only matches the exact
+      // strike, so KOTAKBANK re-entered the same trend seconds after a stop
+      // (2026-09-29) and was stopped again. Persisted, so it survives restarts.
+      if (dir !== "NEUTRAL") {
+        const lossSince = new Date(Date.now() - POST_LOSS_COOLDOWN_MIN * 60_000);
+        const recentLosses = await Trade.find(
+          { userId: base.userId, accountType: base.accountType, underlying: trade.underlying, status: "CLOSED", closedAt: { $gte: lossSince }, netPnl: { $lt: 0 } },
+          { legs: 1, side: 1, position: 1 },
+        ).lean();
+        if (recentLosses.some((t) => tradeDirection(t) === dir)) return "POST_LOSS_COOLDOWN_ACTIVE";
+      }
       // Trade has no createdAt (no schema timestamps); the ObjectId carries it.
       const since = mongoose.Types.ObjectId.createFromTime(Math.floor((Date.now() - cooldownMinutes * 60_000) / 1000));
       if (await Trade.exists({ ...base, _id: { $gte: since }, status: { $ne: "FAILED" } })) {
@@ -453,6 +469,21 @@ export class IndianRiskManager {
       return { approved: false, rejectionReason: "INSUFFICIENT_MARGIN", checks };
     }
     checks["MARGIN_CHECK"] = { passed: true, message: "Margin check passed." };
+
+    // 5b. SPREAD ECONOMICS: tiny-premium debit spreads have stops a few paise
+    // away — inside normal bid/ask noise — and are sized into huge quantities
+    // (TATASTEEL ₹0.37 debit, INFY ₹0.25: both stopped in 4 minutes, ~₹2.1k each).
+    if (trade.legs?.length > 1 && trade.position === "LONG" && trade.entryPrice > 0) {
+      const stopDistance = trade.entryPrice - (trade.stopLoss ?? 0);
+      if (trade.entryPrice < MIN_SPREAD_DEBIT || stopDistance < MIN_SPREAD_STOP_DISTANCE) {
+        checks["SPREAD_ECONOMICS"] = {
+          passed: false,
+          message: `Debit ₹${trade.entryPrice} / stop distance ₹${stopDistance.toFixed(2)} below minimum (₹${MIN_SPREAD_DEBIT} / ₹${MIN_SPREAD_STOP_DISTANCE}).`,
+        };
+        return { approved: false, rejectionReason: "SPREAD_DEBIT_TOO_SMALL", checks };
+      }
+    }
+    checks["SPREAD_ECONOMICS"] = { passed: true, message: "Spread debit/stop distance adequate." };
 
     // 6. POST-LOSS STRIKE COOLDOWN CHECK
     // If this specific strike/symbol recently took a Stop-Loss, lock it out for 45 minutes

@@ -408,8 +408,8 @@ export class IndianMarketAutoTrader {
         // asymmetry here was minting INR on every close.
         meta: { marginDebitedINR: requiredMargin, entryPriceSource: priced.source },
         autoCloseStatus: "ARMED",
-        entrySource: "AI_ENSEMBLE_DERIVATIVES_ENGINE",
-        decisionPath: ["AI_ENSEMBLE_PIPELINE", trade.strategy, regimeAnalysis.regime],
+        entrySource: "RULE_BASED_DERIVATIVES_ENGINE",
+        decisionPath: ["RULE_BASED_PIPELINE", trade.strategy, regimeAnalysis.regime],
         authorizedVotes: {
           strategy: trade.strategy,
           // Real facts about this entry only. It recorded hardcoded
@@ -421,6 +421,7 @@ export class IndianMarketAutoTrader {
         shadowVotes: {},
         coreScore: trade.tradeScore,
         finalScore: trade.tradeScore,
+        // Regime-rule score (fixed per strategy/regime), not a model probability.
         aiConfidence: trade.tradeScore,
         legs: trade.legs,
       });
