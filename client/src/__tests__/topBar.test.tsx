@@ -9,7 +9,7 @@ function renderTopBar(onMenuClick = vi.fn()) {
   return {
     onMenuClick,
     ...render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <TopBar onMenuClick={onMenuClick} />
       </MemoryRouter>
     ),

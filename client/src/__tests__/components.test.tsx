@@ -42,7 +42,7 @@ import SettingsPage from "../pages/SettingsPage";
 /* Helper: wraps component in MemoryRouter for routing context */
 function wrap(ui: React.ReactElement) {
   return render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       {ui}
     </MemoryRouter>
   );

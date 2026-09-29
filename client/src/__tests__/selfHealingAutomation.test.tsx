@@ -75,7 +75,7 @@ describe("Self-Healing Test Automation & Visual Verification", { timeout: 15000 
 
   test("Self-Healing Automation: Locates nav tabs when primary ID changes", () => {
     const { container } = render(
-      <MemoryRouter initialEntries={["/"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={["/"]}>
         <DashboardPage />
       </MemoryRouter>
     );
@@ -93,7 +93,7 @@ describe("Self-Healing Test Automation & Visual Verification", { timeout: 15000 
 
   test("Visual Testing: Dashboard UI layout structure & theme tokens", () => {
     const { container } = render(
-      <MemoryRouter initialEntries={["/"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={["/"]}>
         <DashboardPage />
       </MemoryRouter>
     );
@@ -108,7 +108,7 @@ describe("Self-Healing Test Automation & Visual Verification", { timeout: 15000 
     let container: HTMLElement;
     await act(async () => {
       const res = render(
-        <MemoryRouter initialEntries={["/indian-market"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter initialEntries={["/indian-market"]}>
           <IndianMarketPage />
         </MemoryRouter>
       );
@@ -127,7 +127,7 @@ describe("Self-Healing Test Automation & Visual Verification", { timeout: 15000 
 
   test("Predictive Test Execution: History Page P&L filtering impact", () => {
     const { container } = render(
-      <MemoryRouter initialEntries={["/history"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={["/history"]}>
         <HistoryPage />
       </MemoryRouter>
     );
@@ -137,7 +137,7 @@ describe("Self-Healing Test Automation & Visual Verification", { timeout: 15000 
 
   test("Predictive Test Execution: Settings Page tab switches & form state", () => {
     const { container } = render(
-      <MemoryRouter initialEntries={["/settings"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={["/settings"]}>
         <SettingsPage />
       </MemoryRouter>
     );
