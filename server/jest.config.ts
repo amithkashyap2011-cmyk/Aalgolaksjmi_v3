@@ -28,6 +28,9 @@ const config: Config = {
         jsc: {
           parser: { syntax: "typescript" },
           target: "es2022",
+          // Keep `with { type: "json" }` on JSON imports; without it swc drops
+          // the attribute and Jest warns that this becomes a hard error.
+          experimental: { keepImportAttributes: true },
         },
       },
     ],

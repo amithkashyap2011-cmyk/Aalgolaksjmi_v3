@@ -9,7 +9,7 @@
  */
 
 import { WalkForwardRun } from "../../models/WalkForwardRun.js";
-import walkForwardConfig from "../../config/walkforward.config.json" assert { type: "json" };
+import walkForwardConfig from "../../config/walkforward.config.json" with { type: "json" };
 
 export class WalkForwardEngine {
   /**
