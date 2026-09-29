@@ -1635,7 +1635,9 @@ export default function ZerodhaKiteTerminal({
                         <td style={{ textAlign: "right" }}>
                           <button
                             onClick={() => {
-                              const stock = DEFAULT_INDIAN_WATCHLIST.find((s) => s.symbol === h.symbol);
+                              // Live-merged watchlist, not the hard-coded defaults: those carry sample
+                              // prices that would be pre-filled into the order ticket.
+                              const stock = watchlist.find((s) => s.symbol === h.symbol);
                               if (stock) handleOpenOrder(stock, "BUY");
                             }}
                             style={{

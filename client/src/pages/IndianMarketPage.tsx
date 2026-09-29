@@ -524,8 +524,9 @@ export default function IndianMarketPage() {
   };
 
   // Spot price lookup
-  const niftyStock = scanStocks.find((s) => s.symbol === "NIFTY50") || { price: 24530.20, change: 158.40, changePct: 0.65 };
-  const bankNiftyStock = scanStocks.find((s) => s.symbol === "BANKNIFTY") || { price: 52140.50, change: 425.10, changePct: 0.82 };
+  // No invented fallback prices: 0 renders as "—" until live scan data arrives.
+  const niftyStock: any = scanStocks.find((s) => s.symbol === "NIFTY50") || { price: 0, change: 0, changePct: 0 };
+  const bankNiftyStock: any = scanStocks.find((s) => s.symbol === "BANKNIFTY") || { price: 0, change: 0, changePct: 0 };
   // No invented fallback price for SENSEX: 0 renders as "—" until live data arrives.
   const sensexStock: any = scanStocks.find((s) => s.symbol === "SENSEX") || { price: 0, change: 0, changePct: 0 };
 
@@ -1131,16 +1132,16 @@ export default function IndianMarketPage() {
               )}
             </div>
             <span style={{ fontSize: 11, color: niftyStock.change >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>
-              {niftyStock.change >= 0 ? "+" : ""}{niftyStock.changePct}%
+              {niftyStock.price > 0 ? `${niftyStock.change >= 0 ? "+" : ""}${niftyStock.changePct}%` : ""}
             </span>
           </div>
           <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", marginTop: 4 }}>
-            {formatINR(niftyStock.price)}
+            {niftyStock.price > 0 ? formatINR(niftyStock.price) : "—"}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginTop: 6 }}>
-            <span>Lot: 75</span>
-            <span>PCR: {optionChain?.underlying === "NIFTY" ? optionChain.pcr : "1.12"}</span>
-            <span>Max Pain: {optionChain?.underlying === "NIFTY" ? optionChain.maxPainStrike : "24500"}</span>
+            <span>Lot: {niftyStock.lotSize ?? "—"}</span>
+            <span>PCR: {optionChain?.underlying === "NIFTY" ? optionChain.pcr : "—"}</span>
+            <span>Max Pain: {optionChain?.underlying === "NIFTY" ? optionChain.maxPainStrike : "—"}</span>
           </div>
         </div>
 
@@ -1166,16 +1167,16 @@ export default function IndianMarketPage() {
               )}
             </div>
             <span style={{ fontSize: 11, color: bankNiftyStock.change >= 0 ? "#34d399" : "#f87171", fontWeight: 700 }}>
-              {bankNiftyStock.change >= 0 ? "+" : ""}{bankNiftyStock.changePct}%
+              {bankNiftyStock.price > 0 ? `${bankNiftyStock.change >= 0 ? "+" : ""}${bankNiftyStock.changePct}%` : ""}
             </span>
           </div>
           <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", marginTop: 4 }}>
-            {formatINR(bankNiftyStock.price)}
+            {bankNiftyStock.price > 0 ? formatINR(bankNiftyStock.price) : "—"}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#64748b", marginTop: 6 }}>
-            <span>Lot: 15</span>
-            <span>PCR: {optionChain?.underlying === "BANKNIFTY" ? optionChain.pcr : "1.08"}</span>
-            <span>Max Pain: {optionChain?.underlying === "BANKNIFTY" ? optionChain.maxPainStrike : "52000"}</span>
+            <span>Lot: {bankNiftyStock.lotSize ?? "—"}</span>
+            <span>PCR: {optionChain?.underlying === "BANKNIFTY" ? optionChain.pcr : "—"}</span>
+            <span>Max Pain: {optionChain?.underlying === "BANKNIFTY" ? optionChain.maxPainStrike : "—"}</span>
           </div>
         </div>
 
