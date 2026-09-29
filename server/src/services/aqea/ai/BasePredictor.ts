@@ -4,6 +4,7 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { checkExecutionDeadline, ExecutionDeadlineError } from "../../../utils/executionDeadline.js";
 import { IAIPredictor } from "./IAIPredictor.js";
 import { AIPrediction, PredictorHealth, AIDirection } from "./types.js";
 import { FeatureVector } from "../featureStore.js";
@@ -34,6 +35,7 @@ export abstract class BasePredictor implements IAIPredictor {
    * Orchestrates the prediction lifecycle.
    */
   public async predict(features: FeatureVector): Promise<AIPrediction> {
+    checkExecutionDeadline();
     const start = Date.now();
     this.predictionCount++;
     this.lastPredictionTime = new Date();
@@ -54,7 +56,9 @@ export abstract class BasePredictor implements IAIPredictor {
     }
 
     try {
+      checkExecutionDeadline();
       const result = await this.runInference(features);
+      checkExecutionDeadline();
       const latency = Date.now() - start;
       this.lastLatencyMs = latency;
       this.totalLatencyMs += latency;
@@ -100,6 +104,7 @@ export abstract class BasePredictor implements IAIPredictor {
         meta: { ...result.meta, prediction_id }
       };
     } catch (err) {
+      if (err instanceof ExecutionDeadlineError) throw err;
       this.errorCount++;
       const latency = Date.now() - start;
       this.lastLatencyMs = latency;
@@ -128,11 +133,13 @@ export abstract class BasePredictor implements IAIPredictor {
         err.message.includes("Failed") ||
         err.message.includes("ECONNREFUSED") ||
         err.message.includes("connection reset") ||
-        err.message.includes("MODEL_SERVICE_UNAVAILABLE")
+        err.message.includes("MODEL_SERVICE_UNAVAILABLE") ||
+        err.name === "AbortError" || err.name === "TimeoutError" ||
+        /timeout|timed out|aborted|fetch failed|ENOTFOUND|EAI_AGAIN|ECONNRESET/i.test(err.message)
       );
 
       return {
-        direction: fallbackDir,
+        direction: isOfflineErr ? "HOLD" : fallbackDir,
         confidence: isOfflineErr ? 0 : parseFloat(fallbackConf.toFixed(2)),
         probability: isOfflineErr ? 0 : parseFloat(fallbackConf.toFixed(2)),
         predictor: this.modelName,
