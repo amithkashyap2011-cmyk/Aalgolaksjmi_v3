@@ -195,6 +195,10 @@ export class AutoPilotStateMachine {
       const lowestLtp = Math.min(tradeDoc.meta.lowestLtp || entryPrice, currentLtp);
       tradeDoc.meta.highestLtp = highestLtp;
       tradeDoc.meta.lowestLtp = lowestLtp;
+      // `meta` is a Mixed field: without markModified, Mongoose never saves
+      // trailingStage / highestLtp, so the peak reset on every reload and exits
+      // lost their "TRAILING_STOP [stage]" label (2026-09-29 KOTAKBANK/TATAMOTORS).
+      tradeDoc.markModified?.("meta");
 
       if (isLong) {
         const peakGainPct = ((highestLtp - entryPrice) / entryPrice) * 100;
@@ -329,6 +333,7 @@ export class AutoPilotStateMachine {
       // Update high/low watermarks if needed
       if (!tradeDoc.meta) tradeDoc.meta = {};
       tradeDoc.meta.highestLtp = Math.max(tradeDoc.meta.highestLtp || tradeDoc.entryPrice, currentLtp);
+      tradeDoc.markModified?.("meta");
       try {
         if (typeof tradeDoc.save === "function") await tradeDoc.save();
       } catch (err: any) {
