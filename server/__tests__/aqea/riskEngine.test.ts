@@ -164,6 +164,39 @@ describe("AQEA Risk Engine", () => {
     expect(res.reason).toBe("DAILY_DRAWDOWN_BREACH");
   });
 
+  // 🛡️ Regression 2026-09-30: drawdown limits divided by FREE cash, which shrinks
+  // as capital is deployed, so a loss well inside the limit relative to real
+  // equity tripped the halt. Free USDT = 20,000; an open 0.1 BTC position locks
+  // 10,000 margin => equity 30,000. A 750 realized loss is 3.75% of free cash
+  // (old: breach) but 2.5% of equity (correct: within the 3% daily limit).
+  test("drawdown is measured against equity, not free cash (no false daily breach)", async () => {
+    const ctx: any = {
+      userId, symbol, mode: "PAPER", accountType: "FUTURES",
+      currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
+    };
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ quantity: 0.1, entryPrice: 100000, leverage: 1, pnl: 0, status: "OPEN" }]) }); // open
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -750, status: "CLOSED", closedAt: new Date() }]) }); // closed this month
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -750, status: "CLOSED" }]) }); // all-time
+
+    const res = await RiskEngine.validateTrade(ctx);
+    expect(String(res.reason)).not.toMatch(/DRAWDOWN_BREACH/);
+  });
+
+  test("drawdown still halts when the loss exceeds the limit relative to equity", async () => {
+    const ctx: any = {
+      userId, symbol, mode: "PAPER", accountType: "FUTURES",
+      currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
+    };
+    // 1,000 loss = 3.33% of the 30,000 equity => over the 3% daily limit.
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ quantity: 0.1, entryPrice: 100000, leverage: 1, pnl: 0, status: "OPEN" }]) });
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -1000, status: "CLOSED", closedAt: new Date() }]) });
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([{ pnl: -1000, status: "CLOSED" }]) });
+
+    const res = await RiskEngine.validateTrade(ctx);
+    expect(res.allowed).toBe(false);
+    expect(res.reason).toBe("DAILY_DRAWDOWN_BREACH");
+  });
+
   const FIXED_NOW = new Date("2026-01-29T12:00:00Z");
 
   test("Reject if weekly drawdown limit exceeded (but daily alone would not breach)", async () => {
