@@ -6,6 +6,8 @@
  * empirical base rates, and bounded posterior computation.
  */
 
+import mongoose from "mongoose";
+import { BayesianGateRecord } from "../../../models/BayesianGateRecord.js";
 import { Standardized15Features } from "../pipeline/FeaturePipeline.js";
 import { AnyRegime } from "../regimeEngine.js";
 
@@ -35,11 +37,55 @@ export interface BayesianEvaluationResult {
 export class AdaptiveBayesianGate {
   private static calibrationRecords: BayesianCalibrationRecord[] = [];
   private static MIN_EMPIRICAL_SAMPLES = 25;
+  private static MAX_RECORDS = 1000;
+  private static loadStarted = false;
+
+  /** Off under tests (deterministic in-memory behaviour) unless explicitly enabled. */
+  private static persistenceEnabled(): boolean {
+    return process.env.NODE_ENV !== "test" || process.env.BAYESIAN_GATE_PERSIST_IN_TEST === "1";
+  }
+
+  /**
+   * Fire-and-forget restore of persisted outcomes so the empirical base rate
+   * survives restarts (it used to reset to the analytical prior every boot).
+   * Records seen before the load finishes are kept and re-appended after it.
+   */
+  private static ensureLoadStarted(): void {
+    if (this.loadStarted || !this.persistenceEnabled()) return;
+    this.loadStarted = true;
+    void (async () => {
+      try {
+        if (mongoose.connection.readyState !== 1) { this.loadStarted = false; return; }
+        const rows = await BayesianGateRecord.find({}).sort({ timestamp: -1 }).limit(this.MAX_RECORDS).lean();
+        const restored: BayesianCalibrationRecord[] = rows.reverse().map((r: any) => ({
+          regime: String(r.regime),
+          realizedOutcome: r.realizedOutcome,
+          priorOdds: Number(r.priorOdds),
+          posteriorProbability: Number(r.posteriorProbability),
+          timestamp: Number(r.timestamp),
+        }));
+        const inMemory = this.calibrationRecords;
+        this.calibrationRecords = [...restored, ...inMemory].slice(-this.MAX_RECORDS);
+      } catch {
+        this.loadStarted = false; // retry on a later call; in-memory operation continues
+      }
+    })();
+  }
 
   public static recordOutcome(record: BayesianCalibrationRecord): void {
+    this.ensureLoadStarted();
     this.calibrationRecords.push(record);
-    if (this.calibrationRecords.length > 1000) {
+    if (this.calibrationRecords.length > this.MAX_RECORDS) {
       this.calibrationRecords.shift();
+    }
+    if (this.persistenceEnabled() && mongoose.connection.readyState === 1) {
+      BayesianGateRecord.create({
+        regime: record.regime,
+        realizedOutcome: record.realizedOutcome,
+        priorOdds: record.priorOdds,
+        posteriorProbability: record.posteriorProbability,
+        timestamp: record.timestamp,
+      }).catch(() => { /* persistence is best-effort */ });
     }
   }
 
@@ -54,6 +100,7 @@ export class AdaptiveBayesianGate {
     direction: "LONG" | "SHORT" | "HOLD" = "HOLD"
   ): BayesianEvaluationResult {
     const rStr = String(regime || "RANGING");
+    this.ensureLoadStarted();
 
     // Check if empirical calibration observations exist for this regime
     const regimeRecords = this.calibrationRecords.filter(r => r.regime === rStr);
