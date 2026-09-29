@@ -9,6 +9,15 @@ import { AIPredictionTelemetry, ModelAccuracyMetrics } from "../../models/AIPred
 // style) rather than a destructured named import.
 import * as binanceService from "../binanceService.js";
 
+/**
+ * Only Binance USDT pairs can be graded: every predictor is crypto-trained and
+ * grading fetches Binance candles. Non-crypto rows (e.g. Mamba/Transformer
+ * logging RELIANCE with a placeholder price of 100) can never resolve — they
+ * used to occupy pending-grading slots and trigger failing klines requests
+ * every cycle.
+ */
+const GRADABLE_SYMBOL = /^[A-Z0-9]{2,20}USDT$/;
+
 // 🧪 Test-only seam (2026-09-15): jest.unstable_mockModule reliably
 // intercepts binanceService for every other file that imports it in this
 // codebase's test suite, but not for this file specifically — verified
@@ -115,12 +124,14 @@ export class AITelemetryService {
     const BACKLOG_LANE_LIMIT = 1000;
 
     const recentRecords = await AIPredictionTelemetry.find({
+      symbol: GRADABLE_SYMBOL,
       timestamp: { $gt: activeCohortFloor, $lte: maturityFloor },
       outcome60m: { $exists: false }
     })
       .sort({ timestamp: 1 })
       .limit(RECENT_LANE_LIMIT);
     const backlogRecords = await AIPredictionTelemetry.find({
+      symbol: GRADABLE_SYMBOL,
       timestamp: { $gte: eligibilityFloor, $lte: activeCohortFloor },
       outcome60m: { $exists: false }
     })
@@ -169,6 +180,7 @@ export class AITelemetryService {
     // the query, not the Binance-call-bound processing loop after it).
     const FRESH_LANE_LIMIT = 500;
     const freshRecords = await AIPredictionTelemetry.find({
+      symbol: GRADABLE_SYMBOL,
       timestamp: { $gt: activeCohortFloor, $lte: maturityFloor },
       outcome15m: { $exists: false }
     })
@@ -203,7 +215,7 @@ export class AITelemetryService {
     const CONCURRENCY = 25;
 
     const resolveRecord = async (r: (typeof records)[number]) => {
-      if (!r.priceAtPrediction) return;
+      if (!r.priceAtPrediction || !GRADABLE_SYMBOL.test(String(r.symbol))) return;
 
       const t0 = r.timestamp.getTime();
       const updates: any = {};
@@ -280,7 +292,7 @@ export class AITelemetryService {
     const HORIZONS: Array<[number, string]> = [[15, "outcome15m"], [25, "outcome25m"], [30, "outcome30m"], [60, "outcome60m"]];
     const ranges = new Map<string, { lo: number; hi: number }>();
     for (const r of records) {
-      if (!r?.priceAtPrediction || !r.timestamp) continue;
+      if (!r?.priceAtPrediction || !r.timestamp || !GRADABLE_SYMBOL.test(String(r.symbol))) continue;
       const t0 = new Date(r.timestamp).getTime();
       for (const [h, field] of HORIZONS) {
         if (!horizonDue(t0, h, now) || r[field]) continue;

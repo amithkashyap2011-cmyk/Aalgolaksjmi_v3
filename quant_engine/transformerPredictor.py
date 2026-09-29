@@ -27,6 +27,11 @@ class TransformerPredictor:
         self.model = TransformerMicroModel(input_dim=input_dim, d_model=d_model, nhead=nhead, num_layers=num_layers).to(self.device)
         self.checkpoint_loaded = False
         self.last_inference = None
+        # No training pipeline for this checkpoint exists in the repo. Provenance
+        # is read from an optional sidecar `<checkpoint>.meta.json`
+        # ({"trained": true, "trained_on": ..., "trained_at": ...}); without it the
+        # model is served (it may well be trained) but every output says UNVERIFIED.
+        self.provenance = "UNVERIFIED_NO_TRAINING_PIPELINE"
 
         if model_path is None:
             model_path = PROJECT_ROOT / "models" / "transformer" / "checkpoints" / "transformer_micro_v1.pt"
@@ -46,6 +51,10 @@ class TransformerPredictor:
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
             self.model.eval()
             self.checkpoint_loaded = True
+            self.provenance = self._read_provenance(model_path)
+            if self.provenance != "TRAINED":
+                print(f"[Transformer] WARNING: checkpoint provenance is {self.provenance} — "
+                      f"no training script or metadata proves it was trained.")
             print(f"[Transformer] Successfully loaded weights from {model_path}")
         except Exception as e:
             print(f"[Transformer] WARNING: Failed to load research model: {e}")
@@ -53,6 +62,16 @@ class TransformerPredictor:
 
         # Directions specific to microstructure
         self.outcomes = ["CONTINUATION", "EXHAUSTION", "TRAP"]
+
+    @staticmethod
+    def _read_provenance(model_path: Path) -> str:
+        import json
+        meta = Path(str(model_path) + ".meta.json")
+        try:
+            data = json.loads(meta.read_text())
+            return "TRAINED" if data.get("trained") is True else "UNTRAINED"
+        except Exception:
+            return "UNVERIFIED_NO_TRAINING_PIPELINE"
 
     def predict(self, microstructure_data):
         """
@@ -99,7 +118,8 @@ class TransformerPredictor:
                     "exhaustion": float(probs[1]),
                     "trap": float(probs[2])
                 },
-                "modelName": "transformer-micro-v1"
+                "modelName": "transformer-micro-v1",
+                "provenance": self.provenance,
             }
         except Exception as e:
             logger.error(f"Transformer Micro inference error: {e}")

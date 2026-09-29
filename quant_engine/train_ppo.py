@@ -20,6 +20,7 @@ rollback copy of the previous checkpoint.
 """
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,13 +50,29 @@ STATE_DIM = 32
 ACTION_DIM = 7
 REGRESSION_TOLERANCE = 0.02  # avg reward/step may dip this much before a promotion is refused
 
-# Bumped whenever the reward function changes incompatibly. v2 = losses
-# weighted 1.5x (was 3x via double-counted drawdown penalty) + bootstrapped
-# batch returns. Rewards measured under a different version are in
-# different units — they can't serve as a promotion baseline, and a policy
-# trained under the old shaping shouldn't be fine-tuned as if nothing
-# changed.
-REWARD_VERSION = 2
+# Bumped whenever the reward function changes incompatibly. Rewards measured
+# under a different version are in different units, so they can't serve as a
+# promotion baseline, and a policy trained under the old shaping is not
+# fine-tuned as if nothing changed.
+#   v2: losses 1.5x, bootstrapped batch returns.
+#   v3 (2026-09-30): one-step decision problem over a 25-minute return.
+#     The v2 reward paid the 0.1% fee on EVERY 5-minute bar against a mean
+#     absolute 5-minute move of ~0.2%, plus an extra loss penalty; a trade then
+#     needed roughly +0.15% of edge per bar to beat SKIP (=0), so "never trade"
+#     was the optimum of the objective whatever the states said. Reward is now
+#     the return over REWARD_HORIZON_BARS (the classifiers' 25-minute horizon) net
+#     of the fee, with no extra loss penalty (risk aversion belongs in sizing).
+REWARD_VERSION = 3
+REWARD_HORIZON_BARS = 5
+LOSS_AVERSION = 0.0
+# Contextual bandit: an action changes only its own reward, never the next
+# state (and consecutive states in the buffer are different symbols anyway), so
+# there is nothing to bootstrap. gamma>0 only added noise from ~100 unrelated
+# future rewards to every advantage (roughly a 7x loss of signal-to-noise).
+GAMMA = 0.0
+# Newest fraction of the steps is held out: never trained on, used for the
+# promotion decision instead of the policy's own training reward.
+HELD_OUT_FRACTION = 0.2
 
 # Prefer real recorded production states once the replay buffer has at
 # least this many records whose outcome (next-bar return) is computable.
@@ -78,12 +95,7 @@ def _action_reward(action_idx: int, ret: float) -> float:
     else:                    # *_EXIT modes
         pnl, fees = 0.0, 0.0
 
-    # Mild risk-aversion: losses hurt 1.5x their size. The old 2.0
-    # coefficient made losses count 3x (once in pnl, twice here), which
-    # made EVERY trading action negative-EV regardless of edge — the
-    # mathematically optimal policy was "never trade", so training could
-    # only ever converge to a useless agent.
-    dd_penalty = abs(min(0.0, pnl)) * 0.5
+    dd_penalty = abs(min(0.0, pnl)) * LOSS_AVERSION
     return pnl - fees - dd_penalty
 
 
@@ -131,7 +143,7 @@ class MarketReplayEnv:
             d = df.dropna(subset=["rsi", "adx", "atr", "macd_hist", "ema200"]).copy()
             if d.empty:
                 continue
-            d["next_return"] = d["close"].shift(-1) / d["close"] - 1
+            d["next_return"] = d["close"].shift(-REWARD_HORIZON_BARS) / d["close"] - 1
             d = d.dropna(subset=["next_return"])
             frames.append(d)
 
@@ -140,6 +152,12 @@ class MarketReplayEnv:
 
         import pandas as pd
         self.df = pd.concat(frames, ignore_index=True)
+        # Chronological blocks, one per symbol (used to split off a held-out tail).
+        bounds, start = [], 0
+        for f in frames:
+            bounds.append((start, start + len(f)))
+            start += len(f)
+        self.groups = bounds
 
         # PPOExecutionPredictor.ts:107-150 fills 32 slots as: regime(0-4),
         # order-flow(5-9), smart-money(10-14), cnn-signal(15-16),
@@ -216,10 +234,10 @@ class ReplayBufferEnv:
                 # MarketReplayEnv). Records from the still-open bar have no
                 # outcome yet and are skipped this cycle.
                 i = int(np.searchsorted(open_ms, r["ts"], side="right")) - 1
-                if i < 0 or i + 2 >= len(closes) or closes[i] == 0:
+                if i < 0 or i + REWARD_HORIZON_BARS + 1 >= len(closes) or closes[i] == 0:
                     continue
                 usable_states.append(r["state"])
-                usable_returns.append(closes[i + 1] / closes[i] - 1.0)
+                usable_returns.append(closes[i + REWARD_HORIZON_BARS] / closes[i] - 1.0)
                 usable_ts.append(r["ts"])
 
         if not usable_states:
@@ -229,6 +247,7 @@ class ReplayBufferEnv:
         self.states = np.nan_to_num(
             np.array(usable_states, dtype=np.float32)[order], nan=0.0, posinf=0.0, neginf=0.0)
         self.returns = np.array(usable_returns, dtype=np.float64)[order]
+        self.groups = [(0, len(self.states))]   # one time-ordered block across symbols
         self.idx = 0
         self.max_idx = len(self.states) - 1
         self.state_dim = STATE_DIM
@@ -244,6 +263,64 @@ class ReplayBufferEnv:
         done = self.idx >= self.max_idx
         next_state = self.states[self.idx] if not done else np.zeros(self.state_dim, dtype=np.float32)
         return next_state, reward, done
+
+
+class ArrayEnv:
+    """Plain (states, returns) replay used for the train / held-out split."""
+
+    def __init__(self, states: np.ndarray, returns: np.ndarray):
+        self.states = states
+        self.returns = returns
+        self.idx = 0
+        self.max_idx = len(states) - 1
+        self.state_dim = STATE_DIM
+        self.action_dim = ACTION_DIM
+
+    def reset(self):
+        self.idx = 0
+        return self.states[self.idx]
+
+    def step(self, action_idx: int):
+        reward = _action_reward(action_idx, self.returns[self.idx])
+        self.idx += 1
+        done = self.idx >= self.max_idx
+        next_state = self.states[self.idx] if not done else np.zeros(self.state_dim, dtype=np.float32)
+        return next_state, reward, done
+
+
+def split_env(env, held_out_fraction: float = HELD_OUT_FRACTION,
+              embargo: int = REWARD_HORIZON_BARS) -> tuple:
+    """(train_env, held_out_env). Within each chronological block the newest
+    `held_out_fraction` is held out, and the `embargo` steps before it are
+    dropped from training (their reward looks that many bars ahead, into the
+    held-out region)."""
+    tr_s, tr_r, ho_s, ho_r = [], [], [], []
+    for a, b in getattr(env, "groups", [(0, len(env.states))]):
+        n = b - a
+        cut = a + int(n * (1 - held_out_fraction))
+        tr_end = max(a, cut - embargo)
+        tr_s.append(env.states[a:tr_end]); tr_r.append(env.returns[a:tr_end])
+        ho_s.append(env.states[cut:b]); ho_r.append(env.returns[cut:b])
+    cat = lambda parts, shape: np.concatenate(parts) if parts else np.empty(shape)
+    return (ArrayEnv(cat(tr_s, (0, STATE_DIM)).astype(np.float32), cat(tr_r, (0,)).astype(np.float64)),
+            ArrayEnv(cat(ho_s, (0, STATE_DIM)).astype(np.float32), cat(ho_r, (0,)).astype(np.float64)))
+
+
+def evaluate_policy(model, env) -> dict:
+    """Greedy (deterministic) policy on a held-out env: mean reward per step,
+    share of steps that trade, and the always-SKIP / always-NORMAL baselines."""
+    model.eval()
+    with torch.no_grad():
+        probs, _ = model(torch.FloatTensor(env.states))
+        actions = torch.argmax(probs, dim=1).numpy()
+    rewards = np.array([_action_reward(int(a), r) for a, r in zip(actions, env.returns)], dtype=np.float64)
+    normal = np.array([_action_reward(1, r) for r in env.returns], dtype=np.float64)
+    trades = (actions != 0) & (actions < 4)
+    return {"steps": int(len(rewards)),
+            "avg_reward_per_step": float(rewards.mean()) if len(rewards) else 0.0,
+            "trade_share": float(trades.mean()) if len(rewards) else 0.0,
+            "always_skip_avg": 0.0,
+            "always_normal_avg": float(normal.mean()) if len(normal) else 0.0}
 
 
 def _build_env():
@@ -271,7 +348,7 @@ def _build_env():
     return MarketReplayEnv(universe), "synthetic_candles"
 
 
-def train_ppo(warm_start: bool = True) -> dict:
+def train_ppo(warm_start: bool = False) -> dict:
     try:
         env, env_source = _build_env()
     except ValueError as e:
@@ -283,11 +360,24 @@ def train_ppo(warm_start: bool = True) -> dict:
         logger.warning(f"[TrainPPO] {msg}")
         return {"promoted": False, "reason": msg}
 
+    # Hold out the newest slice: the promotion decision must not use the policy's
+    # own training reward (it is trained on, and sampled with exploration).
+    env, held_out_env = split_env(env)
+    if env.max_idx < 100 or held_out_env.max_idx < 100:
+        msg = (f"Insufficient steps after the held-out split (train={env.max_idx + 1}, "
+               f"held-out={held_out_env.max_idx + 1}) — skipping this training cycle.")
+        logger.warning(f"[TrainPPO] {msg}")
+        return {"promoted": False, "reason": msg}
+
     device = torch.device("cpu")
     model = ActorCritic(env.state_dim, env.action_dim).to(device)
     prior_state = _load_state()
     same_reward_version = prior_state.get("reward_version") == REWARD_VERSION
-    have_prior = warm_start and CHECKPOINT_PATH.exists() and same_reward_version
+    # Warm-starting is off unless AQEA_PPO_ALLOW_WARM_START=1: the previous policy
+    # has already trained on steps that are now in the held-out slice, so its
+    # held-out reward would not be an honest out-of-sample number.
+    allow_warm = os.getenv("AQEA_PPO_ALLOW_WARM_START") == "1"
+    have_prior = bool(warm_start and allow_warm and CHECKPOINT_PATH.exists() and same_reward_version)
     if warm_start and CHECKPOINT_PATH.exists() and not same_reward_version:
         logger.info(f"[TrainPPO] Reward function changed (v{prior_state.get('reward_version')} -> "
                     f"v{REWARD_VERSION}) — training from scratch and resetting the promotion baseline.")
@@ -302,7 +392,7 @@ def train_ppo(warm_start: bool = True) -> dict:
     lr = 5e-5 if have_prior else 1e-4
     epochs = 3 if have_prior else 5
     batch_size = 256
-    gamma = 0.99
+    gamma = GAMMA  # contextual bandit — see GAMMA above
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
     model.train()
@@ -406,19 +496,23 @@ def train_ppo(warm_start: bool = True) -> dict:
     avg_reward_per_step = float(total_reward / max(total_steps, 1))
     logger.info(f"[TrainPPO] Avg reward/step: {avg_reward_per_step:.6f}")
 
+    held = evaluate_policy(model, held_out_env)
+    heldout_avg = held["avg_reward_per_step"]
+    logger.info(f"[TrainPPO] Held-out ({held['steps']} steps): greedy policy avg reward/step "
+                f"{heldout_avg:.6f}, trades {held['trade_share']:.1%} of steps; baselines: "
+                f"always-skip {held['always_skip_avg']:.6f}, always-normal {held['always_normal_avg']:.6f}")
+
     state_json = _load_state()
-    prior_avg = (state_json.get("last_promoted_avg_reward_per_step")
+    prior_avg = (state_json.get("last_promoted_heldout_avg_reward_per_step")
                  if same_reward_version else None)
-    # A policy must (a) not regress past tolerance vs the last promoted one
-    # AND (b) actually be profitable in simulation (positive expected reward
-    # per step, net of fees). The old gate only checked (a), which happily
-    # promoted checkpoints with certified-negative expectancy.
-    no_regression = bool(prior_avg is None or avg_reward_per_step >= prior_avg - REGRESSION_TOLERANCE)
-    # >= 0, not > 0: a policy that skips everything it has no edge on earns
-    # exactly 0 and is legitimately better than a promoted negative-EV one.
-    # Strictly-positive expectancy is the bar for EXECUTION AUTHORITY
-    # (AQEA_PPO_EXECUTION_AUTHORITY), not for checkpoint promotion.
-    promote = bool(no_regression and avg_reward_per_step >= 0.0)
+    # The policy must (a) not regress past tolerance vs the last promoted one on
+    # held-out data AND (b) be non-negative net of fees there. >= 0, not > 0: a
+    # policy that skips everything it has no edge on earns exactly 0 and is
+    # legitimately better than a negative-EV one. Strictly-positive expectancy is
+    # the bar for EXECUTION AUTHORITY (AQEA_PPO_EXECUTION_AUTHORITY), not for
+    # checkpoint promotion.
+    no_regression = bool(prior_avg is None or heldout_avg >= prior_avg - REGRESSION_TOLERANCE)
+    promote = bool(no_regression and heldout_avg >= 0.0)
 
     if promote:
         if CHECKPOINT_PATH.exists():
@@ -426,13 +520,14 @@ def train_ppo(warm_start: bool = True) -> dict:
         CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), CHECKPOINT_PATH)
         state_json["last_promoted_avg_reward_per_step"] = avg_reward_per_step
+        state_json["last_promoted_heldout_avg_reward_per_step"] = heldout_avg
         state_json["last_promoted_at"] = datetime.now(timezone.utc).isoformat()
-        logger.info(f"[TrainPPO] Promoted new checkpoint (avg reward/step {avg_reward_per_step:.6f} "
+        logger.info(f"[TrainPPO] Promoted new checkpoint (held-out avg reward/step {heldout_avg:.6f} "
                     f"vs prior {prior_avg}).")
     else:
-        reason = ("has negative expectancy (must be >= 0 net of fees)"
+        reason = ("has negative expectancy on held-out data (must be >= 0 net of fees)"
                   if no_regression else f"regresses past tolerance vs prior {prior_avg}")
-        logger.warning(f"[TrainPPO] REFUSED promotion — avg reward/step {avg_reward_per_step:.6f} "
+        logger.warning(f"[TrainPPO] REFUSED promotion — held-out avg reward/step {heldout_avg:.6f} "
                         f"{reason}. Live checkpoint left untouched.")
 
     # Explicit flag rather than comparing last_attempt_at/last_promoted_at
@@ -441,7 +536,9 @@ def train_ppo(warm_start: bool = True) -> dict:
     # them for "was this refused" is always true and always wrong.
     state_json["last_attempt_promoted"] = promote
     state_json["last_attempt_at"] = datetime.now(timezone.utc).isoformat()
-    state_json["last_attempt_avg_reward_per_step"] = avg_reward_per_step
+    state_json["last_attempt_avg_reward_per_step"] = avg_reward_per_step   # training reward (info only)
+    state_json["last_attempt_heldout_avg_reward_per_step"] = heldout_avg
+    state_json["last_attempt_heldout"] = held
     state_json["steps_trained"] = total_steps
     state_json["env_source"] = env_source
     if promote:
@@ -453,7 +550,7 @@ def train_ppo(warm_start: bool = True) -> dict:
         {"epochs": epochs, "batch_size": batch_size, "gamma": gamma, "warm_start": have_prior, "lr": lr},
     )
 
-    return {"promoted": promote, "avg_reward_per_step": avg_reward_per_step,
+    return {"promoted": promote, "heldout": held, "avg_reward_per_step": avg_reward_per_step,
             "total_reward": total_reward, "steps_trained": total_steps,
             "env_source": env_source}
 

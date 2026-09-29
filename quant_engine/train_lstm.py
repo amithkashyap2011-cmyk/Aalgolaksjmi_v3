@@ -16,7 +16,10 @@ v2 reuses the CNN's real-data pipeline end to end:
 Promotion gate — a checkpoint is saved only if it
   * beats random 3-class guessing (macro F1 >= MIN_PROMOTE_F1), and
   * is not collapsed (every class predicted on >= MIN_CLASS_SHARE of the
-    validation windows and no class on more than MAX_CLASS_SHARE).
+    validation windows and no class on more than MAX_CLASS_SHARE), and
+  * passes promotion_gate: a real F1 margin over the incumbent on the same
+    held-out set AND a proven positive net-of-fee edge on its directional calls.
+Early stopping uses a separate `tune` slice; the validation slice is used once.
 The model stays SHADOW in the server regardless; it only earns a vote from
 live graded accuracy.
 """
@@ -33,7 +36,9 @@ from sklearn.metrics import classification_report
 from torch.utils.data import DataLoader, TensorDataset
 
 from lstm_predictor import BiLSTM
-from train_cnn import FEATURE_COLS, MIN_PROMOTE_F1, SEQ_LEN, TRAIN_BARS, _build_windowed_dataset, _normalize
+import promotion_gate
+from train_cnn import (FEATURE_COLS, MIN_PROMOTE_F1, SEED, SEQ_LEN, TRAIN_BARS, TUNE_FRACTION,
+                       _build_windowed_dataset, _normalize, _normalize_inplace)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("TrainLSTM")
@@ -41,7 +46,10 @@ logger = logging.getLogger("TrainLSTM")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = PROJECT_ROOT / "models" / "lstm"
 CHECKPOINT_PATH = MODEL_DIR / "checkpoints" / "bilstm_v2.pt"
+BACKUP_PATH = MODEL_DIR / "checkpoints" / "bilstm_v2.bak.pt"
 SCHEMA_PATH = MODEL_DIR / "lstm_schema.json"
+# Normalization stats belong to the checkpoint they were fitted with.
+SCHEMA_BACKUP_PATH = MODEL_DIR / "lstm_schema.bak.json"
 STATE_PATH = MODEL_DIR / "train_state.json"
 
 INPUT_VERSION = 2
@@ -61,47 +69,62 @@ def _macro_f1(model: nn.Module, X: torch.Tensor, y: np.ndarray) -> tuple:
     return float(report["macro avg"]["f1-score"]), preds, report
 
 
-def _incumbent_f1(X_val_raw: np.ndarray, y_val: np.ndarray):
-    """Macro F1 of the currently served checkpoint on THIS run's validation
-    windows, normalized with the incumbent's own schema — so a new model is
-    only promoted if it is better on identical data (as train_cnn does). The
-    first 6h cycle after this model shipped overwrote a 0.433 checkpoint with a
-    0.427 one because the gate only checked "beats random, not collapsed"."""
+def _incumbent_score(X_val_raw: np.ndarray, y_val: np.ndarray, r_val: np.ndarray):
+    """(macro F1, net edge) of the currently served checkpoint on THIS run's
+    validation windows, normalized with the incumbent's own schema — so a new
+    model is only promoted if it is better on identical data."""
     if not CHECKPOINT_PATH.exists() or not SCHEMA_PATH.exists():
-        return None
+        return None, None
     try:
         schema = json.loads(SCHEMA_PATH.read_text())
         if schema.get("INPUT_VERSION") != INPUT_VERSION:
-            return None
+            return None, None
         means = np.array(schema["MEANS"], dtype=np.float32)
         stds = np.array(schema["STDS"], dtype=np.float32)
         incumbent = BiLSTM(input_features=len(schema["FEATURE_NAMES"]), hidden_dim=64, num_layers=2)
         incumbent.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=torch.device("cpu")))
         X = torch.from_numpy(_normalize(X_val_raw, means, stds).astype(np.float32))
-        f1, _, _ = _macro_f1(incumbent, X, y_val)
+        f1, preds, _ = _macro_f1(incumbent, X, y_val)
         logger.info(f"[TrainLSTM] Incumbent macro F1 on the same validation set: {f1:.4f}")
-        return f1
+        return f1, promotion_gate.economic_edge(preds, r_val)
     except Exception as e:
         logger.warning(f"[TrainLSTM] Could not score incumbent ({e}); treating as absent")
-        return None
+        return None, None
+
+
+def rollback_lstm() -> bool:
+    """Restore the previous checkpoint together with its normalization stats."""
+    if not (BACKUP_PATH.exists() and SCHEMA_BACKUP_PATH.exists()):
+        return False
+    CHECKPOINT_PATH.write_bytes(BACKUP_PATH.read_bytes())
+    tmp = SCHEMA_PATH.with_suffix(".json.tmp")
+    tmp.write_bytes(SCHEMA_BACKUP_PATH.read_bytes())
+    tmp.replace(SCHEMA_PATH)
+    return True
 
 
 def train_lstm() -> dict:
     torch.set_num_threads(2)  # share the CPU with the live server + quant engine
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
     logger.info(f"[TrainLSTM] Fetching {TRAIN_BARS} bars/symbol of real history (CNN pipeline)...")
-    data = _build_windowed_dataset()
-    X_train, y_train, X_val, y_val = data["X_train"], data["y_train"], data["X_val"], data["y_val"]
-    if len(X_train) < 500 or len(X_val) < 100:
-        msg = f"Insufficient windows (train={len(X_train)}, val={len(X_val)})"
+    data = _build_windowed_dataset(tune_fraction=TUNE_FRACTION)
+    X_train, y_train, X_tune, y_tune = data["X_train"], data["y_train"], data["X_tune"], data["y_tune"]
+    X_val_raw, y_val, r_val = data["X_val"], data["y_val"], data["r_val"]
+    if len(X_train) < 500 or len(X_tune) < 100 or len(X_val_raw) < 100:
+        msg = f"Insufficient windows (train={len(X_train)}, tune={len(X_tune)}, val={len(X_val_raw)})"
         logger.warning(f"[TrainLSTM] {msg}")
         return {"promoted": False, "reason": msg}
 
     flat = X_train.reshape(-1, X_train.shape[2])
     means, stds = flat.mean(axis=0), flat.std(axis=0)
-    X_train = _normalize(X_train, means, stds).astype(np.float32)
-    X_val = _normalize(X_val, means, stds).astype(np.float32)
+    del flat
+    X_train = _normalize_inplace(X_train, means, stds)
+    X_tune = _normalize_inplace(X_tune, means, stds)
+    X_val = _normalize(X_val_raw, means, stds).astype(np.float32)  # raw copy kept for the incumbent
 
     X_train_t, y_train_t = torch.from_numpy(X_train), torch.from_numpy(y_train)
+    X_tune_t = torch.from_numpy(X_tune)
     X_val_t = torch.from_numpy(X_val)  # LSTM takes (batch, seq, features)
 
     # Inverse-frequency class weights: labels are ~tercile-balanced per symbol,
@@ -123,8 +146,8 @@ def train_lstm() -> dict:
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-        f1, _, _ = _macro_f1(model, X_val_t, y_val)
-        logger.info(f"[TrainLSTM] epoch {epoch + 1}/{MAX_EPOCHS} val macro F1 {f1:.4f}")
+        f1, _, _ = _macro_f1(model, X_tune_t, y_tune)   # early stopping on the TUNE slice
+        logger.info(f"[TrainLSTM] epoch {epoch + 1}/{MAX_EPOCHS} tune macro F1 {f1:.4f}")
         if f1 > best_f1 + 1e-4:
             best_f1, best_state, stale = f1, {k: v.clone() for k, v in model.state_dict().items()}, 0
         else:
@@ -137,15 +160,18 @@ def train_lstm() -> dict:
     shares = np.bincount(preds, minlength=3) / max(len(preds), 1)
     majority = float(np.bincount(y_val, minlength=3).max() / len(y_val))
     collapsed = bool(shares.min() < MIN_CLASS_SHARE or shares.max() > MAX_CLASS_SHARE)
-    incumbent_f1 = _incumbent_f1(data["X_val"], y_val)
-    beats_incumbent = incumbent_f1 is None or f1 > incumbent_f1
-    promote = bool(f1 >= MIN_PROMOTE_F1 and not collapsed and beats_incumbent)
+    edge = promotion_gate.economic_edge(preds, r_val)
+    incumbent_f1, incumbent_edge = _incumbent_score(X_val_raw, y_val, r_val)
+    promote, reason = promotion_gate.decide_promotion(
+        f1, incumbent_f1, edge, floor_f1=MIN_PROMOTE_F1,
+        extra_ok=not collapsed, extra_reason="collapsed onto one class")
 
     result = {
         "model": "LSTM_SEQUENCE_V1",
         "input_version": INPUT_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "train_windows": int(len(X_train)),
+        "tune_windows": int(len(X_tune)),
         "val_windows": int(len(X_val)),
         "val_macro_f1": round(f1, 4),
         "val_accuracy": round(float(report["accuracy"]), 4),
@@ -155,14 +181,17 @@ def train_lstm() -> dict:
         "collapsed": collapsed,
         "incumbent_val_macro_f1": None if incumbent_f1 is None else round(incumbent_f1, 4),
         "promoted": promote,
-        "reason": "ok" if promote else (
-            "collapsed onto one class" if collapsed
-            else f"macro F1 {f1:.4f} < {MIN_PROMOTE_F1}" if f1 < MIN_PROMOTE_F1
-            else f"macro F1 {f1:.4f} does not beat incumbent {incumbent_f1:.4f} on the same validation set"),
+        "edge": edge,
+        "incumbent_edge": incumbent_edge,
+        "reason": reason,
     }
 
     if promote:
         CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if CHECKPOINT_PATH.exists():
+            BACKUP_PATH.write_bytes(CHECKPOINT_PATH.read_bytes())
+        if SCHEMA_PATH.exists():
+            SCHEMA_BACKUP_PATH.write_bytes(SCHEMA_PATH.read_bytes())
         torch.save(model.state_dict(), CHECKPOINT_PATH)
         tmp = SCHEMA_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps({

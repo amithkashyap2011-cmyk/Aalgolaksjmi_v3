@@ -29,6 +29,8 @@ class MambaPredictor:
         self.last_inference = None
         self.compatibility_report = None
         self.degraded_reason = None
+        # Provenance: True only when the checkpoint explicitly says it was trained.
+        self.checkpoint_trained = False
 
         if model_path is None:
             model_path = PROJECT_ROOT / "models" / "mamba" / "checkpoints" / "mamba-research-v1.pt"
@@ -53,7 +55,17 @@ class MambaPredictor:
 
             # Inspect checkpoint keys for compatibility report
             self._generate_compatibility_report(model_path)
-                
+
+            # generate_mamba_production.py saves RANDOMLY INITIALISED weights (no
+            # training). Serving them produced arbitrary "predictions" that were
+            # logged and graded as real ones, so a checkpoint must carry an
+            # explicit `trained: True` flag (written by a real training run).
+            if not self.checkpoint_trained:
+                self.degraded_reason = ("UNTRAINED_CHECKPOINT: no `trained: true` provenance flag "
+                                        "(random-initialised weights are not a model)")
+                print(f"[Mamba] WARNING: {self.degraded_reason}. Inference disabled (DEGRADED).")
+                return
+
             self.adapter = MambaInferenceAdapter(str(model_path))
             self.checkpoint_loaded = True
             print(f"[Mamba] Successfully loaded checkpoint from {model_path}")
@@ -72,6 +84,7 @@ class MambaPredictor:
             except TypeError:
                 checkpoint = torch.load(path, map_location='cpu')
             ck_keys = []
+            self.checkpoint_trained = bool(isinstance(checkpoint, dict) and checkpoint.get("trained") is True)
             if isinstance(checkpoint, dict):
                 if 'model_state_dict' in checkpoint:
                     ck_keys = list(checkpoint['model_state_dict'].keys())

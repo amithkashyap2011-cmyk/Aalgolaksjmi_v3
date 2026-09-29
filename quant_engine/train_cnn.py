@@ -42,6 +42,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from data_pipeline import (SYMBOLS, INTERVAL, add_cnn_features, build_cnn_windows,
                            fetch_klines_paginated)
 from cnn_predictor import CNN1D
+import promotion_gate
 
 logger = logging.getLogger("TrainCNN")
 
@@ -51,6 +52,9 @@ CHECKPOINT_PATH = MODEL_DIR / "checkpoints" / "cnn_1d_v1.pt"
 BACKUP_PATH = MODEL_DIR / "checkpoints" / "cnn_1d_v1.bak.pt"
 STATE_PATH = MODEL_DIR / "train_state.json"
 SCHEMA_PATH = PROJECT_ROOT / "shared" / "schemas" / "feature_schema.json"
+# The normalization stats belong to the checkpoint they were fitted with:
+# rolling back the weights without them silently mis-scales every input.
+SCHEMA_BACKUP_PATH = SCHEMA_PATH.with_suffix(".bak.json")
 
 FEATURE_COLS = ["open", "high", "low", "close", "volume",
                 "ret_1", "vol_1", "dist_ma", "hi_low", "std_14", "ma_fast", "ma_slow"]
@@ -59,19 +63,27 @@ FEATURE_NAMES_SCHEMA_ORDER = ["open", "high", "low", "close", "volume",
 
 FORWARD_HORIZON = 5
 VAL_FRACTION = 0.2
-REGRESSION_TOLERANCE = 0.05  # allow a small dip in F1 before refusing to promote
+# Early stopping needs its own slice so the final validation set is used exactly
+# once (reporting + promotion). Layout per symbol, oldest -> newest:
+#   train | embargo | tune (early stopping) | embargo | validation
+TUNE_FRACTION = 0.12
 SEQ_LEN = 64
+SEED = 0
 
 # How many 5m bars of history to train on per symbol (env-overridable).
-# 6000 bars ~= 20 days; the old single-request fetch capped at 1000 (~3.5 days).
-TRAIN_BARS = int(os.getenv("AQEA_CNN_TRAIN_BARS", "6000"))
+# 12000 bars ~= 42 days (was 6000 ~= 21 days: a single market regime). Raising it
+# further grows peak RAM roughly linearly (8 symbols x bars x 64 x 12 float32),
+# which matters on the 8 GB host, so it stays env-tunable.
+TRAIN_BARS = int(os.getenv("AQEA_CNN_TRAIN_BARS", "12000"))
 
 # A LONG/SHORT label must at least clear a futures round trip (~2x taker
 # fee + slippage) — otherwise the model is trained to trade moves that
 # lose money even when it is right.
 FEE_FLOOR = float(os.getenv("AQEA_CNN_FEE_FLOOR", "0.0010"))
 
-# Never promote a checkpoint that can't beat random guessing on 3 classes.
+# Floor only: never promote a checkpoint that can't beat random guessing on 3
+# classes. The real gate is promotion_gate.decide_promotion (margin over the
+# incumbent + a proven positive net edge after fees).
 MIN_PROMOTE_F1 = 0.34
 
 # Bumped whenever the input representation changes incompatibly.
@@ -118,11 +130,45 @@ def _label_symbol(future_return: np.ndarray, train_cut: int) -> np.ndarray:
     return labels
 
 
-def _build_windowed_dataset() -> dict:
+def _split_masks(end_rows: np.ndarray, n: int, tune_fraction: float, horizon: int = None):
+    """Boolean masks (train, tune, val) over windows identified by the row each
+    one ends on, plus the two cut points. Layout, oldest -> newest:
+    train | embargo | tune | embargo | validation. The embargo is `horizon` rows
+    because a label looks that many bars ahead."""
+    H = FORWARD_HORIZON if horizon is None else horizon
+    cut_val = int(n * (1 - VAL_FRACTION))
+    cut_tune = int(n * (1 - VAL_FRACTION - tune_fraction)) if tune_fraction > 0 else cut_val
+    in_train = end_rows + H < cut_tune
+    in_val = end_rows >= cut_val
+    in_tune = ((end_rows >= cut_tune) & (end_rows + H < cut_val)) if tune_fraction > 0 else np.zeros_like(in_train)
+    return in_train, in_tune, in_val, cut_tune, cut_val
+
+
+def _empty_dataset() -> dict:
+    e = np.empty((0, SEQ_LEN, len(FEATURE_COLS)), np.float32)
+    z = np.empty(0, np.int64)
+    return {"X_train": e, "y_train": z, "X_tune": e.copy(), "y_tune": z.copy(),
+            "X_val": e.copy(), "y_val": z.copy(), "r_val": np.empty(0, np.float64)}
+
+
+def _build_windowed_dataset(tune_fraction: float = 0.0) -> dict:
     """Fetches TRAIN_BARS of history per symbol and produces real 64-bar
-    training/validation windows (no leakage: labels' thresholds come from
-    each symbol's training rows; the split is chronological per symbol)."""
-    X_train_parts, y_train_parts, X_val_parts, y_val_parts = [], [], [], []
+    windows split chronologically per symbol:
+
+        train | embargo | tune | embargo | validation
+
+    * The embargo is FORWARD_HORIZON rows: a label looks that many bars ahead,
+      so without it the last training labels were computed from prices inside
+      the next slice.
+    * `tune` (only when tune_fraction > 0) is for early stopping, so the
+      validation slice is touched exactly once (report + promotion). The old LSTM
+      picked its best epoch on the validation set and then reported that number.
+    * Label thresholds come from each symbol's TRAINING rows only.
+    * `r_val` is the raw forward return of each validation window, so trainers
+      can score the net-of-fee return of the model's calls, not only F1."""
+    H = FORWARD_HORIZON
+    keys = ("X_train", "y_train", "X_tune", "y_tune", "X_val", "y_val", "r_val")
+    parts = {k: [] for k in keys}
 
     for sym in SYMBOLS:
         try:
@@ -134,7 +180,7 @@ def _build_windowed_dataset() -> dict:
             continue
 
         g = add_cnn_features(raw).dropna(subset=FEATURE_COLS).reset_index(drop=True)
-        g["future_return"] = g["close"].shift(-FORWARD_HORIZON) / g["close"] - 1
+        g["future_return"] = g["close"].shift(-H) / g["close"] - 1
 
         windows, end_rows = build_cnn_windows(g, SEQ_LEN)
         if len(windows) == 0:
@@ -142,31 +188,35 @@ def _build_windowed_dataset() -> dict:
 
         future = g["future_return"].values.astype(np.float64)
         n = len(g)
-        cut = int(n * (1 - VAL_FRACTION))
-        labels_all = _label_symbol(future, cut)
+        _, _, _, cut_tune, cut_val = _split_masks(np.empty(0, dtype=np.int64), n, tune_fraction)
+        if cut_tune - H < 200:
+            continue
+        # Thresholds only from returns whose whole look-ahead closes before `tune`.
+        labels_all = _label_symbol(future, cut_tune - H)
 
         # A window is usable when its final row still has a defined forward
         # return (the last FORWARD_HORIZON rows don't).
         usable = ~np.isnan(future[end_rows])
         windows, end_rows = windows[usable], end_rows[usable]
         labels = labels_all[end_rows]
+        rets = future[end_rows]
 
-        in_train = end_rows < cut
-        X_train_parts.append(windows[in_train])
-        y_train_parts.append(labels[in_train])
-        X_val_parts.append(windows[~in_train])
-        y_val_parts.append(labels[~in_train])
+        in_train, in_tune, in_val, _, _ = _split_masks(end_rows, n, tune_fraction)
+        parts["X_train"].append(windows[in_train]); parts["y_train"].append(labels[in_train])
+        parts["X_val"].append(windows[in_val]); parts["y_val"].append(labels[in_val])
+        parts["r_val"].append(rets[in_val])
+        if tune_fraction > 0:
+            parts["X_tune"].append(windows[in_tune]); parts["y_tune"].append(labels[in_tune])
+        del windows
 
-    if not X_train_parts:
-        return {"X_train": np.empty((0, SEQ_LEN, len(FEATURE_COLS)), np.float32),
-                "y_train": np.empty(0, np.int64),
-                "X_val": np.empty((0, SEQ_LEN, len(FEATURE_COLS)), np.float32),
-                "y_val": np.empty(0, np.int64)}
+    if not parts["X_train"]:
+        return _empty_dataset()
 
-    return {"X_train": np.concatenate(X_train_parts),
-            "y_train": np.concatenate(y_train_parts),
-            "X_val": np.concatenate(X_val_parts),
-            "y_val": np.concatenate(y_val_parts)}
+    out = _empty_dataset()
+    for k in keys:
+        if parts[k]:
+            out[k] = np.concatenate(parts[k])
+    return out
 
 
 def _write_schema(means: np.ndarray, stds: np.ndarray) -> None:
@@ -188,6 +238,14 @@ def _normalize(X: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.ndarray
     return (X - means) / (stds + 1e-8)
 
 
+def _normalize_inplace(X: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.ndarray:
+    """Same result as _normalize without allocating a second copy of a large
+    float32 window array (matters on the 8 GB host)."""
+    X -= means.astype(np.float32)
+    X /= (stds.astype(np.float32) + 1e-8)
+    return X
+
+
 def _update_training_report(report: dict, hyperparameters: dict) -> None:
     payload = {
         "model": "CNN_1D_V1",
@@ -206,53 +264,116 @@ def _update_training_report(report: dict, hyperparameters: dict) -> None:
         report_file.write_text(content)
 
 
-def train_cnn(warm_start: bool = True) -> dict:
-    logger.info(f"[TrainCNN] Fetching {TRAIN_BARS} bars/symbol of real history from Binance...")
-    data = _build_windowed_dataset()
-    X_train, y_train = data["X_train"], data["y_train"]
-    X_val, y_val = data["X_val"], data["y_val"]
+def _predict(model: nn.Module, X_t: torch.Tensor) -> np.ndarray:
+    model.eval()
+    with torch.no_grad():
+        return torch.argmax(model(X_t), dim=1).numpy()
 
-    if len(X_train) < 500 or len(X_val) < 100:
+
+def _macro_f1(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    report = classification_report(y_true, y_pred, labels=[0, 1, 2], output_dict=True, zero_division=0)
+    return float(report["macro avg"]["f1-score"])
+
+
+def _to_tensor(X: np.ndarray) -> torch.Tensor:
+    # (N, seq, F) -> (N, F, seq) as CNN1D expects
+    return torch.from_numpy(X).permute(0, 2, 1).contiguous()
+
+
+def _score_incumbent(X_val_raw: np.ndarray, y_val: np.ndarray, r_val: np.ndarray):
+    """Macro F1 (and net edge) of the live checkpoint on THIS validation set,
+    normalized with the INCUMBENT's own saved statistics. The old code fed the
+    incumbent inputs normalized with the CANDIDATE's new statistics, so the
+    comparison was skewed by a normalization mismatch."""
+    if not CHECKPOINT_PATH.exists() or not SCHEMA_PATH.exists():
+        return None, None
+    try:
+        schema = json.loads(SCHEMA_PATH.read_text())
+        if schema.get("INPUT_VERSION") != INPUT_VERSION:
+            return None, None
+        means = np.array(schema["MEANS"], dtype=np.float32)
+        stds = np.array(schema["STDS"], dtype=np.float32)
+        incumbent = CNN1D(input_features=len(FEATURE_COLS))
+        incumbent.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
+        preds = _predict(incumbent, _to_tensor(_normalize(X_val_raw, means, stds).astype(np.float32)))
+        return _macro_f1(y_val, preds), promotion_gate.economic_edge(preds, r_val)
+    except Exception as e:
+        logger.warning(f"[TrainCNN] Could not score incumbent ({e}).")
+        return None, None
+
+
+def rollback_cnn() -> bool:
+    """Restore the previous checkpoint AND the normalization stats it was fitted
+    with. Returns False if there is nothing to roll back to."""
+    if not (BACKUP_PATH.exists() and SCHEMA_BACKUP_PATH.exists()):
+        return False
+    CHECKPOINT_PATH.write_bytes(BACKUP_PATH.read_bytes())
+    tmp = SCHEMA_PATH.with_suffix(".json.tmp")
+    tmp.write_bytes(SCHEMA_BACKUP_PATH.read_bytes())
+    tmp.replace(SCHEMA_PATH)
+    state = _load_state()
+    state["rolled_back_at"] = datetime.now(timezone.utc).isoformat()
+    _save_state(state)
+    return True
+
+
+def train_cnn(warm_start: bool = False) -> dict:
+    """Train from scratch each cycle and promote only through promotion_gate.
+
+    `warm_start` is off by default and ignored unless AQEA_CNN_ALLOW_WARM_START=1:
+    the previous checkpoint has already trained on most of the current
+    validation window (each cycle refetches a rolling ~6-week history), so a
+    warm-started candidate inherits that leakage and its validation F1 is not an
+    honest out-of-sample number."""
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    logger.info(f"[TrainCNN] Fetching {TRAIN_BARS} bars/symbol of real history from Binance...")
+    data = _build_windowed_dataset(tune_fraction=TUNE_FRACTION)
+    X_train, y_train = data["X_train"], data["y_train"]
+    X_tune, y_tune = data["X_tune"], data["y_tune"]
+    X_val_raw, y_val, r_val = data["X_val"], data["y_val"], data["r_val"]
+
+    if len(X_train) < 500 or len(X_tune) < 100 or len(X_val_raw) < 100:
         msg = (f"Insufficient windows to train reliably (train={len(X_train)}, "
-               f"val={len(X_val)}) — skipping this cycle.")
+               f"tune={len(X_tune)}, val={len(X_val_raw)}) — skipping this cycle.")
         logger.warning(f"[TrainCNN] {msg}")
         return {"promoted": False, "reason": msg}
 
     # z-score stats over the stationarized TRAINING windows only (every bar
     # of every window counts) — persisted to the schema so inference
-    # normalizes identically.
+    # normalizes identically. Train/tune are normalized in place (memory).
     flat = X_train.reshape(-1, X_train.shape[2])
     means = flat.mean(axis=0)
     stds = flat.std(axis=0)
+    del flat
 
-    X_train = _normalize(X_train, means, stds).astype(np.float32)
-    X_val = _normalize(X_val, means, stds).astype(np.float32)
+    X_train = _normalize_inplace(X_train, means, stds)
+    X_tune = _normalize_inplace(X_tune, means, stds)
+    X_val = _normalize(X_val_raw, means, stds).astype(np.float32)  # raw copy kept for the incumbent
 
-    # (N, seq, F) -> (N, F, seq) as CNN1D expects
-    X_train_t = torch.from_numpy(X_train).permute(0, 2, 1).contiguous()
-    y_train_t = torch.from_numpy(y_train)
-    X_val_t = torch.from_numpy(X_val).permute(0, 2, 1).contiguous()
+    X_train_t, y_train_t = _to_tensor(X_train), torch.from_numpy(y_train)
+    X_tune_t, X_val_t = _to_tensor(X_tune), _to_tensor(X_val)
+    del X_train, X_tune
 
     state = _load_state()
     same_input_version = state.get("input_version") == INPUT_VERSION
 
     model = CNN1D(input_features=len(FEATURE_COLS))
-    # A checkpoint trained on a different input representation (e.g. v1's
-    # repeated single bar) is not a useful starting point for v2 windows.
-    have_prior = warm_start and CHECKPOINT_PATH.exists() and same_input_version
+    allow_warm = os.getenv("AQEA_CNN_ALLOW_WARM_START") == "1"
+    have_prior = bool(warm_start and allow_warm and CHECKPOINT_PATH.exists() and same_input_version)
+    if warm_start and not allow_warm:
+        logger.info("[TrainCNN] warm_start ignored (would contaminate validation) — training from scratch.")
     if have_prior:
         try:
             model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
-            logger.info("[TrainCNN] Warm-started from existing checkpoint.")
+            logger.info("[TrainCNN] Warm-started from existing checkpoint (validation is contaminated).")
         except Exception as e:
             logger.warning(f"[TrainCNN] Could not warm-start ({e}) — training from scratch.")
             have_prior = False
-    elif warm_start and not same_input_version:
-        logger.info(f"[TrainCNN] Input representation changed (v{state.get('input_version')} -> "
-                    f"v{INPUT_VERSION}) — training from scratch and resetting the promotion baseline.")
 
     lr = 0.0005 if have_prior else 0.001
-    epochs = 8 if have_prior else 15
+    max_epochs = 8 if have_prior else 15
+    patience = 3
 
     # The fee floor makes HOLD the majority class by design — weight the
     # loss so LONG/SHORT aren't optimized away into permanent HOLD.
@@ -265,51 +386,53 @@ def train_cnn(warm_start: bool = True) -> dict:
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     logger.info(f"[TrainCNN] Training ({'fine-tune' if have_prior else 'from scratch'}) "
-                f"on {len(X_train)} windows / {len(SYMBOLS)} symbols, lr={lr}, epochs={epochs}")
-    for epoch in range(epochs):
+                f"on {len(X_train_t)} windows / {len(SYMBOLS)} symbols, tune={len(X_tune_t)}, lr={lr}, "
+                f"max_epochs={max_epochs}")
+    best_tune_f1, best_state, stale, epochs_run = -1.0, None, 0, 0
+    for epoch in range(max_epochs):
         model.train()
         for xb, yb in loader:
             optimizer.zero_grad()
             loss = criterion(model(xb), yb)
             loss.backward()
             optimizer.step()
+        epochs_run = epoch + 1
+        tune_f1 = _macro_f1(y_tune, _predict(model, X_tune_t))
+        if tune_f1 > best_tune_f1 + 1e-4:
+            best_tune_f1, best_state, stale = tune_f1, {k: v.clone() for k, v in model.state_dict().items()}, 0
+        else:
+            stale += 1
+            if stale >= patience:
+                break
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
-    model.eval()
-    with torch.no_grad():
-        val_preds = torch.argmax(model(X_val_t), dim=1).numpy()
-    report = classification_report(y_val, val_preds, output_dict=True, zero_division=0)
-    # sklearn/numpy scalars (numpy.float64, numpy.bool_ from the >= below)
-    # aren't JSON-serializable by FastAPI's encoder — cast to native types
-    # at the boundary rather than fighting it downstream.
+    # The validation set is used exactly once, here.
+    val_preds = _predict(model, X_val_t)
+    report = classification_report(y_val, val_preds, labels=[0, 1, 2], output_dict=True, zero_division=0)
     new_f1 = float(report["macro avg"]["f1-score"])
     new_accuracy = float(report["accuracy"])
-    logger.info(f"[TrainCNN] Validation macro F1: {new_f1:.4f}, accuracy: {new_accuracy:.4f}")
+    majority_rate = float(np.bincount(y_val, minlength=3).max() / len(y_val))
+    edge = promotion_gate.economic_edge(val_preds, r_val)
+    logger.info(f"[TrainCNN] Validation macro F1: {new_f1:.4f}, accuracy: {new_accuracy:.4f} "
+                f"(majority-class rate {majority_rate:.4f}); net edge per directional call "
+                f"{edge['mean_net']} over {edge['n_calls']} calls, 95% CI [{edge['ci_lo']}, {edge['ci_hi']}]")
 
-    # Gate against the incumbent scored on THIS validation set. The stored
-    # last_promoted_f1 was measured on an older window (different regime),
-    # so comparing to it blocked every retrain for 9+ days while the live
-    # model itself had likely decayed below that number. The random-guess
-    # floor still applies regardless; on an input-version change there's no
-    # comparable incumbent.
-    prior_f1 = None
-    if same_input_version and CHECKPOINT_PATH.exists():
-        try:
-            incumbent = CNN1D(input_features=len(FEATURE_COLS))
-            incumbent.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
-            incumbent.eval()
-            with torch.no_grad():
-                inc_preds = torch.argmax(incumbent(X_val_t), dim=1).numpy()
-            prior_f1 = float(classification_report(y_val, inc_preds, output_dict=True, zero_division=0)["macro avg"]["f1-score"])
+    prior_f1, prior_edge = (None, None)
+    if same_input_version:
+        prior_f1, prior_edge = _score_incumbent(X_val_raw, y_val, r_val)
+        if prior_f1 is None:
+            prior_f1 = state.get("last_promoted_f1") if CHECKPOINT_PATH.exists() else None
+        else:
             logger.info(f"[TrainCNN] Incumbent macro F1 on the same validation set: {prior_f1:.4f}")
-        except Exception as e:
-            logger.warning(f"[TrainCNN] Could not score incumbent ({e}) — falling back to stored F1.")
-            prior_f1 = state.get("last_promoted_f1")
-    # Same data for both → no tolerance needed: promote only if it's better.
-    promote = bool(new_f1 >= MIN_PROMOTE_F1 and (prior_f1 is None or new_f1 > prior_f1))
+
+    promote, reason = promotion_gate.decide_promotion(new_f1, prior_f1, edge, floor_f1=MIN_PROMOTE_F1)
 
     if promote:
         if CHECKPOINT_PATH.exists():
             BACKUP_PATH.write_bytes(CHECKPOINT_PATH.read_bytes())
+        if SCHEMA_PATH.exists():
+            SCHEMA_BACKUP_PATH.write_bytes(SCHEMA_PATH.read_bytes())
         CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), CHECKPOINT_PATH)
         _write_schema(means, stds)
@@ -317,32 +440,35 @@ def train_cnn(warm_start: bool = True) -> dict:
         state["last_promoted_at"] = datetime.now(timezone.utc).isoformat()
         logger.info(f"[TrainCNN] Promoted new checkpoint (F1 {new_f1:.4f} vs prior {prior_f1}).")
     else:
-        logger.warning(f"[TrainCNN] REFUSED promotion — new F1 {new_f1:.4f} is below the random-guess "
-                        f"floor ({MIN_PROMOTE_F1}) or regresses past tolerance vs prior {prior_f1}. "
-                        f"Live checkpoint left untouched.")
+        logger.warning(f"[TrainCNN] REFUSED promotion — {reason}. Live checkpoint left untouched.")
 
     # Explicit flag rather than comparing last_attempt_at/last_promoted_at
     # timestamps — those two are set via separate datetime.now() calls
-    # microseconds apart even on a normal promotion, so string-comparing
-    # them for "was this refused" is always true and always wrong.
+    # microseconds apart even on a normal promotion.
     state["last_attempt_promoted"] = promote
+    state["last_attempt_reason"] = reason
     state["last_attempt_at"] = datetime.now(timezone.utc).isoformat()
     state["last_attempt_f1"] = new_f1
     state["last_attempt_incumbent_f1"] = prior_f1
     state["last_attempt_accuracy"] = new_accuracy
-    state["rows_trained"] = int(len(X_train))
-    state["rows_validated"] = int(len(X_val))
+    state["last_attempt_majority_rate"] = majority_rate
+    state["last_attempt_edge"] = edge
+    state["last_attempt_incumbent_edge"] = prior_edge
+    state["rows_trained"] = int(len(X_train_t))
+    state["rows_tuned"] = int(len(X_tune_t))
+    state["rows_validated"] = int(len(X_val_t))
+    state["epochs_run"] = epochs_run
     if promote:
         state["input_version"] = INPUT_VERSION
     _save_state(state)
 
-    _update_training_report(report, {"epochs": epochs, "batch_size": 64, "seq_len": SEQ_LEN,
+    _update_training_report(report, {"epochs": epochs_run, "batch_size": 64, "seq_len": SEQ_LEN,
                                       "features": FEATURE_COLS, "warm_start": have_prior, "lr": lr,
                                       "input_version": INPUT_VERSION, "train_bars": TRAIN_BARS,
-                                      "fee_floor": FEE_FLOOR})
+                                      "fee_floor": FEE_FLOOR, "tune_fraction": TUNE_FRACTION})
 
-    return {"promoted": promote, "f1": new_f1, "accuracy": new_accuracy,
-            "rows_trained": int(len(X_train)), "rows_validated": int(len(X_val))}
+    return {"promoted": promote, "reason": reason, "f1": new_f1, "accuracy": new_accuracy,
+            "edge": edge, "rows_trained": int(len(X_train_t)), "rows_validated": int(len(X_val_t))}
 
 
 if __name__ == "__main__":

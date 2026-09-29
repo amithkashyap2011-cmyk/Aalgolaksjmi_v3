@@ -64,7 +64,7 @@ const modelName = "CNN_1D_V1";
 // Unique per test (not just per file) — guarantees zero cross-test document
 // visibility regardless of afterEach cleanup timing, rather than relying on
 // delete-by-shared-symbol running to completion before the next test starts.
-let symbol = "BTCUSDT_INIT";
+let symbol = "BTCUSDT";
 let testCounter = 0;
 
 function makePrediction(overrides: Record<string, unknown> = {}) {
@@ -93,7 +93,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   testCounter += 1;
-  symbol = `TESTSYM_${testCounter}`;
+  symbol = `TESTSYM${testCounter}USDT`; // must look like a Binance USDT pair to be gradable
   klinesMode = "resolve";
   klinesValue = [{ close: "51000" }];
   klinesCalls = [];
@@ -316,6 +316,37 @@ describe("AITelemetryService.resolvePendingOutcomes — maturity-based selection
     const doc = await AIPredictionTelemetry.create(makePrediction({ timestamp: minutesAgo(16) }));
     await AITelemetryService.resolvePendingOutcomes();
 
+    const after = await AIPredictionTelemetry.findById(doc._id);
+    expect(after.outcome15m).toBe("WIN");
+  });
+});
+
+// 2026-09-30: Mamba/Transformer logged ~1,000 predictions/day on Indian stocks with
+// a placeholder price of 100. Grading fetches BINANCE candles, so those rows can
+// never resolve: they occupied pending-grading slots and triggered failing klines
+// requests every cycle. Only Binance USDT pairs are gradable.
+describe("AITelemetryService.resolvePendingOutcomes — non-crypto symbols are never graded", () => {
+  test("an Indian-stock row (placeholder price) is skipped: not graded, no klines call", async () => {
+    if (skipIfNoMongo()) return;
+    const stockSymbol = `RELIANCE${testCounter}`;
+    const doc = await AIPredictionTelemetry.create(
+      makePrediction({ symbol: stockSymbol, priceAtPrediction: 100, timestamp: minutesAgo(40) })
+    );
+    try {
+      await AITelemetryService.resolvePendingOutcomes();
+      const after = await AIPredictionTelemetry.findById(doc._id);
+      expect(after.outcome15m).toBeUndefined();
+      expect(after.isCorrect).toBeUndefined();
+      expect(klinesCalls.some((c) => c[0] === stockSymbol)).toBe(false);
+    } finally {
+      await AIPredictionTelemetry.deleteMany({ symbol: stockSymbol });
+    }
+  });
+
+  test("a crypto USDT row of the same age IS graded (the filter is not over-broad)", async () => {
+    if (skipIfNoMongo()) return;
+    const doc = await AIPredictionTelemetry.create(makePrediction({ timestamp: minutesAgo(40) }));
+    await AITelemetryService.resolvePendingOutcomes();
     const after = await AIPredictionTelemetry.findById(doc._id);
     expect(after.outcome15m).toBe("WIN");
   });

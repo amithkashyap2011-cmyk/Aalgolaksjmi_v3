@@ -24,6 +24,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import classification_report, f1_score
 
 from data_pipeline import SYMBOLS, INTERVAL, add_cnn_features, build_cnn_windows, fetch_klines_paginated
+import promotion_gate
 import train_cnn as C
 
 logger = logging.getLogger("TrainGBM")
@@ -31,6 +32,7 @@ logger = logging.getLogger("TrainGBM")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = PROJECT_ROOT / "models" / "gbm"
 CHECKPOINT_PATH = MODEL_DIR / "gbm_v1.joblib"
+BACKUP_PATH = MODEL_DIR / "gbm_v1.bak.joblib"
 STATE_PATH = MODEL_DIR / "train_state.json"
 
 FORWARD_HORIZON = 5          # bars; longer horizons showed no edge
@@ -40,7 +42,8 @@ VAL_FRACTION = 0.2
 WALK_FORWARD_FOLDS = 3
 
 # Promotion needs a real margin over 3-class random (~0.33), on the final
-# split AND on average across the walk-forward windows.
+# split AND on average across the walk-forward windows — and then passes
+# promotion_gate (F1 margin over the incumbent + a proven net-of-fee edge).
 MIN_PROMOTE_F1 = 0.36
 MIN_WALK_FORWARD_F1 = 0.35
 
@@ -90,19 +93,24 @@ def _symbol_frames() -> list:
 
 def _split(frames: list, train_end: float, test_end: float):
     """Chronological per-symbol split at fractions of each symbol's history.
-    Label thresholds come from each symbol's training rows only."""
-    Xtr, ytr, Xte, yte = [], [], [], []
+    Label thresholds come from each symbol's training rows only, and the last
+    FORWARD_HORIZON training rows are embargoed: their labels look that many
+    bars ahead, i.e. into the test slice. Returns
+    (X_train, y_train, X_test, y_test, future_returns_test)."""
+    H = FORWARD_HORIZON
+    Xtr, ytr, Xte, yte, fte = [], [], [], [], []
     for X, fut in frames:
         n = len(X)
         a, b = int(n * train_end), int(n * test_end)
-        if a < 100 or b - a < 20:
+        if a - H < 100 or b - a < 20:
             continue
-        labels = C._label_symbol(fut, a)
-        Xtr.append(X[:a]); ytr.append(labels[:a])
-        Xte.append(X[a:b]); yte.append(labels[a:b])
+        labels = C._label_symbol(fut, a - H)
+        Xtr.append(X[:a - H]); ytr.append(labels[:a - H])
+        Xte.append(X[a:b]); yte.append(labels[a:b]); fte.append(fut[a:b])
     if not Xtr:
         return None
-    return np.concatenate(Xtr), np.concatenate(ytr), np.concatenate(Xte), np.concatenate(yte)
+    return (np.concatenate(Xtr), np.concatenate(ytr), np.concatenate(Xte),
+            np.concatenate(yte), np.concatenate(fte))
 
 
 def _macro_f1(y, p) -> float:
@@ -120,7 +128,7 @@ def walk_forward(frames: list) -> list:
         s = _split(frames, tr_end, te_end)
         if s is None:
             continue
-        Xtr, ytr, Xte, yte = s
+        Xtr, ytr, Xte, yte, _ = s
         m = HistGradientBoostingClassifier(**HYPERPARAMS).fit(Xtr, ytr)
         scores.append(_macro_f1(yte, m.predict(Xte)))
     return scores
@@ -132,7 +140,7 @@ def train_gbm() -> dict:
     s = _split(frames, 1 - VAL_FRACTION, 1.0)
     if s is None:
         return {"promoted": False, "reason": "insufficient data"}
-    Xtr, ytr, Xv, yv = s
+    Xtr, ytr, Xv, yv, fv = s
     if len(Xtr) < 1000 or len(Xv) < 200:
         return {"promoted": False, "reason": f"insufficient rows (train={len(Xtr)}, val={len(Xv)})"}
 
@@ -146,21 +154,29 @@ def train_gbm() -> dict:
     accuracy = float(report["accuracy"])
     random_f1 = _macro_f1(yv, np.random.default_rng(0).integers(0, 3, len(yv)))
 
+    edge = promotion_gate.economic_edge(preds, fv)
+
     # Incumbent scored on the SAME validation set (never a stored number).
-    prior_f1 = None
+    prior_f1, prior_edge = None, None
     if CHECKPOINT_PATH.exists():
         try:
-            prior_f1 = _macro_f1(yv, joblib.load(CHECKPOINT_PATH).predict(Xv))
+            inc_preds = joblib.load(CHECKPOINT_PATH).predict(Xv)
+            prior_f1 = _macro_f1(yv, inc_preds)
+            prior_edge = promotion_gate.economic_edge(inc_preds, fv)
         except Exception as e:
             logger.warning(f"[TrainGBM] Could not score incumbent ({e}).")
 
-    promote = bool(new_f1 >= MIN_PROMOTE_F1 and wf_mean >= MIN_WALK_FORWARD_F1
-                   and (prior_f1 is None or new_f1 > prior_f1))
+    promote, reason = promotion_gate.decide_promotion(
+        new_f1, prior_f1, edge, floor_f1=MIN_PROMOTE_F1,
+        extra_ok=wf_mean >= MIN_WALK_FORWARD_F1,
+        extra_reason=f"walk-forward mean F1 {wf_mean:.4f} is below {MIN_WALK_FORWARD_F1}")
     logger.info(f"[TrainGBM] val F1 {new_f1:.4f} (random {random_f1:.4f}, incumbent {prior_f1}), "
                 f"walk-forward {['%.3f' % x for x in wf]} mean {wf_mean:.4f} -> {'PROMOTE' if promote else 'keep'}")
 
     if promote:
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        if CHECKPOINT_PATH.exists():
+            BACKUP_PATH.write_bytes(CHECKPOINT_PATH.read_bytes())
         joblib.dump(model, CHECKPOINT_PATH)
 
     state = _load_state()
@@ -172,6 +188,9 @@ def train_gbm() -> dict:
         "last_attempt_incumbent_f1": prior_f1,
         "last_attempt_walk_forward_f1": wf,
         "last_attempt_promoted": promote,
+        "last_attempt_reason": reason,
+        "last_attempt_edge": edge,
+        "last_attempt_incumbent_edge": prior_edge,
         "rows_trained": int(len(Xtr)),
         "rows_validated": int(len(Xv)),
         "horizon_bars": FORWARD_HORIZON,
@@ -182,7 +201,7 @@ def train_gbm() -> dict:
         state["last_promoted_f1"] = new_f1
     _save_state(state)
 
-    return {"promoted": promote, "f1": new_f1, "accuracy": accuracy, "random_f1": random_f1,
+    return {"promoted": promote, "reason": reason, "edge": edge, "f1": new_f1, "accuracy": accuracy, "random_f1": random_f1,
             "walk_forward_f1": wf, "incumbent_f1": prior_f1,
             "rows_trained": int(len(Xtr)), "rows_validated": int(len(Xv))}
 

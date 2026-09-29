@@ -32,7 +32,7 @@ def run_cycle() -> dict:
         mod, func = fn.split(":")
         try:
             f = getattr(__import__(mod), func)
-            result[name] = f(warm_start=True) if name in ("cnn", "ppo") else f()
+            result[name] = f()  # every model trains from scratch: warm-starting leaks the validation window
         except Exception as e:  # one model failing never blocks the others
             logger.error(f"[TrainingWorker] {name} training failed: {e}")
             result[name] = {"promoted": False, "error": str(e)}
