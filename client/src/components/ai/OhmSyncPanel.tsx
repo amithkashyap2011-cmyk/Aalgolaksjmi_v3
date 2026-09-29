@@ -7,7 +7,7 @@
  */
 import { useMemo } from "react";
 import Highcharts from "highcharts";
-import HighchartsReact from "highcharts-react-official";
+import HighchartsReact from "../chart/highchartsReact";
 import { ensureHighchartsConfigured } from "../../lib/chartSetup";
 import Card from "../../ui/Card";
 import { generateOhmWave } from "../../mock/data";

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 import Highcharts from "highcharts";
-import HighchartsReact from "highcharts-react-official";
+import HighchartsReact, { type HighchartsReactRefObject } from "../components/chart/highchartsReact";
 import { ensureHighchartsConfigured } from "../lib/chartSetup";
 import { useAppStore } from "../store/useAppStore";
 import { useIsMobile } from "../hooks/useMediaQuery";
@@ -100,7 +100,7 @@ export default function BacktestPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
-  const chartRef = useRef<HighchartsReact.RefObject>(null);
+  const chartRef = useRef<HighchartsReactRefObject>(null);
 
   const toggleStrategy = (id: string) => {
     setStrategies((prev) => {

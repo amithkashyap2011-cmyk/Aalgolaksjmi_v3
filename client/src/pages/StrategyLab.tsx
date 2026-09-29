@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import Highcharts from "highcharts";
-import HighchartsReact from "highcharts-react-official";
+import HighchartsReact from "../components/chart/highchartsReact";
 import { ensureHighchartsConfigured } from "../lib/chartSetup";
 import { getToken, ensureToken } from "../lib/api";
 import {

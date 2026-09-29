@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Highcharts from "highcharts/highstock";
-import HighchartsReact from "highcharts-react-official";
+import HighchartsReact from "./highchartsReact";
 import { ensureHighchartsConfigured } from "../../lib/chartSetup";
 import * as api from "../../lib/api";
 import { socket, subscribeTicker, unsubscribeTicker, type TickData } from "../../lib/socket";
