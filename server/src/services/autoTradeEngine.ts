@@ -8,6 +8,8 @@
  * Uses efficient Maps from paperState to avoid O(n) scans.
  */
 
+import { checkExecutionDeadline, ExecutionDeadlineError, withExecutionDeadline } from "../utils/executionDeadline.js";
+
 import { Settings, type ISettings } from "../models/Settings.js";
 import { Trade } from "../models/Trade.js";
 import { Alert } from "../models/Alert.js";
@@ -283,6 +285,7 @@ async function tick(): Promise<void> {
     }
 
     for (const key of autoEnabledUsers) {
+      checkExecutionDeadline();
       const { userId, accountType } = parseScanKey(key);
       try {
         if (process.env.DEBUG_TRACES === "true") {
@@ -295,33 +298,13 @@ async function tick(): Promise<void> {
     }
   };
 
-  // Snapshot of which user:accountType keys this tick will touch — used to
-  // selectively unblock only keys that got stuck in this tick on timeout,
-  // rather than blanket-clearing ALL keys (which could release locks from
-  // other concurrent ticks or manual processUser calls).
-  const tickKeys = new Set(
-    [...autoEnabledUsers].map((key) => {
-      const { userId, accountType } = parseScanKey(key);
-      return `${userId}:${accountType || "FUTURES"}`;
-    })
-  );
-
   try {
-    const globalTimeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Global tick exceeded 55000ms limit")), 55000)
-    );
-    await Promise.race([tickExecution(), globalTimeout]);
+    await withExecutionDeadline(55000, "Global tick exceeded 55000ms limit", tickExecution);
     SchedulerAccounting.recordTickCompleted(tickId, Date.now() - start);
   } catch (err: any) {
-    const isTimeout = err?.message?.includes("Global tick exceeded");
+    const isTimeout = err instanceof ExecutionDeadlineError;
     if (isTimeout) {
       SchedulerAccounting.recordTickTimedOut(tickId);
-      // Clean only the processing keys that belong to THIS tick so future
-      // ticks are not permanently blocked.  A blanket .clear() also wiped
-      // locks from other concurrent ticks / manual processUser invocations.
-      for (const key of tickKeys) {
-        activeProcessingKeys.delete(key);
-      }
     } else {
       SchedulerAccounting.recordTickErrored(tickId, err?.message || String(err));
     }
@@ -335,6 +318,7 @@ async function tick(): Promise<void> {
 }
 
 export async function processUser(userId: string, accountTypeArg?: "SPOT" | "FUTURES"): Promise<void> {
+  checkExecutionDeadline();
   const resolvedType = accountTypeArg || "FUTURES";
   const procKey = `${userId}:${resolvedType}`;
   if (activeProcessingKeys.has(procKey)) {
@@ -439,28 +423,24 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
   const MAX_CONCURRENT_SYMBOLS = 4;
   const symbols = settings.allowedSymbols;
   for (let i = 0; i < symbols.length; i += MAX_CONCURRENT_SYMBOLS) {
+    checkExecutionDeadline();
     const chunk = symbols.slice(i, i + MAX_CONCURRENT_SYMBOLS);
     const chunkTasks = chunk.map(async (symbol) => {
       if (process.env.DEBUG_TRACES === "true") {
         console.log(`[PROCESS_SYMBOL] ${symbol} entered.`);
       }
       const symStart = Date.now();
-      let timeoutId: NodeJS.Timeout | null = null;
       try {
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error(`Timeout evaluating symbol ${symbol} after 35000ms`)), 35000);
-        });
-        await Promise.race([
-          processSymbol(userId, symbol, mode, accountType, settings, currentHeat, balance),
-          timeoutPromise
-        ]);
-        if (timeoutId) clearTimeout(timeoutId);
+        await withExecutionDeadline(
+          35000,
+          `Timeout evaluating symbol ${symbol} after 35000ms`,
+          () => processSymbol(userId, symbol, mode, accountType, settings, currentHeat, balance),
+        );
         if (process.env.DEBUG_TRACES === "true") {
           console.log(`[auto] [SYMBOL_TERMINAL] symbol=${symbol} state=EVALUATED latency=${Date.now() - symStart}ms`);
         }
       } catch (symErr: any) {
-        if (timeoutId) clearTimeout(timeoutId);
-        const isTimeout = symErr?.message?.includes("Timeout evaluating");
+        const isTimeout = symErr instanceof ExecutionDeadlineError;
         const terminalState = isTimeout ? "TIMEOUT" : "DATA_UNAVAILABLE";
         const terminalReason = isTimeout ? `SYMBOL_EVALUATION_TIMEOUT: ${symErr?.message || symErr}` : `SYMBOL_EVALUATION_ERROR: ${symErr?.message || symErr}`;
         console.error(`[auto] [SYMBOL_TERMINAL] symbol=${symbol} state=${terminalState} error=${symErr?.message || symErr}`);
@@ -540,6 +520,7 @@ async function bookProfitOnAiView(
   if (!signal.book) return false;
 
   console.log(`[AI_BOOK_PROFIT] ${mode} ${accountType} ${symbol} ${pos.side} @ ${price} net=${(signal.netProfitPct * 100).toFixed(2)}% ai=${aqeaDecision.decision}/${fusion?.direction ?? "?"}`);
+  checkExecutionDeadline();
   await handleExit(userId, symbol, mode, accountType, signal.reason, 1.0, price);
   return !paper.getPosition(userId, symbol, mode, accountType);
 }
@@ -556,6 +537,7 @@ async function manageHeldPositionsOnly(
 ): Promise<void> {
   const held = paper.getAllOpenPositions(mode, [accountType]).filter((p) => p.userId === userId);
   for (const p of held) {
+    checkExecutionDeadline();
     try {
       await processSymbol(userId, p.symbol, mode, accountType, settings, portfolioHeat, balance, false);
     } catch (err: any) {
@@ -600,6 +582,7 @@ async function processSymbol(
   /* 1. Build Context (Legacy Fetcher) */
   const t0 = Date.now();
   const ctx = await agent.buildContext(symbol, mode, userId, accountType);
+  checkExecutionDeadline();
   const tContext = Date.now() - t0;
   
   /* 2. AQEA CORE DECISION (SOLE AUTHORITY) */
@@ -612,6 +595,7 @@ async function processSymbol(
 
   const t1 = Date.now();
   const perfMetrics = await AnalyticsCache.getPerformanceMetrics(userId, symbol);
+  checkExecutionDeadline();
   const tPerf = Date.now() - t1;
 
   const t2 = Date.now();
@@ -631,6 +615,7 @@ async function processSymbol(
       rewardRisk: perfMetrics.profitFactor || 1.5
     }
   });
+  checkExecutionDeadline();
   const tDecide = Date.now() - t2;
   if (process.env.DEBUG_TRACES === "true") {
     console.log(`[PROCESS_SYMBOL_PROFILE] symbol=${symbol} tContext=${tContext}ms tPerf=${tPerf}ms tDecide=${tDecide}ms decision=${aqeaDecision.decision}`);
@@ -929,6 +914,7 @@ async function processSymbol(
 
   /* 5. Act on decision (ENTRY) */
   if (aqeaDecision.decision === "LONG") {
+    checkExecutionDeadline();
     await handleLong(userId, symbol, mode, accountType, settings, aqeaDecision, riskProfile);
   } else if (aqeaDecision.decision === "SHORT") {
     // BUGFIX(spot-short-guard): SPOT accounts cannot hold a short — a LIVE SPOT short
@@ -941,6 +927,7 @@ async function processSymbol(
         ForwardTelemetryStore.updateTerminalState(shortDecisionId, "NO_TRADE", "SHORT blocked on SPOT account (spot can only go long)", "NO_TRADE");
       }
     } else {
+      checkExecutionDeadline();
       await handleShort(userId, symbol, mode, accountType, settings, aqeaDecision, riskProfile);
     }
   }
@@ -966,6 +953,7 @@ async function processSymbol(
       if (isSlBreached || pnlPct < -2.0 || unrealizedPnl < maxLossThreshold) {
         const exitReason = isSlBreached ? "STOP_LOSS_HIT" : "DYNAMIC_DRAWDOWN_CUT";
         console.error(`[DRAWDOWN_CUT] symbol=${symbol} PnLPct=${pnlPct.toFixed(2)}% unrealizedPnl=${unrealizedPnl.toFixed(2)}USDT reason=${exitReason}`);
+        checkExecutionDeadline();
         await handleExit(userId, symbol, mode, accountType, exitReason, 1.0, currentPrice);
         return;
       }
@@ -982,12 +970,14 @@ async function processSymbol(
         // 🛡️ Stagnant Loss Guard: Cut losing/stagnant trades after 4 hours if no TP hit
         if (holdHours > 4 && (!anyTpHit || unrealizedPnl <= 0)) {
           console.warn(`[STAGNANT_LOSS_GUARD] Cutting stagnant trade symbol=${symbol} holdHours=${holdHours.toFixed(1)} unrealizedPnl=${unrealizedPnl.toFixed(2)}`);
+          checkExecutionDeadline();
           await handleExit(userId, symbol, mode, accountType, "STAGNANT_LOSS_EXPIRE_4H", 1.0, currentPrice);
           return;
         }
 
         if (holdHours > 6 && !anyTpHit) {
           console.error(`[V40_CIRCUIT_BREAKER] MAX_HOLD_TIME symbol=${symbol} holdHours=${holdHours.toFixed(1)}`);
+          checkExecutionDeadline();
           await handleExit(userId, symbol, mode, accountType, "V40_MAX_HOLD_TIME_6H", 1.0, currentPrice);
           return;
         }
@@ -1021,6 +1011,7 @@ async function processSymbol(
 
       if (autoCloseTrigger.triggered) {
           if (autoCloseTrigger.action === "CLOSE") {
+             checkExecutionDeadline();
              await handleExit(userId, symbol, mode, accountType, autoCloseTrigger.reason, 1.0, ctx.ind.close);
              return;
           } else if (autoCloseTrigger.action === "MOVE_SL_TO_BE") {
@@ -1059,9 +1050,11 @@ async function processSymbol(
       );
 
       if (managementSignal.action === "CLOSE_FULL" && !isFreshPosition) {
+          checkExecutionDeadline();
           await handleExit(userId, symbol, mode, accountType, managementSignal.reason, 1.0, ctx.ind.close);
           return;
       } else if (managementSignal.action === "CLOSE_PARTIAL" && !isFreshPosition) {
+          checkExecutionDeadline();
           await handleExit(userId, symbol, mode, accountType, managementSignal.reason, managementSignal.qtyPct, ctx.ind.close);
           return;
       } else if (managementSignal.action === "MODIFY_STOP" && managementSignal.newStopLoss) {
@@ -1090,6 +1083,7 @@ async function processSymbol(
 
       if (exitSignal.shouldExit) {
           if (exitSignal.type === "PARTIAL") {
+              checkExecutionDeadline();
               await handleExit(userId, symbol, mode, accountType, exitSignal.reason, exitSignal.qtyPct, ctx.ind.close);
               const rem = paper.getPosition(userId, symbol, mode, accountType);
               if (rem) {
@@ -1123,6 +1117,7 @@ async function processSymbol(
                   }
               }
           } else {
+              checkExecutionDeadline();
               await handleExit(userId, symbol, mode, accountType, exitSignal.reason, 1.0, ctx.ind.close);
           }
       } else if (exitSignal.newStopLoss != null) {
@@ -1332,11 +1327,14 @@ export async function handleLong(
       const clientOrderId = binance.genClientOrderId("aalgo-long");
       let result: any;
       if (accountType === "FUTURES") {
+        checkExecutionDeadline();
         await binance.setFuturesLeverage(apiKey, apiSecret, symbol, leverage);
         const qtyStr = await binance.formatFuturesQuantity(symbol, quantity);
+        checkExecutionDeadline();
         result = await binance.placeFuturesOrder(apiKey, apiSecret, { symbol, side: "BUY", type: "MARKET", quantity: qtyStr, clientOrderId });
       } else {
         const qtyStr = await binance.formatQuantity(symbol, quantity);
+        checkExecutionDeadline();
         result = await binance.placeOrder(apiKey, apiSecret, { symbol, side: "BUY", type: "MARKET", quantity: qtyStr, clientOrderId });
       }
       const actualExecutedQty = parseFloat(result.executedQty || result.origQty || String(quantity));
@@ -1403,6 +1401,7 @@ export async function handleLong(
     }
 
     const userObjId = toValidObjectId(userId);
+    checkExecutionDeadline();
     const trade = await paper.debitWalletAndCreateTrade(
       userId, mode, accountType, marginRequired,
       (session) => Trade.create([{
@@ -1614,11 +1613,14 @@ export async function handleShort(
       const clientOrderId = binance.genClientOrderId("aalgo-shrt");
       let result: any;
       if (accountType === "FUTURES") {
+        checkExecutionDeadline();
         await binance.setFuturesLeverage(apiKey, apiSecret, symbol, leverage);
         const qtyStr = await binance.formatFuturesQuantity(symbol, quantity);
+        checkExecutionDeadline();
         result = await binance.placeFuturesOrder(apiKey, apiSecret, { symbol, side: "SELL", type: "MARKET", quantity: qtyStr, clientOrderId });
       } else {
         const qtyStr = await binance.formatQuantity(symbol, quantity);
+        checkExecutionDeadline();
         result = await binance.placeOrder(apiKey, apiSecret, { symbol, side: "SELL", type: "MARKET", quantity: qtyStr, clientOrderId });
       }
       const actualExecutedQty = parseFloat(result.executedQty || result.origQty || String(quantity));
@@ -1685,6 +1687,7 @@ export async function handleShort(
     }
 
     const userObjId = toValidObjectId(userId);
+    checkExecutionDeadline();
     const trade = await paper.debitWalletAndCreateTrade(
       userId, mode, accountType, marginRequired,
       (session) => Trade.create([{
@@ -1753,6 +1756,7 @@ export async function handleExit(
   if (exitsInFlight.has(key)) return;
   exitsInFlight.add(key);
   try {
+    checkExecutionDeadline();
     await executeExit(userId, symbol, mode, accountType, reason, qtyPct, triggerPrice);
   } finally {
     exitsInFlight.delete(key);
@@ -1828,6 +1832,7 @@ async function executeExit(
     let exitResult: any;
     if (accountType === "FUTURES") {
       const qtyStr = await binance.formatFuturesQuantity(symbol, requestedCloseQty);
+      checkExecutionDeadline();
       exitResult = await binance.placeFuturesOrder(apiKey, apiSecret, { symbol, side: exitSide, type: "MARKET", quantity: qtyStr, clientOrderId: exitClientOrderId, reduceOnly: true });
     } else {
       if (exitSide === "SELL") {
@@ -1835,6 +1840,7 @@ async function executeExit(
       }
       const qtyStr = await binance.formatQuantity(symbol, requestedCloseQty);
       try {
+        checkExecutionDeadline();
         exitResult = await binance.placeOrder(apiKey, apiSecret, { symbol, side: exitSide, type: "MARKET", quantity: qtyStr, clientOrderId: exitClientOrderId });
       } catch (spotErr: any) {
         // Only a definite order-book rejection (400/401/403: filters, key
@@ -1842,6 +1848,7 @@ async function executeExit(
         // filled, and a second sell would double-exit.
         if (!/^Binance Spot 40[013]:/.test(spotErr?.message ?? "")) throw spotErr;
         console.warn(`[auto] LIVE spot exit ${symbol} rejected by order book (${spotErr.message}); retrying via Binance Convert`);
+        checkExecutionDeadline();
         exitResult = await binance.convertSpotMarket(apiKey, apiSecret, {
           symbol, side: exitSide, quantity: requestedCloseQty, price: triggerPrice ?? pos.entryPrice,
         });

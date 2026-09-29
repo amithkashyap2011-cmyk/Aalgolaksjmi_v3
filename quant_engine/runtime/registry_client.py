@@ -38,9 +38,10 @@ class RegistryClient:
                         # Start heartbeat in background
                         asyncio.create_task(self.heartbeat_loop(health_callback))
                         return True
+                    logger.warning(f"Registration rejected with status: {response.status_code}; retrying in 2s")
             except Exception as e:
-                logger.warning(f"Registration failed, retrying in 2s... Error: {e}")
-                await asyncio.sleep(2)
+                logger.warning(f"Registration failed, retrying in 2s... {type(e).__name__}: {e}")
+            await asyncio.sleep(2)
 
     async def heartbeat_loop(self, health_callback):
         url = f"{self.node_url}/system/heartbeat"
@@ -62,7 +63,7 @@ class RegistryClient:
                     else:
                         logger.error(f"Heartbeat failed with status: {response.status_code}")
             except Exception as e:
-                logger.error(f"Heartbeat failed: {e}")
+                logger.error(f"Heartbeat failed: {type(e).__name__}: {e}")
             await asyncio.sleep(10) # 10 second heartbeats
 
         if not self.registered:

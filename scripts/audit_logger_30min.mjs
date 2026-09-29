@@ -6,6 +6,7 @@
  */
 
 import fs from "node:fs";
+import { isQuantErrorLine } from "./log_error_classifier.mjs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 
@@ -109,16 +110,16 @@ async function runSample() {
     appendAudit(`[MISTAKE:HEALTH] /health failed: ${err.message}`);
   }
 
-  // 2. Client endpoint check (port 9996)
+  // 2. Client endpoint check (port 9994)
   try {
-    const res = await fetch("http://127.0.0.1:9996/", { signal: AbortSignal.timeout(5000) });
+    const res = await fetch("http://127.0.0.1:9994/", { signal: AbortSignal.timeout(5000) });
     if (!res.ok) {
       mistakeStats.categories.clientErrors++;
       appendAudit(`[MISTAKE:CLIENT] Vite client returned status ${res.status}`);
     }
   } catch (err) {
     mistakeStats.categories.clientErrors++;
-    appendAudit(`[MISTAKE:CLIENT] Vite client unreachable on port 9996: ${err.message}`);
+    appendAudit(`[MISTAKE:CLIENT] Vite client unreachable on port 9994: ${err.message}`);
   }
 
   // 3. PM2 restarts
@@ -178,6 +179,7 @@ async function runSample() {
   if (quantErrors) {
     const lines = quantErrors.split("\n").filter(Boolean);
     for (const line of lines) {
+      if (!isQuantErrorLine(line)) continue;
       mistakeStats.categories.quantModelErrors++;
       appendAudit(`[MISTAKE:QUANT_ERROR] ${line}`);
     }
