@@ -27,7 +27,7 @@ import { AqeaPerformance } from "../models/AqeaPerformance.js";
 import { AqeaTradeAnalytics } from "../models/AqeaTradeAnalytics.js";
 import * as binance from "../services/binanceService.js";
 import * as paper from "../services/paperState.js";
-import { enrichOpenTrades, TAKER_FEE, computeUnrealisedPnl } from "../services/pnlService.js";
+import { enrichOpenTrades, cryptoTakerFee, computeUnrealisedPnl } from "../services/pnlService.js";
 import { toValidObjectId } from "../utils/mongoUtils.js";
 import * as autoTradeEngine from "../services/autoTradeEngine.js";
 import { getTradingControlStatus, setTradingControlStatus, getTradingControlChangedAt } from "../services/tradingControlStatus.js";
@@ -899,8 +899,8 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
               const reduceQty = Math.min(executedQty, existing.quantity);
               const remaining = existing.quantity - reduceQty;
 
-              const entryFee = existing.entryPrice * reduceQty * TAKER_FEE;
-              const exitFee = actualEntryPrice * reduceQty * TAKER_FEE;
+              const entryFee = existing.entryPrice * reduceQty * cryptoTakerFee(existing.accountType);
+              const exitFee = actualEntryPrice * reduceQty * cryptoTakerFee(existing.accountType);
               const grossPnl = existing.side === "BUY"
                 ? (actualEntryPrice - existing.entryPrice) * reduceQty
                 : (existing.entryPrice - actualEntryPrice) * reduceQty;
@@ -1013,8 +1013,8 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
             exitPriceUsed = simEntryPrice;
             const existingLeverage = existing.leverage || 1;
             const initialMargin = (reduceQty * existing.entryPrice) / existingLeverage;
-            const entryFee = existing.entryPrice * reduceQty * TAKER_FEE;
-            const exitFee = simEntryPrice * reduceQty * TAKER_FEE;
+            const entryFee = existing.entryPrice * reduceQty * cryptoTakerFee(existing.accountType);
+            const exitFee = simEntryPrice * reduceQty * cryptoTakerFee(existing.accountType);
             const grossPnl = (existing.entryPrice - simEntryPrice) * reduceQty; // short PnL
             realizedPnl = grossPnl - entryFee - exitFee;
             cost = -(initialMargin + realizedPnl); // return margin + profit (or margin - loss)
@@ -1030,8 +1030,8 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
             exitPriceUsed = simEntryPrice;
             const existingLeverage = existing.leverage || 1;
             const initialMargin = (reduceQty * existing.entryPrice) / existingLeverage;
-            const entryFee = existing.entryPrice * reduceQty * TAKER_FEE;
-            const exitFee = simEntryPrice * reduceQty * TAKER_FEE;
+            const entryFee = existing.entryPrice * reduceQty * cryptoTakerFee(existing.accountType);
+            const exitFee = simEntryPrice * reduceQty * cryptoTakerFee(existing.accountType);
             const grossPnl = (simEntryPrice - existing.entryPrice) * reduceQty; // long PnL
             realizedPnl = grossPnl - entryFee - exitFee;
             cost = -(initialMargin + realizedPnl); // return margin + profit (or margin - loss)
@@ -1604,8 +1604,8 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
           } catch { /* fallback to entryPrice */ }
         }
 
-        const entryFee = trade.entryPrice * trade.quantity * TAKER_FEE;
-        const exitFee = exitPrice * trade.quantity * TAKER_FEE;
+        const entryFee = trade.entryPrice * trade.quantity * cryptoTakerFee(trade.accountType);
+        const exitFee = exitPrice * trade.quantity * cryptoTakerFee(trade.accountType);
         grossPnl = trade.side === "BUY"
           ? (exitPrice - trade.entryPrice) * trade.quantity
           : (trade.entryPrice - exitPrice) * trade.quantity;
@@ -1756,8 +1756,8 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
         const executedQty = parseFloat(result.executedQty || result.origQty || "0");
         const closedQty = Number.isFinite(executedQty) && executedQty > 0 ? Math.min(executedQty, trade.quantity) : trade.quantity;
 
-        const entryFee = trade.entryPrice * closedQty * TAKER_FEE;
-        const exitFee = exitPrice * closedQty * TAKER_FEE;
+        const entryFee = trade.entryPrice * closedQty * cryptoTakerFee(trade.accountType);
+        const exitFee = exitPrice * closedQty * cryptoTakerFee(trade.accountType);
         grossPnl = trade.side === "BUY"
           ? (exitPrice - trade.entryPrice) * closedQty
           : (trade.entryPrice - exitPrice) * closedQty;
@@ -1806,8 +1806,8 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
         } catch { /* fallback to entry */ }
       }
 
-      const entryFee = trade.entryPrice * trade.quantity * TAKER_FEE;
-      const exitFee = exitPrice * trade.quantity * TAKER_FEE;
+      const entryFee = trade.entryPrice * trade.quantity * cryptoTakerFee(trade.accountType);
+      const exitFee = exitPrice * trade.quantity * cryptoTakerFee(trade.accountType);
       grossPnl = trade.side === "BUY"
         ? (exitPrice - trade.entryPrice) * trade.quantity
         : (trade.entryPrice - exitPrice) * trade.quantity;

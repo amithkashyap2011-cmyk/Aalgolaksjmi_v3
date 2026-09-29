@@ -17,6 +17,12 @@ import { isIndianTrade, resolveLivePriceForIndianTrade } from "./indianMarket/in
 
 /** Binance taker fee per side (0.04% futures). Matches close-position fee math. */
 export const TAKER_FEE = 0.0004;
+export const SPOT_TAKER_FEE = 0.001;
+
+/** Shared configured fee estimate for crypto marks, reductions and exits. */
+export function cryptoTakerFee(accountType?: string): number {
+  return accountType === "SPOT" ? SPOT_TAKER_FEE : TAKER_FEE;
+}
 
 /**
  * Net unrealised PnL for one open trade at a given mark price.
@@ -40,8 +46,8 @@ export function computeUnrealisedPnl(trade: any, markPrice: number): number {
   // Binance mark price, so applying the crypto taker fee here would fabricate a
   // negative unrealised PnL on a flat position; exclude them.
   const isCrypto = !(trade.accountType || "FUTURES").startsWith("INDIAN_");
-  const entryFee = isCrypto ? entryPrice * qty * TAKER_FEE : 0;
-  const exitFee = isCrypto ? markPrice * qty * TAKER_FEE : 0;
+  const entryFee = isCrypto ? entryPrice * qty * cryptoTakerFee(trade.accountType) : 0;
+  const exitFee = isCrypto ? markPrice * qty * cryptoTakerFee(trade.accountType) : 0;
   return grossPnl - entryFee - exitFee;
 }
 

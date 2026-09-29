@@ -20,7 +20,7 @@ import mongoose from "mongoose";
 import * as agent from "./agentService.js";
 import * as paper from "./paperState.js";
 import * as binance from "./binanceService.js";
-import { TAKER_FEE } from "./pnlService.js";
+import { cryptoTakerFee } from "./pnlService.js";
 import { SchedulerStateManager } from "./schedulerStateManager.js";
 import { AnalyticsCache } from "./analyticsCache.js";
 import { PlatformTelemetry } from "./platformTelemetry.js";
@@ -485,11 +485,6 @@ async function _executeProcessUser(userId: string, accountTypeArg?: "SPOT" | "FU
   }
 }
 
-// Real Binance spot taker fee per side. pnlService.TAKER_FEE (0.04%) is the
-// futures rate; judging a spot "profit" with it would bank trades that lose
-// money after the actual 0.1% fees.
-const SPOT_TAKER_FEE = 0.001;
-
 /** Sell a held position when it is in profit and the AI view has turned
  *  against it (PositionManager.evaluateProfitBooking). Returns true if closed. */
 async function bookProfitOnAiView(
@@ -514,7 +509,7 @@ async function bookProfitOnAiView(
     { side: pos.side, entryPrice: pos.entryPrice, sl: pos.sl },
     { decision: aqeaDecision.decision, fusedDirection: fusion?.direction ?? "HOLD" },
     price,
-    accountType === "SPOT" ? SPOT_TAKER_FEE : TAKER_FEE,
+    cryptoTakerFee(accountType),
     settings?.aiFlipExitMinProfitR ?? 0.3,
   );
   if (!signal.book) return false;
@@ -1890,8 +1885,8 @@ async function executeExit(
   const exitPrice = liveExitPrice || (Number.isFinite(triggerPrice) ? triggerPrice! : (klines.length ? parseFloat(klines[0].close) : pos.entryPrice));
   const entryNotional = pos.entryPrice * closeQty;
   const exitNotional = exitPrice * closeQty;
-  const entryFee = entryNotional * TAKER_FEE;
-  const exitFee = exitNotional * TAKER_FEE;
+  const entryFee = entryNotional * cryptoTakerFee(accountType);
+  const exitFee = exitNotional * cryptoTakerFee(accountType);
   const slippageCost = 0;
 
   let grossPnl = pos.side === "BUY" ? (exitPrice - pos.entryPrice) * closeQty : (pos.entryPrice - exitPrice) * closeQty;

@@ -13,6 +13,7 @@
  *   - Emits socket alert to the user on every trigger
  */
 
+import { cryptoTakerFee } from "./pnlService.js";
 import * as paper from "./paperState.js";
 import { Trade } from "../models/Trade.js";
 import { getTickerPriceSync, getLatestFundingRate } from "./binanceService.js";
@@ -43,7 +44,7 @@ async function closePaperPosition(
       : (entryPrice - exitPrice) * quantity;
 
     // Fees: 0.04% per leg for futures, 0.1% for spot
-    const feePct = accountType === "SPOT" ? 0.001 : 0.0004;
+    const feePct = cryptoTakerFee(accountType);
     const fees = (entryPrice * quantity * feePct) + (exitPrice * quantity * feePct);
     const netPnl = grossPnl - fees;
 

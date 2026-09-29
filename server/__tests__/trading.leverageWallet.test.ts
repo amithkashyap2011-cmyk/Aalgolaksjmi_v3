@@ -252,3 +252,22 @@ describe("Leverage change → wallet margin adjustment", () => {
     await cleanup(tradeId);
   });
 });
+
+describe('paper close uses account-specific fees in both trade and wallet', () => {
+  test.each([['SPOT', 2.4494], ['FUTURES', 0.97976]])('%s flat-price close', async (accountType, expectedFees) => {
+    if (skipIfNoMongo()) throw new Error('MongoDB is required for the close-fee regression');
+    await paper.setWalletBalance(testUserId, 'PAPER', 'USDT', 1000, accountType);
+    const trade = await Trade.create({ userId: testUserId, symbol: 'BNBUSDT', mode: 'PAPER',
+      side: 'BUY', quantity: 2, entryPrice: 612.35, leverage: 1, accountType,
+      status: 'OPEN', decisionPath: {}, entrySource: 'TEST' });
+    const response = await request(app).post('/trading/close-position')
+      .set('Authorization', `Bearer ${token}`).send({tradeId: trade._id.toString(), mode: 'PAPER'});
+    expect(response.status).toBe(200);
+    const closed = await Trade.findById(trade._id).lean();
+    expect(closed.status).toBe('CLOSED');
+    expect(closed.feeCost).toBeCloseTo(Number(expectedFees), 8);
+    expect(closed.netPnl).toBeCloseTo(-Number(expectedFees), 8);
+    expect(paper.getWallet(testUserId, 'PAPER', accountType).get('USDT'))
+      .toBeCloseTo(1000 + 1224.7 - Number(expectedFees), 8);
+  });
+});
