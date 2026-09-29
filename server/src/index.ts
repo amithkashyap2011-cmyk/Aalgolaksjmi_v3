@@ -27,7 +27,7 @@ setupMongooseGlobalObjectIdCastProtection();
 dns.setDefaultResultOrder("ipv4first");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-config({ path: path.resolve(__dirname, "..", ".env") });
+config({ path: path.resolve(__dirname, "..", ".env"), quiet: true });
 
 import { SecurityConfigValidator } from "./services/indianMarket/security/securityConfigValidator.js";
 // 🛡️ Fail-closed production security configuration validation (Requirements 3, 43, 44)

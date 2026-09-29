@@ -27,12 +27,12 @@ import * as autoEngine from "../services/autoTradeEngine.js";
 const router = Router();
 
 const RegisterBody = z.object({
-  email: z.string().email(),
+  email: z.email(),
   password: z.string().min(6),
 });
 
 const LoginBody = z.object({
-  email: z.string().email(),
+  email: z.email(),
   password: z.string(),
 });
 
