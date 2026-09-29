@@ -140,15 +140,36 @@ export function priceTradeFromRealQuotes(trade: any, underlying: string, spot: n
     return { ok: false, reason: "SPOT_FEED_NOT_LIVE (prices are simulated)" };
   }
   const und = String(underlying).toUpperCase();
-  const prices = trade.legs.map((l: any) => (isOptionLeg(l) ? realLegPrice(und, l) : undefined));
+  // Bind every quote to the same real contract that will be submitted.
+  // A fallback token/lotSize=1 must not survive a successful quote lookup.
+  const contracts = trade.legs.map((l: any) => isOptionLeg(l)
+    ? optionContracts.getContract(und, l.expiry, Number(l.strike), l.instrumentType)
+    : undefined);
+  for (let i = 0; i < trade.legs.length; i++) {
+    const c = contracts[i];
+    const l = trade.legs[i];
+    if (!c) return { ok: false, reason: "UNKNOWN_OPTION_CONTRACT" };
+    if (!Number.isSafeInteger(c.lotSize) || c.lotSize <= 0 ||
+        !Number.isSafeInteger(l.quantity) || l.quantity <= 0 || l.quantity % c.lotSize !== 0) {
+      return { ok: false, reason: "INVALID_OPTION_LOT_QUANTITY" };
+    }
+  }
+  const prices = contracts.map((c: any) => getFreshOptionLtp(c.token));
   const missing = trade.legs.filter((_: any, i: number) => !prices[i]).map((l: any) => l.tradingSymbol || `${l.strike}${l.instrumentType}`);
   if (missing.length) return { ok: false, reason: `NO_FRESH_QUOTE: ${missing.join(", ")}` };
 
   const oldEntry = Number(trade.entryPrice) || 0;
-  trade.legs.forEach((l: any, i: number) => { l.entryPrice = prices[i]; });
   const isShort = trade.position === "SHORT";
-  const entry = trade.legs.length === 1 ? prices[0] : Number(Math.max(0.05, netValue(trade.legs, prices, isShort)).toFixed(2));
+  const entry = Number((trade.legs.length === 1 ? prices[0] : netValue(trade.legs, prices, isShort)).toFixed(2));
+  // Do not invent a positive debit for a zero/negative spread quote.
+  if (!Number.isFinite(entry) || entry <= 0) return { ok: false, reason: "INVALID_OPTION_NET_PREMIUM" };
+  trade.legs.forEach((l: any, i: number) => {
+    const c = contracts[i];
+    Object.assign(l, { token: c.token, tradingSymbol: c.tradingSymbol,
+      lotSize: c.lotSize, exchange: c.exchange, entryPrice: prices[i] });
+  });
   trade.entryPrice = entry;
+  trade.averageEntryPrice = entry;
 
   const leg = trade.legs[0];
   if (trade.legs.length === 1 && leg.action === "BUY" && spot > 0 && leg.expiry) {
