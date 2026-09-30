@@ -93,4 +93,7 @@ async function main() {
   setInterval(check, INTERVAL_MS);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+// Run when executed directly, or under PM2 (which launches scripts through its own wrapper,
+// so argv[1] is not this file). Importing it from tests must not start the loop.
+const direct = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (direct || process.env.pm_id !== undefined) main();
