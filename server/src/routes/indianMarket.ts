@@ -4,6 +4,7 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { expiryDateOfTrade } from "../services/indianMarket/expiryFromSymbol.js";
 import { resolveIndianLeverage } from "../services/indianMarket/leverage.js";
 import { InstrumentMaster } from "../services/indianMarket/instrumentMaster.js";
 import { optionContracts } from "../services/indianMarket/angelOne/optionContracts.js";
@@ -980,6 +981,7 @@ router.get("/positions", async (req, res) => {
         order_ids: authPos.order_ids,
         broker_position_id: authPos.broker_position_id,
         // Dynamic exits: how far the stop has trailed and how often the target was raised.
+        expiryDate: expiryDateOfTrade(t as any),
         trailingStage: t.meta?.trailingStage ?? null,
         tpExtensions: t.meta?.tpExtensions ?? 0,
       };

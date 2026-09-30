@@ -711,7 +711,7 @@ export default function OrdersPage() {
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr style={{ borderBottom:`1px solid ${BORD}` }}>
-                    {["Symbol","Side","Qty","Entry","Mark","Stop-Loss","Target","Unrealized PnL","Opened",""].map((h, i) => (
+                    {["Symbol","Side","Qty","Period","Entry","Mark","Stop-Loss","Target","Unrealized PnL","Opened",""].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontSize:9, fontWeight:700, color:"var(--ds-text-faint)", textTransform:"uppercase", letterSpacing:"0.08em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -730,14 +730,36 @@ export default function OrdersPage() {
                           </span>
                         </td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.quantity ?? o.qty ?? "—"}</td>
+                        <td style={{ padding:"10px 12px", fontSize:11, whiteSpace:"nowrap" }}>
+                          {(() => {
+                            // Holding period: intraday (MIS) is squared off at 15:15 IST; delivery (CNC) is held until sold.
+                            const isIndian = market === "INDIA";
+                            if (!isIndian) return <span style={{ opacity:0.6 }}>—</span>;
+                            const intraday = String(o.productType || "MIS").toUpperCase() === "MIS";
+                            let expiry = "";
+                            if (o.expiryDate) {
+                              const d = new Date(`${o.expiryDate}T15:30:00+05:30`);
+                              const days = Math.ceil((d.getTime() - Date.now()) / 86_400_000);
+                              expiry = `Exp ${d.toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric", timeZone:"Asia/Kolkata" })} · ${days > 0 ? `${days}d left` : "today"}`;
+                            }
+                            return (
+                              <>
+                                <span style={{ fontWeight:800, color: intraday ? "#f59e0b" : B }}>{intraday ? "INTRADAY" : "DELIVERY (LONG-TERM)"}</span>
+                                <span style={{ display:"block", fontSize:9, opacity:0.7 }}>{intraday ? "auto square-off 15:15" : "held until sold"}</span>
+                                {expiry && <span style={{ display:"block", fontSize:9, opacity:0.7 }}>{expiry}</span>}
+                              </>
+                            );
+                          })()}
+                        </td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(o.entryPrice, o)}</td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(live.mark, o)}</td>
                         {(() => {
                           // Stop-loss and target are dynamic: the stop only ratchets in the trade's favour, the target can be raised.
                           const slv = Number(o.sl ?? o.stopLoss);
                           const tpv = Number(o.tp ?? o.takeProfit ?? o.target);
-                          const stage: string | null = o.trailingStage && o.trailingStage !== "NONE" ? String(o.trailingStage) : null;
-                          const ext = Number(o.tpExtensions || 0);
+                          const stageRaw = o.trailingStage ?? o.meta?.trailingStage;
+                          const stage: string | null = stageRaw && stageRaw !== "NONE" ? String(stageRaw) : null;
+                          const ext = Number(o.tpExtensions ?? o.meta?.tpExtensions ?? 0);
                           const cell = { padding:"10px 12px", fontFamily:"monospace", whiteSpace:"nowrap" as const };
                           const sub = { display:"block", fontSize:9, opacity:0.7, fontFamily:"inherit" };
                           return (

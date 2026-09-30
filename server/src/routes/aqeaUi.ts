@@ -1,3 +1,4 @@
+import { expiryDateOfTrade } from "../services/indianMarket/expiryFromSymbol.js";
 import express from "express";
 import { Trade } from "../models/Trade.js";
 import { AqeaAudit } from "../models/AqeaAudit.js";
@@ -551,6 +552,7 @@ router.get("/positions", async (req, res) => {
     const openTrades = await Trade.find(filter).lean();
     // Live PnL net of fees, identical math to the Positions page.
     await enrichOpenTrades(openTrades);
+    for (const t of openTrades as any[]) t.expiryDate = expiryDateOfTrade(t);
     res.json(openTrades);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
