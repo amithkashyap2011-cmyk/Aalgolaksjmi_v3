@@ -11,6 +11,7 @@ import * as paper from "../services/paperState.js";
 
 import mongoose from "mongoose";
 import { redactAngelSecrets, sealIncomingAngelSecrets } from "../services/indianMarket/angelOneCredentials.js";
+import { redactIndmoneySecrets, sealIncomingIndmoneySecrets } from "../services/indianMarket/indmoneyCredentials.js";
 
 const router = Router();
 
@@ -35,7 +36,7 @@ router.get("/get", authGuard, async (req: AuthRequest, res) => {
     }
 
     // Never send Angel One secrets (API key / PIN / TOTP secret) to the browser.
-    res.json(redactAngelSecrets(settings));
+    res.json(redactIndmoneySecrets(redactAngelSecrets(settings)));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -58,6 +59,8 @@ const ALLOWED_SETTINGS_FIELDS = new Set([
   "aiPredictorsEnabled", "transitionOverrideEnabled",
   // Angel One SmartAPI Credentials (NSE / BSE Indian Market)
   "angelOneApiKey", "angelOneClientCode", "angelOnePin", "angelOneTotpSecret", "angelOneDisabled",
+  // INDmoney (INDstocks) API access token
+  "indmoneyAccessToken",
   // AI threshold controls — all come from DB, no hardcoding
   "shortScoreThreshold", "aiFlipExitMinProfitR", "adxMinimum", "saraswatiAlphaThreshold",
   "driftHaltThreshold", "driftReduceThreshold",
@@ -80,6 +83,7 @@ router.put("/update", authGuard, async (req: AuthRequest, res) => {
     }
     // Blank secret = unchanged; others are encrypted before storage.
     sealIncomingAngelSecrets(safeUpdate);
+    sealIncomingIndmoneySecrets(safeUpdate);
     if (Object.keys(safeUpdate).length === 0) {
       return res.status(400).json({ error: "No valid fields provided" });
     }
@@ -118,7 +122,7 @@ router.put("/update", authGuard, async (req: AuthRequest, res) => {
       { $set: safeUpdate },
       { new: true, upsert: true, runValidators: true },
     );
-    res.json(redactAngelSecrets(doc as any));
+    res.json(redactIndmoneySecrets(redactAngelSecrets(doc as any)));
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

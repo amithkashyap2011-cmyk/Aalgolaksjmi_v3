@@ -104,6 +104,13 @@ export default function SettingsPage() {
   const [angelDisabled, setAngelDisabled] = useState(false);
   const [angelMsg, setAngelMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [angelSaving, setAngelSaving] = useState(false);
+
+  // ── INDmoney (INDstocks) API access token ──
+  const [indToken, setIndToken] = useState("");
+  const [indSaved, setIndSaved] = useState(false);
+  const [indMasked, setIndMasked] = useState("");
+  const [indMsg, setIndMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [indBusy, setIndBusy] = useState(false);
   // ── Weather Effect on Market ──
   const [weatherEnabled, setWeatherEnabled] = useState(true);
   const [weatherInfluence, setWeatherInfluence] = useState(1);
@@ -308,6 +315,9 @@ export default function SettingsPage() {
             setAngelEditing(!hasKeys);
             setAngelDisabled(!!s.angelOneDisabled);
             if (s.angelOneClientCode) setAngelClientCode(s.angelOneClientCode);
+            // INDmoney: the server returns only a flag + masked tail, never the token.
+            setIndSaved(!!s.indmoneyAccessTokenSet);
+            setIndMasked(s.indmoneyAccessTokenMasked || "");
           }
         }).catch(() => {});
       }).catch(() => {});
@@ -523,6 +533,92 @@ export default function SettingsPage() {
                           </div>
                         )}
                      </div>
+
+                      {/* 🇮🇳 INDmoney (INDstocks) API */}
+                      <div className="pt-4 border-top border-financial mt-5">
+                         <div className="d-flex align-items-center justify-content-between mb-3">
+                            <div className="d-flex align-items-center gap-3">
+                               <Landmark size={20} className="text-warning" />
+                               <h4 className="text-dark font-bold tracking-tight m-0">INDmoney (INDstocks) API Access Token</h4>
+                            </div>
+                            {indSaved && (
+                               <span className="badge font-bold px-3 py-1.5 rounded-full text-xs bg-success bg-opacity-10 text-success border border-success border-opacity-20">
+                                  TOKEN_SAVED {indMasked}
+                               </span>
+                            )}
+                         </div>
+                         <p className="text-secondary text-sm mb-3 font-medium">
+                            Generate the token at web.indstocks.com (API Trading → Access Tokens). It expires after 24 hours, so paste a fresh one when Verify reports it rejected.
+                            Stored encrypted; read-only for now — order placement is not enabled.
+                         </p>
+                         <div className="row g-3 mb-3">
+                            <div className="col-12 col-md-8">
+                               <label className="text-[11px] font-bold text-secondary uppercase tracking-widest mb-1 d-block">Access Token</label>
+                               <input
+                                 type="password"
+                                 autoComplete="off"
+                                 className="form-control form-control-modern font-mono text-sm"
+                                 placeholder={indSaved ? "Saved — paste a new token to replace" : "Paste INDmoney access token..."}
+                                 value={indToken}
+                                 onChange={(e) => setIndToken(e.target.value)}
+                               />
+                            </div>
+                         </div>
+                         <div className="d-flex gap-3 align-items-center flex-wrap">
+                            <button
+                              disabled={indBusy || !indToken.trim()}
+                              onClick={async () => {
+                                setIndBusy(true);
+                                setIndMsg({ ok: true, text: "ENCRYPTING_AND_STORING_INDMONEY_TOKEN..." });
+                                try {
+                                  const saved: any = await api.updateSettings({ indmoneyAccessToken: indToken });
+                                  setIndSaved(true);
+                                  setIndMasked(saved?.indmoneyAccessTokenMasked || "");
+                                  setIndToken("");
+                                  setIndMsg({ ok: true, text: "INDMONEY_TOKEN_STORED_SECURELY" });
+                                } catch (err: any) {
+                                  setIndMsg({ ok: false, text: `ERROR: ${err.message}` });
+                                } finally {
+                                  setIndBusy(false);
+                                }
+                              }}
+                              className="btn btn-warning text-dark font-bold px-4 py-2.5 shadow-sm"
+                            >
+                              {indSaved ? "Replace Token" : "Save Token"}
+                            </button>
+                            <button
+                              disabled={!indSaved}
+                              onClick={async () => {
+                                setIndMsg({ ok: true, text: "VERIFYING_INDMONEY_TOKEN..." });
+                                try {
+                                  const body: any = await api.testIndmoney();
+                                  setIndMsg({ ok: !!body?.ok, text: body?.message || body?.error || "INDMONEY_VERIFY_DONE" });
+                                } catch (err: any) {
+                                  setIndMsg({ ok: false, text: err?.message || "INDMONEY_VERIFY_FAILED" });
+                                }
+                              }}
+                              className="btn btn-light border border-financial rounded-financial px-4 py-2.5 font-bold text-xs text-secondary"
+                            >
+                              Verify Token
+                            </button>
+                            {indSaved && (
+                              <button
+                                onClick={async () => {
+                                  if (!confirm("Delete the saved INDmoney token?")) return;
+                                  await api.updateSettings({ indmoneyAccessToken: null } as any);
+                                  setIndSaved(false); setIndMasked(""); setIndToken("");
+                                  setIndMsg({ ok: true, text: "INDMONEY_TOKEN_DELETED" });
+                                }}
+                                className="btn btn-outline-danger rounded-financial px-4 py-2.5 font-bold text-xs"
+                              >
+                                Delete Token
+                              </button>
+                            )}
+                            {indMsg && (
+                              <span className={clsx("text-xs font-bold font-mono", indMsg.ok ? "text-success" : "text-danger")}>{indMsg.text}</span>
+                            )}
+                         </div>
+                      </div>
 
                       {/* 🇮🇳 Angel One SmartAPI (NSE / BSE Indian Market) */}
                       <div className="pt-4 border-top border-financial mt-5">

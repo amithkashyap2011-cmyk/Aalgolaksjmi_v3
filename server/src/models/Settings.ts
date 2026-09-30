@@ -120,6 +120,8 @@ export interface ISettings extends Document {
   angelOnePin?: string;
   angelOneTotpSecret?: string;
   angelOneDisabled?: boolean;
+  /** INDmoney (INDstocks) API access token — sealed at rest (see indmoneyCredentials.ts) */
+  indmoneyAccessToken?: string;
   aiPredictorsEnabled: boolean;
   transitionOverrideEnabled: boolean;
   /** When the AI quant engine is offline, allow falling back to technical/core signal. */
@@ -241,6 +243,7 @@ const SettingsSchema = new Schema<ISettings>({
   angelOnePin:        { type: String, default: "" },
   angelOneTotpSecret: { type: String, default: "" },
   angelOneDisabled:   { type: Boolean, default: false },
+  indmoneyAccessToken: { type: String, default: "" },
   aiPredictorsEnabled:       { type: Boolean, default: true },
   transitionOverrideEnabled: { type: Boolean, default: true },
   taFallbackEnabled: { type: Boolean, default: true },

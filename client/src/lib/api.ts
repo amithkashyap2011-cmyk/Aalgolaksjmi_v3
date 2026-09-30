@@ -170,6 +170,13 @@ export async function testApiKeys() {
   });
 }
 
+export async function testIndmoney() {
+  return request<{ ok: boolean; message?: string; error?: string }>("/apikeys/indmoney/test", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function testApiKeysRaw(apiKey: string, apiSecret: string) {
   return request<{ ok: boolean; balances: any[] }>("/apikeys/test-raw", {
     method: "POST",

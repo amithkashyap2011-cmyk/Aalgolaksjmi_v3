@@ -146,4 +146,27 @@ router.post("/angel-one/test", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
+/* ── INDmoney (INDstocks) read-only verify ── */
+router.post("/indmoney/test", authGuard, async (req: AuthRequest, res) => {
+  try {
+    const { Settings } = await import("../models/Settings.js");
+    const { readIndmoneyToken, fetchIndmoneyProfile } = await import("../services/indianMarket/indmoneyCredentials.js");
+    const doc = await Settings.findOne({ userId: req.userId }).lean();
+    const token = readIndmoneyToken(doc as any);
+    if (!token) {
+      res.status(400).json({ ok: false, error: "No INDmoney access token saved.", status: "NOT_CONFIGURED" });
+      return;
+    }
+    try {
+      const p: any = await fetchIndmoneyProfile(token);
+      const name = [p?.first_name, p?.last_name].filter(Boolean).join(" ") || "account";
+      res.json({ ok: true, status: "CONNECTED_READ_ONLY", message: `INDMONEY_CONNECTED (read-only): ${name}${p?.ucc ? ` · ${p.ucc}` : ""}. Order placement not enabled.` });
+    } catch (e: any) {
+      res.status(502).json({ ok: false, status: "LOGIN_FAILED", error: e?.message || "INDmoney verification failed" });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
