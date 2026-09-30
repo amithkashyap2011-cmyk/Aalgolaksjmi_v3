@@ -1333,7 +1333,20 @@ export class ForwardTelemetryStore {
 
   // ─── Private Helpers ───
 
-  private static async persistDecisionToMongo(record: ForwardTelemetryRecord): Promise<void> {
+  // Concurrent upserts of the same decisionId race on the unique index
+  // (E11000 + WriteConflict spam in mongod's log). Serialise per decisionId.
+  private static decisionWrites = new Map<string, Promise<void>>();
+
+  private static persistDecisionToMongo(record: ForwardTelemetryRecord): Promise<void> {
+    const prev = this.decisionWrites.get(record.decisionId) ?? Promise.resolve();
+    const next = prev.then(() => this.persistDecisionToMongoNow(record));
+    this.decisionWrites.set(record.decisionId, next);
+    return next.finally(() => {
+      if (this.decisionWrites.get(record.decisionId) === next) this.decisionWrites.delete(record.decisionId);
+    });
+  }
+
+  private static async persistDecisionToMongoNow(record: ForwardTelemetryRecord): Promise<void> {
     if (mongoose?.connection?.readyState !== 1) return;
 
     try {

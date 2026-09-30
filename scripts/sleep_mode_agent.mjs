@@ -245,7 +245,20 @@ function rotateMongoLog() {
     writeLog("warn", "MongoDB log rotation failed: " + err.message);
   }
 }
-setInterval(rotateMongoLog, 86_400_000);
+// Check hourly and rotate when the newest rotated file is >24h old. A plain
+// 24h setInterval restarts with this process, so it never fired (no rotation
+// after 09-28; mongo.log reached 200 MB and a failed log write crashed mongod).
+function maybeRotateMongoLog() {
+  try {
+    const newest = fs.readdirSync(MONGO_LOG_DIR)
+      .filter((f) => /^mongo\.log\..+/.test(f))
+      .reduce((m, f) => Math.max(m, fs.statSync(path.join(MONGO_LOG_DIR, f)).mtimeMs), 0);
+    if (Date.now() - newest < 86_400_000) return;
+  } catch { /* fall through and rotate */ }
+  rotateMongoLog();
+}
+maybeRotateMongoLog();
+setInterval(maybeRotateMongoLog, 3_600_000);
 
 /**
  * MongoDB watchdog. The Homebrew launchd service has KeepAlive=false, so when
@@ -292,7 +305,14 @@ async function checkMongo() {
     execSync(`launchctl kickstart ${MONGO_SERVICE}`, { stdio: "ignore", timeout: 30_000 });
     writeLog("warn", "MongoDB restart issued (launchctl kickstart).");
   } catch (err) {
-    writeLog("error", "MongoDB restart failed: " + err.message);
+    // kickstart fails when the service is not loaded (e.g. after a brew
+    // upgrade/bootout, 2026-10-01): load the plist instead.
+    try {
+      execSync(`launchctl bootstrap gui/${os.userInfo().uid} ${os.homedir()}/Library/LaunchAgents/homebrew.mxcl.mongodb-community.plist`, { stdio: "ignore", timeout: 30_000 });
+      writeLog("warn", "MongoDB service was not loaded; bootstrapped it.");
+    } catch (err2) {
+      writeLog("error", "MongoDB restart failed: " + err.message + " / " + err2.message);
+    }
   }
 }
 setInterval(checkMongo, POLL_INTERVAL_MS);
