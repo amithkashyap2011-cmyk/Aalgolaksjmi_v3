@@ -4,6 +4,7 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { resolveIndianLeverage } from "../services/indianMarket/leverage.js";
 import { InstrumentMaster } from "../services/indianMarket/instrumentMaster.js";
 import { optionContracts } from "../services/indianMarket/angelOne/optionContracts.js";
 import { peakConcurrentCapital } from "../services/capitalPeak.js";
@@ -794,8 +795,7 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
 
     const { leverage: userLeverage } = req.body;
     const isMIS = productType === "MIS";
-    const defaultLev = isMIS ? 5 : 1;
-    const leverage = Math.max(1, Math.min(20, Number(userLeverage) || defaultLev));
+    const leverage = resolveIndianLeverage(productType, userLeverage);
     const marginRequired = totalNotional / leverage;
 
     // Same rule as /execute-strategy: an empty index/BSE wallet falls back to the funded NSE wallet.

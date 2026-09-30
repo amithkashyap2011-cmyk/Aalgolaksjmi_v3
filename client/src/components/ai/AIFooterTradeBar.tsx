@@ -846,7 +846,8 @@ export default function AIFooterTradeBar() {
   const progressPct = ((speedSec - countdown) / speedSec) * 100;
   const dc = dirColor(prediction.direction);
   const mc = modeColor(mode);
-  const isSpotLocked = isIndianAsset || resolvedAT === "SPOT";
+  // Indian equity can run intraday (MIS) at up to 5×; delivery (1×) is the default. Crypto SPOT stays 1×.
+  const isSpotLocked = !isIndianAsset && resolvedAT === "SPOT";
 
   /* Order execution */
   const handleExecute = async () => {
@@ -868,7 +869,8 @@ export default function AIFooterTradeBar() {
             symbol: prediction.symbol,
             transactionType: side,
             quantity: Math.max(1, Math.round(qty)),
-            productType: isDeriv ? "MIS" : "CNC",
+            productType: isDeriv || lev > 1 ? "MIS" : "CNC",
+            leverage: isDeriv || lev > 1 ? Math.min(5, lev) : 1,
             orderType: "MARKET",
             mode,
             stopLoss: prediction.stopLoss,
@@ -1398,10 +1400,19 @@ export default function AIFooterTradeBar() {
                 <label style={{ fontSize: φ.fs.xxs, fontWeight: 700, color: "var(--ds-text-faint,#64748b)", display: "block", marginBottom: φ.sp.xs }}>
                   Leverage (×)
                 </label>
-                <input type="number" min="1" max="125" step="1" value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} disabled={isSpotLocked} className="aqea-input" />
+                <input type="number" min="1" max={isIndianAsset ? 5 : 125} step="1" value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} disabled={isSpotLocked} className="aqea-input" />
                 {isSpotLocked && (
-                  <div style={{ fontSize: 9, color: "var(--ds-text-faint,#94a3b8)", marginTop: 3 }}>Fixed at 1× for Spot / Indian equity</div>
+                  <div style={{ fontSize: 9, color: "var(--ds-text-faint,#94a3b8)", marginTop: 3 }}>Fixed at 1× for Spot</div>
                 )}
+                {isIndianAsset && (() => {
+                  const lv = Math.min(5, Math.max(1, parseInt(customLeverage, 10) || 1));
+                  const order = parseFloat(customMargin) || 0;
+                  return (
+                    <div style={{ fontSize: 9, color: "var(--ds-text-faint,#94a3b8)", marginTop: 3 }}>
+                      {lv > 1 ? `Intraday (MIS), squared off 15:15 · wallet needed ₹${Math.round(order / lv).toLocaleString("en-IN")}` : "Delivery (CNC) · 1× · max 5× intraday"}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
