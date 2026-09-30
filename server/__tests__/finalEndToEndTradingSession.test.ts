@@ -323,6 +323,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
       mode: "PAPER",
       userId: "guest-user",
       meta: {
+        dynamicProfit: false, // this scenario asserts the plain exit-at-target path; target extension has its own tests
         highestLtp: 120.00,
         strategyId: signal.strategyId,
         agentId: proposal.agentId,
@@ -567,7 +568,7 @@ describe("FINAL MASTER RELEASE: Full End-to-End Trading Session Simulation", () 
       status: "OPEN",
       mode: "PAPER",
       userId: "guest-user",
-      meta: { highestLtp: 100.00 },
+      meta: { highestLtp: 100.00, dynamicProfit: false },
     };
 
     broker.openBrokerPositions.set(symbol, {

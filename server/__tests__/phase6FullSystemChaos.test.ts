@@ -78,7 +78,7 @@ describe("PHASE 6: Full-System Stress, Chaos, Recovery & Trading Safety", () => 
       sl: 120.0,
       tp: 190.0,
       status: "OPEN",
-      meta: { highestLtp: 150.0, lowestLtp: 150.0 },
+      meta: { dynamicProfit: false, highestLtp: 150.0, lowestLtp: 150.0 },
       save: async () => {},
     }));
 
@@ -191,7 +191,7 @@ describe("PHASE 6: Full-System Stress, Chaos, Recovery & Trading Safety", () => 
       sl: 120.0,
       tp: 200.0,
       status: "OPEN",
-      meta: { highestLtp: 150.0, lowestLtp: 150.0 },
+      meta: { dynamicProfit: false, highestLtp: 150.0, lowestLtp: 150.0 },
       save: async () => {},
     };
 
@@ -248,7 +248,7 @@ describe("PHASE 6: Full-System Stress, Chaos, Recovery & Trading Safety", () => 
       sl: 2300.0,
       tp: 2550.0,
       status: "OPEN",
-      meta: { highestLtp: 2400.0, lowestLtp: 2400.0 },
+      meta: { dynamicProfit: false, highestLtp: 2400.0, lowestLtp: 2400.0 },
       save: async () => {},
     };
 
