@@ -787,7 +787,10 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
 
     const orderQty = validation.sanitizedQuantity;
     const totalNotional = orderQty * filledPrice;
-    const accountType = exchange === "BSE" ? "INDIAN_BSE" : (symbol.includes("NIFTY") || symbol.includes("BANK") ? "INDIAN_NIFTY50" : "INDIAN_NSE");
+    // Index symbols use the NIFTY50 wallet; stocks (incl. HDFCBANK, KOTAKBANK … — the old
+    // `includes("BANK")` test swept those in) use NSE. BSE is BSE.
+    const INDEX_SYMBOLS = new Set(["NIFTY", "NIFTY50", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]);
+    const preferredAccountType = exchange === "BSE" ? "INDIAN_BSE" : (INDEX_SYMBOLS.has(symbol) ? "INDIAN_NIFTY50" : "INDIAN_NSE");
 
     const { leverage: userLeverage } = req.body;
     const isMIS = productType === "MIS";
@@ -795,12 +798,14 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
     const leverage = Math.max(1, Math.min(20, Number(userLeverage) || defaultLev));
     const marginRequired = totalNotional / leverage;
 
-    const wallet = paper.getWallet(userId, mode, accountType as any);
+    // Same rule as /execute-strategy: an empty index/BSE wallet falls back to the funded NSE wallet.
+    // The trade is stored with the wallet that was actually debited so closing credits it back.
+    const { wallet, accountType } = paper.getIndianWalletWithFallback(userId, mode, preferredAccountType);
     const inrBal = wallet.get("INR") ?? 0;
 
     if (inrBal < marginRequired) {
       return res.status(400).json({
-        error: `INSUFFICIENT_INR_BALANCE: Wallet has ₹${inrBal.toLocaleString("en-IN")}, required margin is ₹${marginRequired.toLocaleString("en-IN")}`,
+        error: `INSUFFICIENT_INR_BALANCE: ${accountType} wallet has ₹${inrBal.toLocaleString("en-IN")}, required margin is ₹${marginRequired.toLocaleString("en-IN")}`,
       });
     }
 
