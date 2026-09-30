@@ -581,7 +581,7 @@ export default function SettingsPage() {
                          </p>
                          <div className="d-flex flex-column gap-2">
                             {([
-                              ["binanceKeysDisabled", "Binance API keys"],
+                              ["binanceKeysDisabled", "Binance exchange credentials"],
                               ["angelOneDisabled", "Angel One SmartAPI"],
                               ["indmoneyDisabled", "INDmoney access token"],
                             ] as const).map(([field, label]) => (
