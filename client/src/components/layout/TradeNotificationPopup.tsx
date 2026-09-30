@@ -1,3 +1,4 @@
+import { formatUsdPrice } from "../../utils/formatUsdPrice";
 /**
  * TradeNotificationPopup
  * ─────────────────────
@@ -228,7 +229,7 @@ function ToastCard({
         }}>
           <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Entry Price</span>
           <span style={{ fontSize: 13, fontWeight: 800, color: "#f1f5f9", fontFamily: "monospace" }}>
-            ${t.entryPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+            {formatUsdPrice(t.entryPrice)}
           </span>
         </div>
 
@@ -238,8 +239,8 @@ function ToastCard({
             { k: "QTY",  v: t.quantity.toFixed(4) },
             { k: "LEV",  v: `${t.leverage}×` },
             { k: "ACCT", v: t.accountType },
-            t.sl != null ? { k: "SL", v: `$${t.sl.toLocaleString("en-US", { maximumFractionDigits: 2 })}` } : null,
-            t.tp != null ? { k: "TP", v: `$${t.tp.toLocaleString("en-US", { maximumFractionDigits: 2 })}` } : null,
+            t.sl != null ? { k: "SL", v: formatUsdPrice(t.sl) } : null,
+            t.tp != null ? { k: "TP", v: formatUsdPrice(t.tp) } : null,
           ].filter(Boolean).map((item) => (
             <span key={item!.k} style={{
               fontSize: 9.5, fontWeight: 700, padding: "2px 7px", borderRadius: 5,

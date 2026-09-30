@@ -205,9 +205,9 @@ async function fetchRealCryptoPrediction(
   const tpMult = direction === "SHORT" ? (1 - tpPct) : (1 + tpPct);
   const slMult = direction === "SHORT" ? (1 + slPct) : (1 - slPct);
 
-  const decimals = currentPrice > 100 ? 2 : currentPrice > 1 ? 4 : 6;
-  const targetTp = direction === "HOLD" ? currentPrice : parseFloat((currentPrice * tpMult).toFixed(decimals));
-  const stopLoss = direction === "HOLD" ? currentPrice : parseFloat((currentPrice * slMult).toFixed(decimals));
+  // Significant figures, not fixed decimals: toFixed(6) collapsed TP/SL onto entry for sub-cent coins (PEPE/SHIB/BONK).
+  const targetTp = direction === "HOLD" ? currentPrice : Number((currentPrice * tpMult).toPrecision(6));
+  const stopLoss = direction === "HOLD" ? currentPrice : Number((currentPrice * slMult).toPrecision(6));
 
   const models = Array.isArray(report.models) ? report.models : [];
   const totalModels = models.length > 0 ? models.length : 8;
