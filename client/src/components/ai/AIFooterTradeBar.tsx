@@ -418,6 +418,8 @@ export default function AIFooterTradeBar() {
   });
   const [customMargin, setCustomMargin] = useState("");
   const [customLeverage, setCustomLeverage] = useState("");
+  // Indian orders: intraday (squared off 15:15) or positional (held multi-day, delivery/NRML, wider stops).
+  const [period, setPeriod] = useState<"INTRADAY" | "POSITIONAL">("INTRADAY");
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -856,7 +858,8 @@ export default function AIFooterTradeBar() {
     setIsExecuting(true);
     try {
       const margin = parseFloat(customMargin) || prediction.allocatedMargin;
-      const lev = parseInt(customLeverage, 10) || prediction.estimatedLeverage;
+      const positional = isIndianAsset && period === "POSITIONAL";
+      const lev = positional ? 1 : (parseInt(customLeverage, 10) || prediction.estimatedLeverage);
       const ep = prediction.entryPrice > 0 ? prediction.entryPrice : 1;
       const qty = parseFloat((margin / ep).toFixed(5));
       const side: "BUY" | "SELL" = prediction.direction === "SHORT" ? "SELL" : "BUY";
@@ -869,8 +872,10 @@ export default function AIFooterTradeBar() {
             symbol: prediction.symbol,
             transactionType: side,
             quantity: Math.max(1, Math.round(qty)),
-            productType: isDeriv || lev > 1 ? "MIS" : "CNC",
-            leverage: isDeriv || lev > 1 ? Math.min(5, lev) : 1,
+            productType: positional ? "CNC" : (isDeriv || lev > 1 ? "MIS" : "CNC"),
+            leverage: positional ? 1 : (isDeriv || lev > 1 ? Math.min(5, lev) : 1),
+            period,
+            // The AI's levels were sent as stopLoss/target while the server read sl/tp — now both are honoured.
             orderType: "MARKET",
             mode,
             stopLoss: prediction.stopLoss,
@@ -1388,6 +1393,26 @@ export default function AIFooterTradeBar() {
             <div style={{ fontSize: φ.fs.xs, fontWeight: 800, color: "var(--ds-text,#0f172a)", marginBottom: φ.sp.sm }}>
               ✏️ Adjust Order Parameters
             </div>
+            {isIndianAsset && (
+              <div style={{ marginBottom: φ.sp.sm }}>
+                <div style={{ fontSize: φ.fs.xxs, fontWeight: 700, color: "var(--ds-text-faint,#64748b)", marginBottom: φ.sp.xs }}>Holding period</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {(["INTRADAY", "POSITIONAL"] as const).map((p) => (
+                    <button key={p} type="button" onClick={() => setPeriod(p)}
+                      style={{ flex: 1, padding: "6px 8px", borderRadius: 6, fontSize: 11, fontWeight: 800, cursor: "pointer",
+                        border: `1px solid ${period === p ? "#f59e0b" : "var(--ds-border,#e2e8f0)"}`,
+                        background: period === p ? "#f59e0b22" : "transparent", color: "var(--ds-text,#0f172a)" }}>
+                      {p === "INTRADAY" ? "Intraday" : "Positional"}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 9, color: "var(--ds-text-faint,#94a3b8)", marginTop: 3 }}>
+                  {period === "POSITIONAL"
+                    ? "Held until sold (delivery, 1×) — not squared off at 15:15; stop and target are widened 2.5×."
+                    : "Squared off automatically at 15:15 IST."}
+                </div>
+              </div>
+            )}
             {/* 61.8% margin · 38.2% leverage — φ-weighted columns */}
             <div style={{ display: "grid", gridTemplateColumns: "1.618fr 1fr", gap: φ.sp.sm }}>
               <div>
@@ -1400,7 +1425,7 @@ export default function AIFooterTradeBar() {
                 <label style={{ fontSize: φ.fs.xxs, fontWeight: 700, color: "var(--ds-text-faint,#64748b)", display: "block", marginBottom: φ.sp.xs }}>
                   Leverage (×)
                 </label>
-                <input type="number" min="1" max={isIndianAsset ? 5 : 125} step="1" value={customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} disabled={isSpotLocked} className="aqea-input" />
+                <input type="number" min="1" max={isIndianAsset ? 5 : 125} step="1" value={isIndianAsset && period === "POSITIONAL" ? "1" : customLeverage} onChange={(e) => setCustomLeverage(e.target.value)} disabled={isSpotLocked || (isIndianAsset && period === "POSITIONAL")} className="aqea-input" />
                 {isSpotLocked && (
                   <div style={{ fontSize: 9, color: "var(--ds-text-faint,#94a3b8)", marginTop: 3 }}>Fixed at 1× for Spot</div>
                 )}

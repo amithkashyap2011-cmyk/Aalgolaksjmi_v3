@@ -362,6 +362,13 @@ export class AutoPilotStateMachine {
       }
     }
 
+    // Positional option positions are closed ahead of expiry (meta.exitBy, set at entry).
+    const exitByMs = tradeDoc.meta?.exitBy ? Date.parse(tradeDoc.meta.exitBy) : NaN;
+    if (!triggerReason && Number.isFinite(exitByMs) && Date.now() >= exitByMs) {
+      triggerReason = `EXPIRY_EXIT (positional position closed ahead of expiry, deadline ${tradeDoc.meta.exitBy})`;
+      triggerType = "STOP";
+    }
+
     // Check Target (Take-Profit)
     if (!triggerReason && tp > 0) {
       if (isLong && currentLtp >= tp) {

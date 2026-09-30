@@ -283,6 +283,8 @@ export default function IndianMarketPage() {
   const [regimeAnalysis, setRegimeAnalysis] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [executingStrategy, setExecutingStrategy] = useState<string | null>(null);
+  // Strategy orders: intraday (squared off 15:15) or positional (NRML, held multi-day, exits 2 trading days before expiry).
+  const [strategyPeriod, setStrategyPeriod] = useState<"INTRADAY" | "POSITIONAL">("INTRADAY");
 
   // Parallel, timeout-protected fetch helper
   const safeFetch = async (url: string, timeoutMs: number = 4000) => {
@@ -472,6 +474,7 @@ export default function IndianMarketPage() {
           strategyId,
           underlying: selectedUnderlying,
           mode: executionMode,
+          period: strategyPeriod,
         }),
       });
       const data = await res.json();
@@ -1323,6 +1326,24 @@ export default function IndianMarketPage() {
       {activeTab === "COMMAND_CENTER" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16 }}>
           
+          {/* Holding period for every strategy button below */}
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "#0a1120", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 12, padding: "10px 14px" }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#e2e8f0" }}>Holding period</span>
+            {(["INTRADAY", "POSITIONAL"] as const).map((p) => (
+              <button key={p} type="button" onClick={() => setStrategyPeriod(p)}
+                style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 800, cursor: "pointer",
+                  border: `1px solid ${strategyPeriod === p ? "#f59e0b" : "rgba(255,255,255,0.12)"}`,
+                  background: strategyPeriod === p ? "rgba(245,158,11,0.15)" : "transparent", color: "#e2e8f0" }}>
+                {p === "INTRADAY" ? "Intraday" : "Positional"}
+              </button>
+            ))}
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>
+              {strategyPeriod === "POSITIONAL"
+                ? "NRML, held until target/stop or 2 trading days before expiry; stop and target widened 2.5×. Needs 3+ trading days to expiry."
+                : "MIS, squared off automatically at 15:15 IST."}
+            </span>
+          </div>
+
           {/* Quick Directional Trades Deck */}
           <div
             style={{

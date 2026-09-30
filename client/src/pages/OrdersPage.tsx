@@ -735,7 +735,10 @@ export default function OrdersPage() {
                             // Holding period: intraday (MIS) is squared off at 15:15 IST; delivery (CNC) is held until sold.
                             const isIndian = market === "INDIA";
                             if (!isIndian) return <span style={{ opacity:0.6 }}>—</span>;
-                            const intraday = String(o.productType || "MIS").toUpperCase() === "MIS";
+                            const product = String(o.productType || "MIS").toUpperCase();
+                            const intraday = product === "MIS";
+                            const positionalOption = product === "NRML";
+                            const exitBy: string | undefined = o.meta?.exitBy;
                             let expiry = "";
                             if (o.expiryDate) {
                               const d = new Date(`${o.expiryDate}T15:30:00+05:30`);
@@ -744,9 +747,10 @@ export default function OrdersPage() {
                             }
                             return (
                               <>
-                                <span style={{ fontWeight:800, color: intraday ? "#f59e0b" : B }}>{intraday ? "INTRADAY" : "DELIVERY (LONG-TERM)"}</span>
+                                <span style={{ fontWeight:800, color: intraday ? "#f59e0b" : B }}>{intraday ? "INTRADAY" : positionalOption ? "POSITIONAL (NRML)" : "DELIVERY (LONG-TERM)"}</span>
                                 <span style={{ display:"block", fontSize:9, opacity:0.7 }}>{intraday ? "auto square-off 15:15" : "held until sold"}</span>
                                 {expiry && <span style={{ display:"block", fontSize:9, opacity:0.7 }}>{expiry}</span>}
+                                {exitBy && <span style={{ display:"block", fontSize:9, opacity:0.7 }}>auto-exit by {new Date(exitBy).toLocaleDateString("en-IN", { day:"2-digit", month:"short", timeZone:"Asia/Kolkata" })} 15:15</span>}
                               </>
                             );
                           })()}

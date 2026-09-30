@@ -4,6 +4,7 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 
+import { resolvePeriod, productFor, widenStops, exitDeadline, positionalAllowed } from "../services/indianMarket/positional.js";
 import { expiryDateOfTrade } from "../services/indianMarket/expiryFromSymbol.js";
 import { resolveIndianLeverage } from "../services/indianMarket/leverage.js";
 import { InstrumentMaster } from "../services/indianMarket/instrumentMaster.js";
@@ -397,6 +398,7 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
     }
 
     const { strategyId: sId, strategy, underlying = "NIFTY", mode = "PAPER" } = req.body;
+    const period = resolvePeriod(req.body.period);
 
     // Like /execute: this route saves the trade itself without any broker, so
     // mode "LIVE" would record a "live" trade that never reached Angel One/Kite.
@@ -467,6 +469,17 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
 
     if (!riskCheck.approved) {
       return res.status(400).json({ error: `RISK_REJECTED: ${riskCheck.rejectionReason}` });
+    }
+    // Positional: NRML, no intraday square-off, wider stops, automatic exit ahead of expiry.
+    let exitBy: string | null = null;
+    if (period === "POSITIONAL") {
+      const expiryDate = expiryDateOfTrade({ legs: trade.legs.map((l: any) => ({ tradingSymbol: l.tradingSymbol })) });
+      const ok = positionalAllowed(expiryDate);
+      if (!ok.ok) return res.status(400).json({ error: ok.reason });
+      exitBy = exitDeadline(expiryDate);
+      const w = widenStops({ isLong: trade.position !== "SHORT", entry: trade.entryPrice, sl: trade.stopLoss, tp: trade.target, isOption: true });
+      trade.stopLoss = w.sl;
+      trade.target = w.tp;
     }
     IndianRiskManager.confirmReservation(trade);
 
@@ -546,8 +559,9 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
         openedAt: new Date(),
         autoCloseStatus: "ARMED",
         entrySource: "STRATEGY_BUILDER",
+        productType: period === "POSITIONAL" ? productFor("POSITIONAL", true) : "MIS",
         // Recorded so every exit path releases exactly what was debited.
-        meta: { marginDebitedINR: requiredMargin },
+        meta: { marginDebitedINR: requiredMargin, period, positional: period === "POSITIONAL", ...(exitBy ? { exitBy } : {}) },
         decisionPath: [trade.strategy, regime],
         authorizedVotes: { strategy: trade.strategy },
         shadowVotes: {},
@@ -712,7 +726,10 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
       });
     }
 
-    const { symbol, side = "BUY", exchange = "NSE", mode = "PAPER", quantity, productType = "MIS" } = req.body;
+    const { symbol, side = "BUY", exchange = "NSE", mode = "PAPER", quantity, productType: requestedProduct = "MIS" } = req.body;
+    // Positional = delivery (CNC) for cash equity: skipped by the 15:15 square-off, 1x, wider stops.
+    const period = resolvePeriod(req.body.period);
+    const productType = period === "POSITIONAL" ? productFor("POSITIONAL", false) : requestedProduct;
 
     // 🛡️ Guard 1b: no real Indian broker execution exists on this route.
     // Everything below this point is in-memory paper-wallet simulation —
@@ -821,8 +838,13 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
     const atrEst = filledPrice * 0.012;
     const defaultSL = isBuy ? Number((filledPrice - atrEst * 1.5).toFixed(2)) : Number((filledPrice + atrEst * 1.5).toFixed(2));
     const defaultTP = isBuy ? Number((filledPrice + atrEst * 3.0).toFixed(2)) : Number((filledPrice - atrEst * 3.0).toFixed(2));
-    const slPrice = Number(req.body.sl) > 0 ? Number(req.body.sl) : defaultSL;
-    const tpPrice = Number(req.body.tp) > 0 ? Number(req.body.tp) : defaultTP;
+    // The AI dialog sends stopLoss/target; only sl/tp used to be read, so its levels were ignored.
+    let slPrice = Number(req.body.sl ?? req.body.stopLoss) > 0 ? Number(req.body.sl ?? req.body.stopLoss) : defaultSL;
+    let tpPrice = Number(req.body.tp ?? req.body.target) > 0 ? Number(req.body.tp ?? req.body.target) : defaultTP;
+    if (period === "POSITIONAL") {
+      // Intraday-sized distances are too tight for a multi-day hold.
+      ({ sl: slPrice, tp: tpPrice } = widenStops({ isLong: isBuy, entry: filledPrice, sl: slPrice, tp: tpPrice, isOption: false }));
+    }
 
 
     const tradeDoc = await Trade.create({
@@ -838,6 +860,8 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
       mode: mode || "PAPER",
       accountType: accountType as any,
       strategy: "INDIAN_AI_MODEL",
+      productType, // was never stored, so every order defaulted to MIS and CNC delivery was squared off at 15:15
+      meta: { period, positional: period === "POSITIONAL" },
       pnl: 0,
       openedAt: new Date(),
       autoCloseStatus: "ARMED",
