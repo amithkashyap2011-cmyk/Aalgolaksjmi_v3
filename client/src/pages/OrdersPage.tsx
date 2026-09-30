@@ -711,7 +711,7 @@ export default function OrdersPage() {
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr style={{ borderBottom:`1px solid ${BORD}` }}>
-                    {["Symbol","Side","Qty","Entry","Mark","Unrealized PnL","Opened",""].map((h, i) => (
+                    {["Symbol","Side","Qty","Entry","Mark","Stop-Loss","Target","Unrealized PnL","Opened",""].map((h, i) => (
                       <th key={i} style={{ padding:"10px 12px", textAlign:"left", fontSize:9, fontWeight:700, color:"var(--ds-text-faint)", textTransform:"uppercase", letterSpacing:"0.08em", whiteSpace:"nowrap" }}>{h}</th>
                     ))}
                   </tr>
@@ -732,6 +732,27 @@ export default function OrdersPage() {
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{o.quantity ?? o.qty ?? "—"}</td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(o.entryPrice, o)}</td>
                         <td style={{ padding:"10px 12px", fontFamily:"monospace" }}>{formatPrice(live.mark, o)}</td>
+                        {(() => {
+                          // Stop-loss and target are dynamic: the stop only ratchets in the trade's favour, the target can be raised.
+                          const slv = Number(o.sl ?? o.stopLoss);
+                          const tpv = Number(o.tp ?? o.takeProfit ?? o.target);
+                          const stage: string | null = o.trailingStage && o.trailingStage !== "NONE" ? String(o.trailingStage) : null;
+                          const ext = Number(o.tpExtensions || 0);
+                          const cell = { padding:"10px 12px", fontFamily:"monospace", whiteSpace:"nowrap" as const };
+                          const sub = { display:"block", fontSize:9, opacity:0.7, fontFamily:"inherit" };
+                          return (
+                            <>
+                              <td style={{ ...cell, color: R }}>
+                                {slv > 0 ? formatPrice(slv, o) : "—"}
+                                {stage && <span style={sub} title="The stop has moved from its starting level">↑ {stage.replace(/_/g, " ").toLowerCase()}</span>}
+                              </td>
+                              <td style={{ ...cell, color: G }}>
+                                {tpv > 0 ? formatPrice(tpv, o) : "—"}
+                                {ext > 0 && <span style={sub} title="The target was raised as price approached it">↑ raised ×{ext}</span>}
+                              </td>
+                            </>
+                          );
+                        })()}
                         <td style={{ padding:"10px 12px", color: pnl >= 0 ? G : R, fontFamily:"monospace", fontWeight:700 }}>
                           {pnl >= 0 ? "+" : ""}{formatItemPnl(pnl, o)}
                           {live.pnlPct != null && <span style={{ opacity:0.7, marginLeft:4 }}>({live.pnlPct >= 0 ? "+" : ""}{live.pnlPct.toFixed(2)}%)</span>}

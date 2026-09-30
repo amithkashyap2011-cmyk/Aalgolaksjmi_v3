@@ -979,6 +979,9 @@ router.get("/positions", async (req, res) => {
         legs: t.legs || [],
         order_ids: authPos.order_ids,
         broker_position_id: authPos.broker_position_id,
+        // Dynamic exits: how far the stop has trailed and how often the target was raised.
+        trailingStage: t.meta?.trailingStage ?? null,
+        tpExtensions: t.meta?.tpExtensions ?? 0,
       };
     });
 
