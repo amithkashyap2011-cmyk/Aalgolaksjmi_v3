@@ -197,7 +197,8 @@ export default function KlineChart({ symbol, interval: initInterval = "60", heig
 
   const formatPrice = (p: number) => {
     if (!Number.isFinite(p)) return "0.00";
-    if (p < 0.001) return p.toFixed(6);
+    if (p < 0.0001) return p.toFixed(8);
+    if (p < 0.01) return p.toFixed(6);
     if (p < 1) return p.toFixed(4);
     if (p < 100) return p.toFixed(3);
     return p.toFixed(2);

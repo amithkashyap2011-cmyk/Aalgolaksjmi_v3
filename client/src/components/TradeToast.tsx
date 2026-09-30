@@ -1,3 +1,4 @@
+import { formatUsdPrice } from "../utils/formatUsdPrice";
 import { useEffect, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 
@@ -140,7 +141,7 @@ export default function TradeToast() {
                   {t.symbol}
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>
-                  ${t.entryPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                  {formatUsdPrice(t.entryPrice)}
                 </span>
               </div>
 
@@ -149,8 +150,8 @@ export default function TradeToast() {
                 {[
                   { label: "QTY",  value: t.quantity.toFixed(4) },
                   { label: "LEV",  value: `${t.leverage}×` },
-                  t.sl != null ? { label: "SL", value: `$${t.sl.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}` } : null,
-                  t.tp != null ? { label: "TP", value: `$${t.tp.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}` } : null,
+                  t.sl != null ? { label: "SL", value: formatUsdPrice(t.sl) } : null,
+                  t.tp != null ? { label: "TP", value: formatUsdPrice(t.tp) } : null,
                 ].filter(Boolean).map((item) => (
                   <span key={item!.label} style={{
                     background: "rgba(255,255,255,0.05)", borderRadius: 5,
