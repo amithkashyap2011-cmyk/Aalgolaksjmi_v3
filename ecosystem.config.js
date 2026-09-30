@@ -97,6 +97,25 @@ module.exports = {
       merge_logs: true
     },
     {
+      // Fixed-IP egress for Binance API-key requests (see scripts/binance_tunnel.sh
+      // and BINANCE_HTTP_PROXY in server/.env). An ssh tunnel to a small proxy on a
+      // cloud VM with a stable public IP; idles until BINANCE_TUNNEL_HOST is set.
+      // Exits if the link drops (ServerAlive*), so PM2 restarts it with backoff.
+      name: 'binance-tunnel',
+      script: 'scripts/binance_tunnel.sh',
+      interpreter: 'bash',
+      cwd: '.',
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      exp_backoff_restart_delay: 1000,
+      min_uptime: '10s',
+      max_restarts: 100000,
+      error_file: './logs/binance-tunnel-error.log',
+      out_file: './logs/binance-tunnel-out.log',
+      merge_logs: true
+    },
+    {
       // External soak-test monitor (scripts/soak_test.mjs) — deliberately
       // its own PM2 process, not code inside aqea-server, so it keeps
       // recording (including counting aqea-server's own restarts) even
