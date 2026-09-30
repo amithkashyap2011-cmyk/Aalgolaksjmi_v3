@@ -1558,7 +1558,8 @@ router.get("/broker/status", async (_req, res) => {
         pe: pe && { symbol: pe.tradingSymbol, ltp: getFreshOptionLtp(pe.token) ?? null },
       };
     });
-    res.json({ success: true, broker: await smartApi.status(), priceFeed: getAngelFeedStatus(), reference, ordersEnabled: false });
+    const { getIndstocksFeedStatus } = await import("../services/indianMarket/indstocks/indstocksPriceFeed.js");
+    res.json({ success: true, broker: await smartApi.status(), priceFeed: getAngelFeedStatus(), secondaryFeed: { source: "INDSTOCKS", ...getIndstocksFeedStatus() }, reference, ordersEnabled: false });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -755,6 +755,9 @@ async function boot() {
       // Real NSE/BSE prices from Angel One (read-only); stays simulated if not configured.
       const { startAngelPriceFeed } = await import("./services/indianMarket/angelOne/angelPriceFeed.js");
       startAngelPriceFeed().catch((e: any) => bootLog(`Angel One price feed notice: ${e?.message || e}`));
+      // Second real-price source (INDstocks/INDmoney): fallback when Angel has no fresh quote + divergence check.
+      const { startIndstocksPriceFeed } = await import("./services/indianMarket/indstocks/indstocksPriceFeed.js");
+      startIndstocksPriceFeed();
       bootLog("Indian Market Daemons started (Auto-Trader, 3:15 PM Auto Square-off & Reconciliation active).");
     } catch (err: any) {
       bootLog(`Indian Market Daemons init notice: ${err.message}`);
