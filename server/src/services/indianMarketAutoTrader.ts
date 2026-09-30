@@ -469,6 +469,7 @@ export class IndianMarketAutoTrader {
     if (mongoose.connection.readyState !== 1) return 0;
 
     let closedCount = 0;
+    const unmonitored: string[] = [];
     const openTrades = await Trade.find({
       status: { $in: ["OPEN", "TARGET_TRIGGERED", "STOP_TRIGGERED", "EXIT_PENDING", "EXIT_PARTIALLY_FILLED"] },
       accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] },
@@ -480,7 +481,7 @@ export class IndianMarketAutoTrader {
       let currentPrice: number;
       if (isOptionTrade(trade)) {
         const real = realOptionValue(trade, InstrumentMaster.normalizeUnderlying(trade.underlying || trade.symbol));
-        if (real === undefined) continue;
+        if (real === undefined) { unmonitored.push(String(trade.symbol)); continue; }
         currentPrice = real;
       } else {
         currentPrice = resolveLivePriceForIndianTrade(trade);
@@ -497,8 +498,16 @@ export class IndianMarketAutoTrader {
       }
     }
 
+    // An open option with no fresh real quote is skipped on purpose (no exits on model prices), which
+    // also means its stop is NOT being watched. Say so, at most once every 5 minutes.
+    if (unmonitored.length && Date.now() - this.lastUnmonitoredWarnAt > 5 * 60_000) {
+      this.lastUnmonitoredWarnAt = Date.now();
+      console.warn(`[INDIAN_MONITOR] ${unmonitored.length} open option position(s) have no fresh real quote — stops/targets are NOT being evaluated: ${unmonitored.join(", ")}`);
+    }
     return closedCount;
   }
+
+  private static lastUnmonitoredWarnAt = 0;
 
   public static setAutoTradingEnabled(enabled: boolean): boolean {
     this.isAutoTradingEnabled = enabled;

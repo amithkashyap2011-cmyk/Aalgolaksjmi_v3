@@ -50,6 +50,8 @@ const status: Status = { running: false, symbolsLive: 0, appliedAsFallback: 0, d
 export const getIndstocksFeedStatus = (): Status => ({ ...status, divergence: { ...status.divergence } });
 
 let scripBySymbol: Record<string, string> | null = null;
+/** When this feed itself last supplied a symbol's price — those quotes are not Angel's, so never compare against them. */
+const appliedAt = new Map<string, number>();
 let timer: NodeJS.Timeout | null = null;
 
 async function loadToken(): Promise<string> {
@@ -111,7 +113,8 @@ export async function pollOnce(token: string, fetchGet = get): Promise<void> {
       const ltp = Number(q?.live_price);
       if (!sym || !(ltp > 0)) continue;
       live++;
-      if (hasFreshRealQuote(sym)) {
+      const own = Date.now() - (appliedAt.get(sym) ?? 0) < 90_000;
+      if (hasFreshRealQuote(sym) && !own) {
         // Angel is live for this symbol: only compare.
         const angel = MOCK_LIVE_INDIAN_TIKERS[sym]?.ltp;
         if (angel > 0) divergence[sym] = Math.round(((ltp - angel) / angel) * 10_000) / 100;
@@ -124,6 +127,7 @@ export async function pollOnce(token: string, fetchGet = get): Promise<void> {
           prevClose: Number(q.prev_close) || undefined,
           volume: Number(q.volume) || undefined,
         });
+        appliedAt.set(sym, Date.now());
         applied++;
       }
     }
@@ -172,5 +176,6 @@ export function stopIndstocksPriceFeed(): void {
 /** Test helper. */
 export function resetIndstocksFeedForTesting(): void {
   scripBySymbol = null;
+  appliedAt.clear();
   Object.assign(status, { running: false, symbolsLive: 0, appliedAsFallback: 0, divergence: {}, unresolved: [], lastError: undefined, maxDivergencePct: undefined });
 }

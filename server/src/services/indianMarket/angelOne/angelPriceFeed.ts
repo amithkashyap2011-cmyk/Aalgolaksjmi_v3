@@ -45,6 +45,8 @@ const status: FeedStatus = { running: false, source: "SIMULATED", symbolsLive: 0
 const SPOT_KEY: Record<string, string> = { NIFTY: "NIFTY50" };
 const INDEXES = new Set(["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"]);
 let timer: NodeJS.Timeout | null = null;
+let startRetry: NodeJS.Timeout | null = null;
+const START_RETRY_MS = 60_000;
 
 export function getAngelFeedStatus(): FeedStatus {
   return { ...status, optionQuotesLive: freshOptionQuoteCount() };
@@ -200,6 +202,13 @@ export async function startAngelPriceFeed(): Promise<void> {
   if (status.running || process.env.NODE_ENV === "test") return;
   if (!(await smartApi.isConfigured())) {
     status.lastError = "Angel One credentials not configured — using simulated prices";
+    // isConfigured() is also false when MongoDB wasn't ready yet or the server was starved
+    // at boot. Giving up here left the feed off for the whole session and every open option
+    // position unmonitored (2026-09-30 NIFTY/TCS), so keep trying.
+    if (!startRetry) {
+      startRetry = setTimeout(() => { startRetry = null; void startAngelPriceFeed(); }, START_RETRY_MS);
+      startRetry.unref?.();
+    }
     return;
   }
   status.running = true;
@@ -216,6 +225,8 @@ export async function startAngelPriceFeed(): Promise<void> {
 
 export function stopAngelPriceFeed(): void {
   status.running = false;
+  if (startRetry) clearTimeout(startRetry);
+  startRetry = null;
   if (timer) clearTimeout(timer);
   timer = null;
 }
