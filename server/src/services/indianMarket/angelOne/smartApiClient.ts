@@ -13,6 +13,7 @@
 import os from "node:os";
 import mongoose from "mongoose";
 import { generateTotp } from "./totp.js";
+import { isDisabled } from "../../credentialGate.js";
 import { readAngelOneCredentials } from "../angelOneCredentials.js";
 
 const ROOT = "https://apiconnect.angelone.in";
@@ -94,7 +95,7 @@ class SmartApiClient {
     if (mongoose.connection.readyState !== 1) throw new Error("Database not connected");
     const s = await mongoose.connection.db!.collection("settings").findOne({ userId: new mongoose.Types.ObjectId(DEFAULT_USER_ID) });
     const creds = readAngelOneCredentials(s as any);
-    if (creds.disabled) throw new Error("Angel One is disabled in Settings");
+    if (creds.disabled || isDisabled("angelOne")) throw new Error("Angel One is disabled in Settings");
     if (!creds.apiKey || !creds.clientCode || !creds.pin || !creds.totpSecret) {
       throw new Error("Angel One credentials incomplete — API key, client code, PIN and TOTP secret are all required");
     }

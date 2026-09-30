@@ -11,6 +11,7 @@ import * as paper from "../services/paperState.js";
 
 import mongoose from "mongoose";
 import { redactAngelSecrets, sealIncomingAngelSecrets } from "../services/indianMarket/angelOneCredentials.js";
+import { refreshGate, gateSnapshot } from "../services/credentialGate.js";
 import { redactIndmoneySecrets, sealIncomingIndmoneySecrets } from "../services/indianMarket/indmoneyCredentials.js";
 
 const router = Router();
@@ -42,6 +43,11 @@ router.get("/get", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
+/** Live state of the credential kill switches (what is actually being enforced). */
+router.get("/credential-gate", authGuard, (_req, res) => {
+  res.json(gateSnapshot());
+});
+
 const ALLOWED_SETTINGS_FIELDS = new Set([
   "defaultMode", "accountType", "allowedSymbols", "primarySymbol",
   "riskConfig", "autoTrade", "autoTradeThreshold", "tradingFeatures",
@@ -60,7 +66,7 @@ const ALLOWED_SETTINGS_FIELDS = new Set([
   // Angel One SmartAPI Credentials (NSE / BSE Indian Market)
   "angelOneApiKey", "angelOneClientCode", "angelOnePin", "angelOneTotpSecret", "angelOneDisabled",
   // INDmoney (INDstocks) API access token
-  "indmoneyAccessToken",
+  "indmoneyAccessToken", "indmoneyDisabled", "binanceKeysDisabled",
   // AI threshold controls — all come from DB, no hardcoding
   "shortScoreThreshold", "aiFlipExitMinProfitR", "adxMinimum", "saraswatiAlphaThreshold",
   "driftHaltThreshold", "driftReduceThreshold",
@@ -122,6 +128,7 @@ router.put("/update", authGuard, async (req: AuthRequest, res) => {
       { $set: safeUpdate },
       { new: true, upsert: true, runValidators: true },
     );
+    await refreshGate().catch(() => undefined);
     res.json(redactIndmoneySecrets(redactAngelSecrets(doc as any)));
   } catch (err: any) {
     res.status(400).json({ error: err.message });

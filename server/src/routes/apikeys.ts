@@ -152,6 +152,10 @@ router.post("/indmoney/test", authGuard, async (req: AuthRequest, res) => {
     const { Settings } = await import("../models/Settings.js");
     const { readIndmoneyToken, fetchIndmoneyProfile } = await import("../services/indianMarket/indmoneyCredentials.js");
     const doc = await Settings.findOne({ userId: req.userId }).lean();
+    if ((doc as any)?.indmoneyDisabled) {
+      res.status(409).json({ ok: false, status: "DISABLED", error: "INDmoney is disabled in Settings — enable it to verify." });
+      return;
+    }
     const token = readIndmoneyToken(doc as any);
     if (!token) {
       res.status(400).json({ ok: false, error: "No INDmoney access token saved.", status: "NOT_CONFIGURED" });

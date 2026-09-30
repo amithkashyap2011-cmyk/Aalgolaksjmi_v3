@@ -111,6 +111,20 @@ export default function SettingsPage() {
   const [indMasked, setIndMasked] = useState("");
   const [indMsg, setIndMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [indBusy, setIndBusy] = useState(false);
+
+  // ── Credential kill switches (server-enforced; stored credentials are kept) ──
+  const [gate, setGate] = useState({ binanceKeysDisabled: false, angelOneDisabled: false, indmoneyDisabled: false });
+  const [gateMsg, setGateMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const setGateFlags = async (patch: Partial<typeof gate>, label: string) => {
+    try {
+      await api.updateSettings(patch);
+      setGate((g) => ({ ...g, ...patch }));
+      if ("angelOneDisabled" in patch) setAngelDisabled(!!patch.angelOneDisabled);
+      setGateMsg({ ok: true, text: label });
+    } catch (err: any) {
+      setGateMsg({ ok: false, text: `ERROR: ${err.message}` });
+    }
+  };
   // ── Weather Effect on Market ──
   const [weatherEnabled, setWeatherEnabled] = useState(true);
   const [weatherInfluence, setWeatherInfluence] = useState(1);
@@ -317,6 +331,11 @@ export default function SettingsPage() {
             if (s.angelOneClientCode) setAngelClientCode(s.angelOneClientCode);
             // INDmoney: the server returns only a flag + masked tail, never the token.
             setIndSaved(!!s.indmoneyAccessTokenSet);
+            setGate({
+              binanceKeysDisabled: !!s.binanceKeysDisabled,
+              angelOneDisabled: !!s.angelOneDisabled,
+              indmoneyDisabled: !!s.indmoneyDisabled,
+            });
             setIndMasked(s.indmoneyAccessTokenMasked || "");
           }
         }).catch(() => {});
@@ -533,6 +552,56 @@ export default function SettingsPage() {
                           </div>
                         )}
                      </div>
+
+                      {/* Credential kill switches */}
+                      <div className="pt-4 border-top border-financial mt-5">
+                         <div className="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+                            <h4 className="text-dark font-bold tracking-tight m-0">Credential Access (Enable / Disable)</h4>
+                            <div className="d-flex gap-2">
+                               <button
+                                 onClick={() => {
+                                   if (!confirm("Disable ALL broker credentials? Binance, Angel One and INDmoney requests will be blocked until re-enabled. Saved keys are kept.")) return;
+                                   setGateFlags({ binanceKeysDisabled: true, angelOneDisabled: true, indmoneyDisabled: true }, "ALL_CREDENTIALS_DISABLED");
+                                 }}
+                                 className="btn btn-outline-danger rounded-financial px-3 py-2 font-bold text-xs"
+                               >
+                                 Disable ALL
+                               </button>
+                               <button
+                                 onClick={() => setGateFlags({ binanceKeysDisabled: false, angelOneDisabled: false, indmoneyDisabled: false }, "ALL_CREDENTIALS_ENABLED")}
+                                 className="btn btn-outline-success rounded-financial px-3 py-2 font-bold text-xs"
+                               >
+                                 Enable ALL
+                               </button>
+                            </div>
+                         </div>
+                         <p className="text-secondary text-sm mb-3 font-medium">
+                            Blocks every request that uses the credential, enforced on the server. Saved keys stay stored, so enabling again needs no re-entry.
+                            Disabling Binance stops LIVE orders and account sync; PAPER trading is unaffected.
+                         </p>
+                         <div className="d-flex flex-column gap-2">
+                            {([
+                              ["binanceKeysDisabled", "Binance API keys"],
+                              ["angelOneDisabled", "Angel One SmartAPI"],
+                              ["indmoneyDisabled", "INDmoney access token"],
+                            ] as const).map(([field, label]) => (
+                              <div key={field} className="d-flex align-items-center justify-content-between border border-financial rounded-financial px-3 py-2">
+                                <div className="d-flex align-items-center gap-2">
+                                  <span className={clsx("w-2 h-2 rounded-full", gate[field] ? "bg-secondary" : "bg-success")} />
+                                  <span className="font-bold text-sm text-dark">{label}</span>
+                                  <span className={clsx("text-xs font-mono", gate[field] ? "text-danger" : "text-success")}>{gate[field] ? "DISABLED" : "ENABLED"}</span>
+                                </div>
+                                <button
+                                  onClick={() => setGateFlags({ [field]: !gate[field] } as any, `${label.toUpperCase().replace(/ /g, "_")}_${gate[field] ? "ENABLED" : "DISABLED"}`)}
+                                  className={clsx("btn rounded-financial px-3 py-1.5 font-bold text-xs", gate[field] ? "btn-outline-success" : "btn-outline-warning")}
+                                >
+                                  {gate[field] ? "Enable" : "Disable"}
+                                </button>
+                              </div>
+                            ))}
+                         </div>
+                         {gateMsg && <div className={clsx("mt-2 text-xs font-bold font-mono", gateMsg.ok ? "text-success" : "text-danger")}>{gateMsg.text}</div>}
+                      </div>
 
                       {/* 🇮🇳 INDmoney (INDstocks) API */}
                       <div className="pt-4 border-top border-financial mt-5">

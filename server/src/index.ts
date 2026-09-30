@@ -311,6 +311,12 @@ async function connectMongoWithRetry(bootLog: (msg: string) => void) {
         retryReads: true,
       });
       bootLog("MongoDB connected.");
+      try {
+        const { refreshGate } = await import("./services/credentialGate.js");
+        const g = await refreshGate();
+        const off = Object.entries(g).filter(([, v]) => v).map(([k]) => k);
+        if (off.length) bootLog(`[credential-gate] DISABLED: ${off.join(", ")}`);
+      } catch (e: any) { bootLog(`[credential-gate] load failed: ${e?.message || e}`); }
       return;
     } catch (err: any) {
       const delay = Math.min(MONGO_CONNECT_RETRY_BASE_MS * attempt, MONGO_CONNECT_RETRY_MAX_MS);

@@ -21,6 +21,7 @@
  *    non-whitelisted IP and hide the outage.
  */
 import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { assertEnabled } from "./credentialGate.js";
 
 let cached: { url: string; agent: ProxyAgent } | undefined;
 let warnedInvalid: string | undefined;
@@ -82,6 +83,7 @@ function getDispatcher(env: NodeJS.ProcessEnv): ProxyAgent | undefined {
  * is set.
  */
 export async function binanceSignedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  assertEnabled("binance"); // kill switch: no key-carrying request leaves while Binance keys are disabled
   const agent = getDispatcher(process.env);
   if (!agent) return fetch(input, init);
   // undici's own fetch is used with its own ProxyAgent so the dispatcher and the
