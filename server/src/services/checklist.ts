@@ -142,7 +142,7 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
     `Requested ${positionSizePct.toFixed(1)}%, max ${risk.maxPositionSizePct}%`);
 
   add("R2", "Daily loss within limit", "RISK", true,
-    Math.abs(dailyPnl) < risk.maxDailyLoss,
+    dailyPnl > -risk.maxDailyLoss, // only LOSSES count: a big winning day must not trip the loss limit
     `Daily P&L=${dailyPnl.toFixed(2)}, limit=${risk.maxDailyLoss}`);
 
   add("R3", "SL will be set", "RISK", true,

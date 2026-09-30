@@ -22,6 +22,8 @@ export interface TradeExitState {
   tp1Hit: boolean;
   tp2Hit: boolean;
   tp3Hit: boolean;
+  /** AI_MOMENTUM_EXHAUSTION already banked its 50% — it must fire once, not every tick. */
+  momentumPartialTaken?: boolean;
   /** Sizes the breakeven fee buffer; unset keeps the futures-sized 0.1%. */
   accountType?: "SPOT" | "FUTURES";
 }

@@ -149,7 +149,7 @@ export class PositionManager {
 
     /* ── 2. AI MOMENTUM EXHAUSTION (Partial Exit) ── */
     // If trade is in profit (>1R), but signals are weakening significantly
-    if (rMultiple > 1.0) {
+    if (rMultiple > 1.0 && !state.momentumPartialTaken) {
       const ofExhausted = isLong ? ofScore < 45 : ofScore > 55;
       const coreDecaying = isLong ? coreScore < 60 : coreScore > 40;
       

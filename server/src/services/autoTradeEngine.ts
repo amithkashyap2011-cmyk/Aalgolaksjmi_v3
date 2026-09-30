@@ -1036,6 +1036,7 @@ async function processSymbol(
           tp1Hit: pos.meta?.tp1Hit || false,
           tp2Hit: pos.meta?.tp2Hit || false,
           tp3Hit: pos.meta?.tp3Hit || false,
+          momentumPartialTaken: pos.meta?.momentumPartialTaken || false,
           accountType
         },
         aqeaDecision,
@@ -1904,6 +1905,9 @@ async function executeExit(
     const updatedMeta = { ...(existingTrade?.meta || {}), ...(pos.meta || {}) };
     if (reason === "TP1_HIT") updatedMeta.tp1Hit = true;
     if (reason === "TP2_HIT") updatedMeta.tp2Hit = true;
+    // One-shot: without this flag AI_MOMENTUM_EXHAUSTION re-fired every tick and
+    // halved the remainder repeatedly until the position was dust.
+    if (reason === "AI_MOMENTUM_EXHAUSTION") updatedMeta.momentumPartialTaken = true;
     updatedMeta.partialPnl = ((updatedMeta.partialPnl as number) || 0) + safeNetPnl;
 
     // BUGFIX(partial-fill double-release): persist the REDUCED remaining quantity
