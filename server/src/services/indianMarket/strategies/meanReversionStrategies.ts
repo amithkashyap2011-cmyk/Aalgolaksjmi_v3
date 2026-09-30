@@ -295,11 +295,24 @@ export class VWAPReversionStrategy extends BaseStrategy {
       };
     }
 
+    // Only a real stretch below the reference is a bullish reversion. This branch used to be the
+    // unconditional fall-through: with price at/near the open (e.g. NIFTY at 09:17, when spot == open)
+    // it still answered BULLISH with score 74 and bought a call on "stretch" that did not exist
+    // (2026-09-30 NIFTY 22700 CE: +16.7% peak, then -37% at square-off).
+    if (spot < open * 0.992) {
+      return {
+        eligible: true,
+        score: 74,
+        direction: "BULLISH",
+        reasons: ["Price stretched > 0.8% below intraday median in range, mean-reverting towards VWAP"],
+      };
+    }
+
     return {
-      eligible: true,
-      score: 74,
-      direction: "BULLISH",
-      reasons: ["Price stretched below VWAP in range regime, mean-reverting towards VWAP median"],
+      eligible: false,
+      score: 40,
+      direction: "NEUTRAL",
+      reasons: ["VWAP reversion: price is within 0.8% of the intraday median — no stretch to revert"],
     };
   }
 

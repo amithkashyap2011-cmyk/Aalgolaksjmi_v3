@@ -31,7 +31,8 @@ describe("entry premium matches the exit monitor's mark", () => {
     const ctx: any = {
       underlying, spotPrice: spot, futuresPrice: spot * 1.002,
       bars1m: [], bars5m: [], bars15m: [], regime: "RANGING", timestamp: new Date(),
-      indicators: { rsi14: 50, adx14: 15, open: spot, high: spot * 1.01, low: spot * 0.99 },
+      // Spot 1% below the open: a real stretch (VWAP_REVERSION no longer signals when price sits at the open).
+      indicators: { rsi14: 50, adx14: 15, open: spot * 1.01, high: spot * 1.012, low: spot * 0.99 },
     };
     const trade = strat.constructTrade(strat.generateSignal(ctx)!, ctx, 500000, 1);
     const leg = trade.legs[0];
