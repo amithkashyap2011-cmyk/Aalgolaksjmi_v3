@@ -80,7 +80,7 @@ class CNNPredictor:
             if not model_path.exists():
                 print(f"[CNN] WARNING: Checkpoint missing at {model_path}. Size: N/A. Model initialized with random weights.")
                 self.checkpoint_loaded = False
-                return
+                return False
 
             size_mb = model_path.stat().st_size / (1024 * 1024)
             print(f"[CNN] Found checkpoint. Size: {size_mb:.2f} MB")
@@ -99,17 +99,29 @@ class CNNPredictor:
             self.checkpoint_loaded = True
             print(f"[CNN] Successfully loaded weights from {model_path}")
             print(f"[CNN] Verification PASS: Input={in_weights}, Schema={self.schema.DIMENSION}")
+            return True
         except Exception as e:
             print(f"[CNN] FATAL: Failed to load or verify model: {e}")
             if "AQEA_FEATURE_SCHEMA_ERROR" in str(e):
                  raise e
+            return False
 
     def reload(self):
         """Hot-reload the checkpoint from disk after a training cycle
         promotes a new one — no process restart required."""
         with self._lock:
-            FeatureSchemaV8.reload()  # MEANS/STDS may have been rewritten this cycle too
-            self._load(self.model_path)
+            # MEANS/STDS may have been rewritten this cycle too — but they are
+            # only valid together with the checkpoint they were fitted with. If
+            # the new checkpoint fails to load (torn write, schema error) the
+            # OLD model keeps serving, so the OLD stats must be restored too;
+            # otherwise it silently runs on the new normalization.
+            old = (FeatureSchemaV8.FEATURE_NAMES, FeatureSchemaV8.MEANS,
+                   FeatureSchemaV8.STDS, FeatureSchemaV8.DIMENSION)
+            FeatureSchemaV8.reload()
+            if not self._load(self.model_path):
+                (FeatureSchemaV8.FEATURE_NAMES, FeatureSchemaV8.MEANS,
+                 FeatureSchemaV8.STDS, FeatureSchemaV8.DIMENSION) = old
+                print("[CNN] Reload failed — restored previous normalization stats to match the still-serving model.")
             return self.checkpoint_loaded
 
     def _fetch_window(self, symbol: str) -> np.ndarray:

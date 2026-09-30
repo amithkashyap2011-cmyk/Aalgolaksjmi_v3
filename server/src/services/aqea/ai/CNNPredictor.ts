@@ -166,27 +166,18 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
       return data;
 
     } catch (err) {
-      // 🧠 CNN Spatial Candlestick Pattern Momentum & Derivative Fallback
-      const rsi = features.market?.rsi ?? 50;
-      const ema20 = features.market?.ema20 ?? features.market?.close;
-      const ema50 = features.market?.ema50 ?? features.market?.close;
-      const close = features.market?.close ?? 0;
-
-      let direction: AIDirection = "HOLD";
-      let confidence = 0.50;
-      if (close > ema20 && ema20 >= ema50 && rsi >= 52) {
-        direction = "LONG";
-        confidence = Math.min(0.92, 0.70 + (rsi - 50) * 0.008);
-      } else if (close < ema20 && ema20 <= ema50 && rsi <= 48) {
-        direction = "SHORT";
-        confidence = Math.min(0.92, 0.70 + (50 - rsi) * 0.008);
-      }
-
+      // No fabricated vote. CNN_1D_V1 is an AUTHORIZED voter: when the quant
+      // engine answers with an error (WINDOW_FETCH_FAILED during a Binance
+      // 429/418 backoff, HTTP 500, ...) this block used to synthesize an
+      // RSI/EMA momentum LONG/SHORT at 0.70-0.92 "confidence" that entered
+      // consensus as the CNN's own call — exactly when the model was blind.
+      // Neutral HOLD/0 is skipped by telemetry (confidence 0) and counts as
+      // no vote (see TransformerPredictor / LSTMPredictor).
       return {
-        direction,
-        confidence: Number(confidence.toFixed(2)),
-        probability: Number(confidence.toFixed(2)),
-        meta: { recommendedAction: direction, model: "CNN_SPATIAL_MOMENTUM_LOCAL" }
+        direction: "HOLD" as AIDirection,
+        confidence: 0,
+        probability: 0.5,
+        meta: { fallback: true, reason: (err as Error)?.message, model: "CNN_1D_V1_UNAVAILABLE" },
       };
     }
   }
