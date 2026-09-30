@@ -153,11 +153,22 @@ export class AutonomousStrategyRegistry {
 
     if (mongoose.connection?.readyState === 1) {
       try {
-        await AutonomousStrategy.findOneAndUpdate(
-          { strategyId: record.strategyId },
-          { $set: record },
-          { upsert: true, new: true }
-        );
+        // name+version is the unique business key; matching on strategyId alone
+        // collided with it (E11000) when an existing doc had another strategyId.
+        try {
+          await AutonomousStrategy.findOneAndUpdate(
+            { name: record.name, version: record.version },
+            { $set: record },
+            { upsert: true, new: true }
+          );
+        } catch (err: any) {
+          if (err?.code !== 11000) throw err;
+          await AutonomousStrategy.findOneAndUpdate(
+            { strategyId: record.strategyId },
+            { $set: record },
+            { upsert: true, new: true }
+          );
+        }
       } catch (err: any) {
         console.warn(`[STRATEGY_REGISTRY] DB sync warning: ${err?.message}`);
       }
