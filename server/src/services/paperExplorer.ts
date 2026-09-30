@@ -60,35 +60,61 @@ function log(msg: string) {
   console.log(`[PAPER_EXPLORATION] ${msg}`);
 }
 
+/**
+ * Closes exploration trades older than MAX_HOLD_MS at market. Returns the ids it closed.
+ * Independent of the entry switch and of the pause state: closing reduces risk, and with
+ * PAPER_EXPLORATION=false the entry loop never runs, which used to strand every open
+ * exploration trade (three sat 16-17 h with no time exit).
+ */
+export async function closeExpiredExplorationTrades(openAll: any[], port: number = Number(process.env.PORT) || 9991): Promise<Set<string>> {
+  const expired = new Set<string>();
+  for (const t of openAll) {
+    if (!t.openedAt || Date.now() - new Date(t.openedAt).getTime() < MAX_HOLD_MS) continue;
+    const res = await fetch(`http://127.0.0.1:${port}/trading/close-position`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tradeId: String(t._id), mode: "PAPER", reason: "EXPLORATION_TIME_EXIT" }),
+      signal: AbortSignal.timeout(20_000),
+    }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: String(e) }) }) as any);
+    const body: any = await res.json().catch(() => ({}));
+    if (res.ok) {
+      expired.add(String(t._id));
+      log(`time exit ${t.symbol} after ${((Date.now() - new Date(t.openedAt).getTime()) / 3_600_000).toFixed(1)}h (pnl ${Number(body?.pnl ?? body?.trade?.pnl ?? 0).toFixed(4)})`);
+    } else {
+      log(`time exit failed for ${t.symbol}: ${body?.error || res.status}`);
+    }
+  }
+  return expired;
+}
+
+/** Time-exit sweep only (used when entries are switched off). */
+export async function explorationSweepTick(): Promise<void> {
+  if (running) return;
+  running = true;
+  try {
+    if (mongoose.connection.readyState !== 1) return;
+    const openAll = await Trade.find({ userId: DEMO_USER_ID, entrySource: EXPLORATION_SOURCE, status: "OPEN" }, { symbol: 1, openedAt: 1 }).lean();
+    await closeExpiredExplorationTrades(openAll as any[]);
+  } catch (e: any) {
+    log(`sweep error: ${e?.message || e}`);
+  } finally {
+    running = false;
+  }
+}
+
 export async function explorationTick(): Promise<void> {
   if (running) return;
   running = true;
   try {
-    if (getTradingControlStatus() !== "RUNNING") return;
     if (mongoose.connection.readyState !== 1) return;
 
     const userId = DEMO_USER_ID;
     const port = Number(process.env.PORT) || 9991;
     const openAll = await Trade.find({ userId, entrySource: EXPLORATION_SOURCE, status: "OPEN" }, { symbol: 1, openedAt: 1 }).lean();
 
-    // Time exit: free the slot once the trade has outlived its signal.
-    const expired = new Set<string>();
-    for (const t of openAll as any[]) {
-      if (!t.openedAt || Date.now() - new Date(t.openedAt).getTime() < MAX_HOLD_MS) continue;
-      const res = await fetch(`http://127.0.0.1:${port}/trading/close-position`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tradeId: String(t._id), mode: "PAPER", reason: "EXPLORATION_TIME_EXIT" }),
-        signal: AbortSignal.timeout(20_000),
-      }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: String(e) }) }) as any);
-      const body: any = await res.json().catch(() => ({}));
-      if (res.ok) {
-        expired.add(String(t._id));
-        log(`time exit ${t.symbol} after ${((Date.now() - new Date(t.openedAt).getTime()) / 3_600_000).toFixed(1)}h (pnl ${Number(body?.pnl ?? body?.trade?.pnl ?? 0).toFixed(4)})`);
-      } else {
-        log(`time exit failed for ${t.symbol}: ${body?.error || res.status}`);
-      }
-    }
+    // Time exit: free the slot once the trade has outlived its signal. Not gated by the pause state.
+    const expired = await closeExpiredExplorationTrades(openAll as any[], port);
+    if (getTradingControlStatus() !== "RUNNING") return;
     const open = (openAll as any[]).filter((t) => !expired.has(String(t._id)));
     if (open.length >= MAX_OPEN) return;
     const openSymbols = new Set(open.map((t: any) => t.symbol));
@@ -146,7 +172,14 @@ export async function explorationTick(): Promise<void> {
 }
 
 export function startPaperExplorer(intervalMs = 60_000): void {
-  if (timer || process.env.NODE_ENV === "test" || process.env.PAPER_EXPLORATION === "false") return;
+  if (timer || process.env.NODE_ENV === "test") return;
+  if (process.env.PAPER_EXPLORATION === "false") {
+    // Entries are off, but trades opened earlier must still get their time exit.
+    timer = setInterval(() => { explorationSweepTick(); }, intervalMs);
+    timer.unref?.();
+    log("entries disabled (PAPER_EXPLORATION=false); time-exit sweep only");
+    return;
+  }
   timer = setInterval(() => { explorationTick(); }, intervalMs);
   timer.unref?.();
   log(`started (≥${MIN_PROB * 100}% & ${MIN_LEAD * 100}-pt lead, max ${MAX_OPEN} open, ${SIZE_FRACTION * 100}% size, ${ALLOW_SHORTS ? "long+short" : "long only"}, PAPER only)`);

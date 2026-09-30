@@ -1945,6 +1945,9 @@ async function executeExit(
     feeCost: Number.isFinite(feeCost) ? feeCost : 0,
     slippageCost: Number.isFinite(slippageCost) ? slippageCost : 0,
     netPnl: totalNetPnl, status: "CLOSED", closedAt: new Date(),
+    // Also top-level: reports and the Orders page read `exitReason`; only meta.exitReason was set here, so
+    // stop-loss / book-profit / stagnant exits showed no reason (94 of 128 closes in 72h).
+    exitReason: reason,
     meta: preservedMeta,
   };
 
