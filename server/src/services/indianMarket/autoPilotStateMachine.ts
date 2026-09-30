@@ -12,6 +12,7 @@
  *   - Complete audit logging and crash/restart recovery
  */
 
+import { stockTrail, extendTarget } from "./dynamicExits.js";
 import { chargesAtClose } from "./tradeCharges.js";
 import { observeEntry, forgetEntry } from "./entryTelemetry.js";
 import {
@@ -190,7 +191,7 @@ export class AutoPilotStateMachine {
     const isLong = tradeDoc.side === "BUY";
     const entryPrice = Number(tradeDoc.entryPrice || 0);
     let sl = Number(tradeDoc.sl || tradeDoc.stopLoss || 0);
-    const tp = Number(tradeDoc.tp || tradeDoc.target || 0);
+    let tp = Number(tradeDoc.tp || tradeDoc.target || 0);
 
     // ── Dynamic Breakeven & Multi-Tier Trailing Stop-Loss ──────────────────────
     if (entryPrice > 0 && sl > 0) {
@@ -299,6 +300,45 @@ export class AutoPilotStateMachine {
             if (typeof tradeDoc.save === "function") { tradeDoc.markModified?.("meta"); await tradeDoc.save(); }
           } catch {}
         }
+      }
+    }
+
+    // ── Stock trailing stop + dynamic profit target ─────────────────────────────
+    // (Options keep the premium-% tiers above; stocks never move that far, so they get R-multiple tiers.)
+    if (entryPrice > 0 && sl > 0 && tp > 0) {
+      if (!tradeDoc.meta) tradeDoc.meta = {};
+      const m = tradeDoc.meta;
+      if (m.initialSl === undefined) m.initialSl = sl;
+      if (m.initialTpDistance === undefined) m.initialTpDistance = Math.abs(tp - entryPrice);
+      let changed = false;
+      const isOptionPosition =
+        (Array.isArray(tradeDoc.legs) && tradeDoc.legs.length > 0) ||
+        tradeDoc.instrumentType === "CE" || tradeDoc.instrumentType === "PE" ||
+        /\d(CE|PE)(?![A-Z])/.test(String(tradeDoc.symbol || ""));
+      if (!isOptionPosition) {
+        const t = stockTrail({
+          isLong, entry: entryPrice, sl, initialSl: Number(m.initialSl),
+          highest: Math.max(m.highestLtp || entryPrice, currentLtp),
+          lowest: Math.min(m.lowestLtp || entryPrice, currentLtp),
+        });
+        if (t) { sl = t.sl; tradeDoc.sl = sl; tradeDoc.stopLoss = sl; m.trailingStage = t.stage; changed = true; }
+      }
+      // Opt-out: per trade (meta.dynamicProfit === false) or globally (INDIAN_DYNAMIC_PROFIT=off).
+      const dynamicProfitOn = m.dynamicProfit !== false && process.env.INDIAN_DYNAMIC_PROFIT !== "off";
+      const ext = dynamicProfitOn ? extendTarget({
+        isLong, entry: entryPrice, sl, tp, ltp: currentLtp,
+        initialTpDistance: Number(m.initialTpDistance), extensions: Number(m.tpExtensions || 0),
+      }) : { extended: false, tp, sl, extensions: 0 };
+      if (ext.extended) {
+        tp = ext.tp; sl = ext.sl;
+        tradeDoc.tp = tp; tradeDoc.target = tp; tradeDoc.sl = sl; tradeDoc.stopLoss = sl;
+        m.tpExtensions = ext.extensions;
+        m.trailingStage = m.trailingStage && m.trailingStage !== "NONE" ? m.trailingStage : "TARGET_EXTENDED";
+        changed = true;
+      }
+      if (changed) {
+        tradeDoc.markModified?.("meta");
+        try { if (typeof tradeDoc.save === "function") await tradeDoc.save(); } catch { /* next tick retries */ }
       }
     }
 
