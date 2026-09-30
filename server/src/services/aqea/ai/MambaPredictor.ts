@@ -110,27 +110,13 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
 
       return result;
     } catch (err) {
-      // 🧠 Mamba State Space Sequential Trend Persistence Fallback
-      const adx = features.market?.adx ?? 25;
-      const rsi = features.market?.rsi ?? 50;
-      const close = features.market?.close ?? 0;
-      const ema50 = features.market?.ema50 ?? close;
-
-      let direction: AIDirection = "HOLD";
-      let confidence = 0.50;
-      if (adx >= 22 && rsi >= 52 && close >= ema50) {
-        direction = "LONG";
-        confidence = Math.min(0.95, 0.74 + (adx - 20) * 0.008);
-      } else if (adx >= 22 && rsi <= 48 && close <= ema50) {
-        direction = "SHORT";
-        confidence = Math.min(0.95, 0.74 + (adx - 20) * 0.008);
-      }
-
+      // No fabricated vote: the old fallback synthesized an ADX/RSI trend
+      // LONG/SHORT at 0.74-0.95 "confidence" and logged it as Mamba's.
       return {
-        direction,
-        confidence: Number(confidence.toFixed(2)),
-        probability: Number(confidence.toFixed(2)),
-        meta: { recommendedAction: direction, model: "MAMBA_STATE_SPACE_SEQUENTIAL_LOCAL" }
+        direction: "HOLD" as AIDirection,
+        confidence: 0,
+        probability: 0.5,
+        meta: { fallback: true, reason: (err as Error)?.message, model: "MAMBA_RESEARCH_V1_UNAVAILABLE" },
       };
     }
   }

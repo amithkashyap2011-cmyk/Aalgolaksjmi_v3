@@ -120,27 +120,13 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
     return result;
 
     } catch (err) {
-      // 🧠 PPO RL Volatility & VWAP Execution Probability Fallback
-      const close = features.market?.close ?? 0;
-      const vwap = features.market?.vwap ?? close;
-      const atr = features.market?.atr ?? (close * 0.01);
-      const vwapDistPct = ((close - vwap) / Math.max(vwap, 1)) * 100;
-
-      let direction: AIDirection = "HOLD";
-      let confidence = 0.50;
-      if (close > vwap && vwapDistPct >= 0.15) {
-        direction = "LONG";
-        confidence = Math.min(0.90, 0.72 + Math.min(0.18, vwapDistPct * 0.1));
-      } else if (close < vwap && vwapDistPct <= -0.15) {
-        direction = "SHORT";
-        confidence = Math.min(0.90, 0.72 + Math.min(0.18, Math.abs(vwapDistPct) * 0.1));
-      }
-
+      // No fabricated vote: the old fallback synthesized a VWAP-distance
+      // LONG/SHORT at 0.72-0.90 "confidence" and logged it as the PPO's.
       return {
-        direction,
-        confidence: Number(confidence.toFixed(2)),
-        probability: Number(confidence.toFixed(2)),
-        meta: { recommendedAction: direction, model: "PPO_RL_VWAP_VOLATILITY_LOCAL" }
+        direction: "HOLD" as AIDirection,
+        confidence: 0,
+        probability: 0.5,
+        meta: { fallback: true, reason: (err as Error)?.message, model: "PPO_EXECUTION_V1_UNAVAILABLE" },
       };
     }
   }
