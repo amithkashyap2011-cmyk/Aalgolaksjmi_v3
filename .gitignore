@@ -87,3 +87,9 @@ _cleanup_quarantine/
 /*_BREAKDOWN.md
 /AGENTIC_TRADING_ARCHITECTURE.md
 /TEST_RESULTS.md
+
+# Generated at runtime — rewritten by every training cycle / engine start, so
+# tracking them left `git status` permanently dirty. Every reader tolerates a
+# missing file (returns an empty state).
+models/*/train_state.json
+quant_engine/runtime/port.json
