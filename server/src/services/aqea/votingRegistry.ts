@@ -45,7 +45,12 @@ export class VotingRegistry {
     // now drives position sizing/exit strategy directly via
     // AQEA_CONFIG.PPO_EXECUTION_AUTHORITY in engine.ts instead.
     ["PPO", { type: "PPO", role: PredictorRole.SHADOW, affectsTrading: false, persisted: true }],
-    ["TRANSFORMER", { type: "TRANSFORMER", role: PredictorRole.AUTHORIZED, affectsTrading: true, persisted: true }],
+    // Demoted from AUTHORIZED (2026-10-01): transformer_micro_v1.pt returns the
+    // same output (TRAP ~0.9716) for EVERY input, including all-zeros, while a
+    // random-init model varies — the checkpoint is collapsed and has no training
+    // pipeline/provenance. Its "vote" was only the regime-to-direction TRAP rule
+    // (trend bull→SHORT, trend bear→LONG) at fake 0.97 confidence.
+    ["TRANSFORMER", { type: "TRANSFORMER", role: PredictorRole.SHADOW, affectsTrading: false, persisted: true }],
     ["MAMBA", { type: "MAMBA", role: PredictorRole.SHADOW, affectsTrading: false, persisted: true }],
     ["LNN", { type: "LNN", role: PredictorRole.AUTHORIZED, affectsTrading: true, persisted: true }],
     ["NOT_AVAILABLE", { type: "NOT_AVAILABLE", role: PredictorRole.EXPERIMENTAL, affectsTrading: false, persisted: false }]
