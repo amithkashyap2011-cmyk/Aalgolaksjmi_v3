@@ -142,9 +142,14 @@ export class RiskEngine {
     // (meta/decisionPath), and this runs per symbol per account every cycle:
     // loading them whole was ~1.5 MB/s of BSON decoding and stalled the event
     // loop until /health timed out and the guardian restart-looped the server.
+    // The window must start at the EARLIER of week/month start: the ISO week
+    // often begins in the previous month (e.g. Thu 1 Oct -> week began Mon 28
+    // Sep), and querying only from monthStart dropped those days from the
+    // weekly drawdown check.
+    const windowStart = new Date(Math.min(weekStart.getTime(), monthStart.getTime()));
     const PNL_FIELDS = { pnl: 1, closedAt: 1, openedAt: 1 } as const;
     const [closedThisMonth, allTrades] = isDbConnected ? await Promise.all([
-      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED", closedAt: { $gte: monthStart } }, PNL_FIELDS).lean(),
+      Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED", closedAt: { $gte: windowStart } }, PNL_FIELDS).lean(),
       Trade.find({ userId: toValidObjectId(ctx.userId), mode: ctx.mode, accountType: ctx.accountType, status: "CLOSED" }, PNL_FIELDS).lean(),
     ]) : [[], []];
 
@@ -162,7 +167,7 @@ export class RiskEngine {
     }
 
     const weeklyPnl = closedThisWeek.reduce((s, t) => s + (t.pnl ?? 0), 0);
-    const monthlyPnl = closedThisMonth.reduce((s, t) => s + (t.pnl ?? 0), 0);
+    const monthlyPnl = closedThisMonth.filter(t => closeTime(t) >= monthStart.getTime()).reduce((s, t) => s + (t.pnl ?? 0), 0);
     const allTimePnl = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
 
     if (weeklyPnl < 0 && Math.abs(weeklyPnl) / equity > AQEA_CONFIG.WEEKLY_DRAWDOWN_LIMIT) {

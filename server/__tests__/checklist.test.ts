@@ -197,6 +197,14 @@ describe("buildChecklist — mandatory gates", () => {
     expect(result.allowed).toBe(false);
   });
 
+  test("TC-I12b: R2 passes — a big WINNING day must not trip the daily loss limit", () => {
+    const result = buildChecklist(makePassingInput({
+      dailyPnl: 150,
+      risk: makeRisk({ maxDailyLoss: 100 }),
+    }));
+    expect(result.items.find((i) => i.spoke === "R2")!.passed).toBe(true);
+  });
+
   test("TC-I13: R3 fails — defaultSL is 0 → allowed = false", () => {
     const result = buildChecklist(makePassingInput({
       risk: makeRisk({ defaultSL: 0 }),

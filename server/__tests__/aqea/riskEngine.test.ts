@@ -233,6 +233,31 @@ describe("AQEA Risk Engine", () => {
     expect(res.reason).toBe("WEEKLY_DRAWDOWN_BREACH");
   });
 
+  test("Weekly window query reaches back into the previous month when the week straddles a month boundary", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-10-01T12:00:00Z")); // Thursday; ISO week began Mon 28 Sep
+
+    const ctx: any = {
+      userId, symbol, mode: "PAPER", accountType: "FUTURES",
+      currentPrice: 100000, atr: 2000, winRate: 0.6, rewardRisk: 2, fundingRate: 0.0001
+    };
+    const sep29 = new Date(2026, 8, 29, 10, 0, 0);
+    mockTradeFind.mockClear();
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) });
+    mockTradeFind.mockReturnValueOnce({
+      lean: (jest.fn() as any).mockResolvedValue([{ pnl: -2900, status: "CLOSED", closedAt: sep29 }]),
+    });
+    mockTradeFind.mockReturnValueOnce({ lean: (jest.fn() as any).mockResolvedValue([]) });
+
+    const res = await RiskEngine.validateTrade(ctx);
+    const closedQuery = mockTradeFind.mock.calls.map((c: any) => c[0]).find((q: any) => q?.closedAt?.$gte);
+    const gte: Date = closedQuery.closedAt.$gte;
+    jest.useRealTimers();
+    // Window must start at/before Mon 28 Sep, not at 1 Oct.
+    expect(gte.getTime()).toBeLessThanOrEqual(new Date(2026, 8, 28, 23, 59).getTime());
+    expect(res.reason).toBe("WEEKLY_DRAWDOWN_BREACH");
+  });
+
   test("Reject if monthly drawdown limit exceeded (but weekly alone would not breach)", async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date("2026-06-25T12:00:00Z")); // 4th Thursday of month
