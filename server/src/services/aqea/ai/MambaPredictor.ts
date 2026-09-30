@@ -15,6 +15,7 @@ import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
 export class MambaPredictor extends BasePredictor {
   protected modelName = "MAMBA_V1";
   private neutralCount = 0;
+  private static lastDegradedWarnAt = 0;
   private isDegraded = false;
   private static mambaCache = new Map<string, { expiresAt: number; result: any }>();
 
@@ -73,7 +74,13 @@ protected async runInference(features: FeatureVector): Promise<{ direction: AIDi
 
       if (data.error) {
         if (data.error === "MODEL_DEGRADED") {
-          console.warn(`[MambaPredictor] MODEL_DEGRADED. Falling back to HOLD.`);
+          // Mamba is a SHADOW model that is degraded by design; this fired per
+          // symbol per cycle (9k+ stderr lines). Log at most once per 10 min.
+          const nowMs = Date.now();
+          if (nowMs - MambaPredictor.lastDegradedWarnAt > 600_000) {
+            MambaPredictor.lastDegradedWarnAt = nowMs;
+            console.warn(`[MambaPredictor] MODEL_DEGRADED. Falling back to HOLD. (logged once per 10 min)`);
+          }
           return { direction: "HOLD", confidence: 0, probability: 0.5 };
         }
         throw new Error(`Python Mamba internal error: ${data.error}`);

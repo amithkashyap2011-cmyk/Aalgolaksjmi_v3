@@ -332,7 +332,9 @@ export class FeaturePipeline {
       // Significant figures, not toFixed(4) — that rounded a sub-cent ATR to 0.
       atr: { atr14: Number(atr14.toPrecision(6)), atrPercent: Number(atrPct.toFixed(2)), volatilityState: volState },
       rsi: { rsi14: Number(rsi14.toFixed(2)), state: rsiState, divergence: rsiDiv },
-      macd: { macd: Number(macdVal.toFixed(4)), signal: Number(macdSig.toFixed(4)), histogram: Number(macdHist.toFixed(4)), momentum: macdMomentum },
+      // Significant figures, not toFixed(4): MACD is in price units, so 4 decimals
+      // zeroed it for sub-cent coins (PEPE/SHIB/BONK/FLOKI traced macd=0).
+      macd: { macd: Number(macdVal.toPrecision(6)), signal: Number(macdSig.toPrecision(6)), histogram: Number(macdHist.toPrecision(6)), momentum: macdMomentum },
       // Significant figures, not 2 decimals: toFixed(2) zeroed the bands for
       // sub-cent coins (PEPE/SHIB/BONK/FLOKI), so close > middle was always
       // true (a free bullish Gayatri vote) and Ohmkara's distance was garbage.
