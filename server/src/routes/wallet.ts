@@ -29,6 +29,7 @@ import { runSentinelAudit } from "../services/sentinelAuditor.js";
 import { clearDashboardCache } from "./aqeaUi.js";
 import { CurrencyService } from "../services/currencyService.js";
 import * as razorpay from "../services/razorpayService.js";
+import { binanceSignedFetch } from "../services/binanceProxy.js";
 
 const router = Router();
 
@@ -314,9 +315,9 @@ router.get("/binance-live", optionalAuth, async (req: AuthRequest, res) => {
     const inrRate = getUsdtInrRate();
 
     const [spotRes, futRes, earnRes, tickersRes] = await Promise.allSettled([
-      fetch(`https://api.binance.com/api/v3/account?${signQuery()}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
-      fetch(`https://fapi.binance.com/fapi/v2/account?${signQuery()}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
-      fetch(`https://api.binance.com/sapi/v1/simple-earn/flexible/position?${signQuery("size=50")}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
+      binanceSignedFetch(`https://api.binance.com/api/v3/account?${signQuery()}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
+      binanceSignedFetch(`https://fapi.binance.com/fapi/v2/account?${signQuery()}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
+      binanceSignedFetch(`https://api.binance.com/sapi/v1/simple-earn/flexible/position?${signQuery("size=50")}`, { headers: { "X-MBX-APIKEY": apiKey } }).then(r => r.json()),
       fetch("https://api.binance.com/api/v3/ticker/price").then(r => r.json()),
     ]);
 

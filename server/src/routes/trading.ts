@@ -37,6 +37,7 @@ import mongoose from "mongoose";
 import { clearDashboardCache } from "./aqeaUi.js";
 import { getRegimeReport } from "../services/spectralRegimeService.js";
 import { LiveExecutionBarrier } from "../services/aqea/governance/LiveExecutionBarrier.js";
+import { binanceSignedFetch } from "../services/binanceProxy.js";
 
 const router = Router();
 
@@ -836,7 +837,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
           const ts = Date.now();
           const q = `fromAsset=${fromAsset}&toAsset=${toAsset}&fromAmount=${fromAmount}&timestamp=${ts}`;
           const sig = crypto.createHmac("sha256", apiSecret).update(q).digest("hex");
-          const quoteRes = await fetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
+          const quoteRes = await binanceSignedFetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
             method: "POST",
             headers: { "X-MBX-APIKEY": apiKey }
           });
@@ -845,7 +846,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
             const tsA = Date.now();
             const qA = `quoteId=${quoteData.quoteId}&timestamp=${tsA}`;
             const sigA = crypto.createHmac("sha256", apiSecret).update(qA).digest("hex");
-            const acceptRes = await fetch(`https://api.binance.com/sapi/v1/convert/acceptQuote?${qA}&signature=${sigA}`, {
+            const acceptRes = await binanceSignedFetch(`https://api.binance.com/sapi/v1/convert/acceptQuote?${qA}&signature=${sigA}`, {
               method: "POST",
               headers: { "X-MBX-APIKEY": apiKey }
             });
@@ -1682,7 +1683,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
                 const ts = Date.now();
                 const q = `fromAsset=${fromAsset}&toAsset=${toAsset}&fromAmount=${amt}&recvWindow=60000&timestamp=${ts}`;
                 const sig = crypto.createHmac("sha256", apiSecret).update(q).digest("hex");
-                const res = await fetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
+                const res = await binanceSignedFetch(`https://api.binance.com/sapi/v1/convert/getQuote?${q}&signature=${sig}`, {
                   method: "POST",
                   headers: { "X-MBX-APIKEY": apiKey }
                 });
@@ -1697,7 +1698,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
                   const capTs = Date.now();
                   const capQ = `recvWindow=60000&timestamp=${capTs}`;
                   const capSig = crypto.createHmac("sha256", apiSecret).update(capQ).digest("hex");
-                  const capRes = await fetch(`https://api.binance.com/sapi/v1/capital/config/getall?${capQ}&signature=${capSig}`, {
+                  const capRes = await binanceSignedFetch(`https://api.binance.com/sapi/v1/capital/config/getall?${capQ}&signature=${capSig}`, {
                     headers: { "X-MBX-APIKEY": apiKey }
                   });
                   const capData: any = await capRes.json();
@@ -1715,7 +1716,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
                 const tsA = Date.now();
                 const qA = `quoteId=${quoteData.quoteId}&recvWindow=60000&timestamp=${tsA}`;
                 const sigA = crypto.createHmac("sha256", apiSecret).update(qA).digest("hex");
-                const acceptRes = await fetch(`https://api.binance.com/sapi/v1/convert/acceptQuote?${qA}&signature=${sigA}`, {
+                const acceptRes = await binanceSignedFetch(`https://api.binance.com/sapi/v1/convert/acceptQuote?${qA}&signature=${sigA}`, {
                   method: "POST",
                   headers: { "X-MBX-APIKEY": apiKey }
                 });

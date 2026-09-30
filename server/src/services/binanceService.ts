@@ -12,6 +12,7 @@ import crypto from "node:crypto";
 import WebSocket from "ws";
 import type { Server as IOServer } from "socket.io";
 import { signalBus, SignalType } from "./signalBus.js";
+import { binanceSignedFetch } from "./binanceProxy.js";
 
 // Overridable only for isolated load testing against a local mock exchange
 // (see scripts/mock_exchange.mjs) — unset in every normal deployment, so
@@ -271,7 +272,7 @@ async function signedGet<T>(path: string, apiKey: string, apiSecret: string, par
   }
   const qs = new URLSearchParams({ recvWindow: "60000", ...params, timestamp: getAdjustedTime() });
   qs.set("signature", hmacSign(qs.toString(), apiSecret));
-  const res = await fetch(`${BASE}${path}?${qs}`, {
+  const res = await binanceSignedFetch(`${BASE}${path}?${qs}`, {
     headers: { "X-MBX-APIKEY": apiKey },
     signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
   });
@@ -290,7 +291,7 @@ async function signedPost<T>(path: string, apiKey: string, apiSecret: string, pa
   }
   const qs = new URLSearchParams({ recvWindow: "60000", ...params, timestamp: getAdjustedTime() });
   qs.set("signature", hmacSign(qs.toString(), apiSecret));
-  const res = await fetch(`${BASE}${path}?${qs}`, {
+  const res = await binanceSignedFetch(`${BASE}${path}?${qs}`, {
     method: "POST",
     headers: { "X-MBX-APIKEY": apiKey },
     signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
@@ -310,7 +311,7 @@ async function signedFuturesPost<T>(path: string, apiKey: string, apiSecret: str
   }
   const qs = new URLSearchParams({ recvWindow: "60000", ...params, timestamp: getAdjustedTime() });
   qs.set("signature", hmacSign(qs.toString(), apiSecret));
-  const res = await fetch(`${FUTURES_BASE}${path}?${qs}`, {
+  const res = await binanceSignedFetch(`${FUTURES_BASE}${path}?${qs}`, {
     method: "POST",
     headers: { "X-MBX-APIKEY": apiKey },
     signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
@@ -330,7 +331,7 @@ async function signedFuturesGet<T>(path: string, apiKey: string, apiSecret: stri
   }
   const qs = new URLSearchParams({ recvWindow: "60000", ...params, timestamp: getAdjustedTime() });
   qs.set("signature", hmacSign(qs.toString(), apiSecret));
-  const res = await fetch(`${FUTURES_BASE}${path}?${qs}`, {
+  const res = await binanceSignedFetch(`${FUTURES_BASE}${path}?${qs}`, {
     headers: { "X-MBX-APIKEY": apiKey },
     signal: AbortSignal.timeout(SIGNED_REST_TIMEOUT_MS),
   });

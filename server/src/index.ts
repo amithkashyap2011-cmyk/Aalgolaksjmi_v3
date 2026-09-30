@@ -3,6 +3,7 @@
  * Refreshed: Clean reload triggered. (Restarted after MongoDB recovery)
  */
 import { installBinanceUsageMonitor } from "./services/binanceUsageMonitor.js";
+import { getBinanceProxyStatus } from "./services/binanceProxy.js";
 import jwt from "jsonwebtoken";
 import { config } from "dotenv";
 import { fileURLToPath } from "node:url";
@@ -145,6 +146,12 @@ import {
 validateTransportSecurityOnStartup();
 
 installBinanceUsageMonitor();
+{
+  const proxy = getBinanceProxyStatus();
+  console.log(proxy.enabled
+    ? `[binanceProxy] API-key requests are routed through ${proxy.proxy}`
+    : "[binanceProxy] disabled — API-key requests go out direct (set BINANCE_HTTP_PROXY to use a fixed IP)");
+}
 const app = express();
 
 // Express must trust the configured TLS terminator before req.secure can

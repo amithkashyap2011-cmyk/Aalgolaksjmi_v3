@@ -5,6 +5,7 @@ import { systemManager, SystemState } from "../services/systemManager.js";
 import mongoose from "mongoose";
 import os from "node:os";
 import { authGuard, adminGuard, loopbackOnly } from "../middleware/auth.js";
+import { getBinanceProxyStatus } from "../services/binanceProxy.js";
 
 const router = Router();
 
@@ -73,6 +74,11 @@ router.get("/binance-usage", (_req, res) => {
 /** Latest Binance API-key rejection (-2015/-2014) per surface, with the IP Binance saw; {} when keys work. */
 router.get("/binance-auth", authGuard, (_req, res) => {
   res.json(getBinanceAuthStatus());
+});
+
+/** Whether API-key requests are routed through BINANCE_HTTP_PROXY (credentials redacted). */
+router.get("/binance-proxy", authGuard, (_req, res) => {
+  res.json(getBinanceProxyStatus());
 });
 
 router.get("/auto-trader-active", async (req, res) => {
