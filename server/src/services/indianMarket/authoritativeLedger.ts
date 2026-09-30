@@ -367,10 +367,23 @@ export class AuthoritativeLedger {
       strikePrice: spec.strike,
     };
     const chargesBreakdown = IndianCostModel.calculateOrderCost(costParams);
+    // A closed trade has paid BOTH legs. Only the entry leg used to be costed, so the
+    // exit-side brokerage and sell-side STT (0.1% of premium on option longs) were never charged.
+    let exitBreakdown: ReturnType<typeof IndianCostModel.calculateOrderCost> | null = null;
+    if (isClosed && Number(trade.exitPrice) > 0) {
+      exitBreakdown = IndianCostModel.calculateOrderCost({
+        ...costParams,
+        action: costParams.action === "BUY" ? "SELL" : "BUY",
+        price: roundTo2(Number(trade.exitPrice)),
+      });
+    }
     const charges = trade.meta?.charges !== undefined
       ? roundTo2(trade.meta.charges)
-      : roundTo2(chargesBreakdown.totalCharges);
-    const taxes = roundTo2(chargesBreakdown.stt + chargesBreakdown.stampDuty + chargesBreakdown.gst);
+      : roundTo2(chargesBreakdown.totalCharges + (exitBreakdown?.totalCharges || 0));
+    const taxes = roundTo2(
+      chargesBreakdown.stt + chargesBreakdown.stampDuty + chargesBreakdown.gst +
+      (exitBreakdown ? exitBreakdown.stt + exitBreakdown.stampDuty + exitBreakdown.gst : 0),
+    );
 
     const totalPnl = exactAdd(realizedPnl, unrealizedPnl);
     const netPnl = exactSub(totalPnl, charges);

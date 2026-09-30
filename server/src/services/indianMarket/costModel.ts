@@ -57,6 +57,8 @@ export class IndianCostModel {
         stt = turnover * 0.0002; // 0.02%
       } else if (instrumentType === "CE" || instrumentType === "PE" || (instrumentType as any) === "OPTION") {
         stt = turnover * 0.001; // 0.1% on option premium sell
+      } else {
+        stt = turnover * 0.00025; // 0.025% on intraday cash-equity sell (was silently 0)
       }
     }
 
