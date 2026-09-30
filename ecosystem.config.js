@@ -116,6 +116,23 @@ module.exports = {
       merge_logs: true
     },
     {
+      // Public-IP stability monitor (scripts/ip_watch.mjs): one tiny request a minute,
+      // logs only CHANGES to logs/ip-watch.log. Binance keys are IP-whitelisted, so
+      // "how often does this network's IP change?" decides whether a whitelist can work.
+      // Report:  node scripts/ip_watch.mjs --summary
+      name: 'ip-watch',
+      script: 'scripts/ip_watch.mjs',
+      cwd: '.',
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      restart_delay: 5000,
+      max_memory_restart: '100M',
+      error_file: './logs/ip-watch-error.log',
+      out_file: './logs/ip-watch-out.log',
+      merge_logs: true
+    },
+    {
       // External soak-test monitor (scripts/soak_test.mjs) — deliberately
       // its own PM2 process, not code inside aqea-server, so it keeps
       // recording (including counting aqea-server's own restarts) even
