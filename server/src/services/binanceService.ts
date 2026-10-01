@@ -1555,7 +1555,12 @@ function getStreamsForSymbol(binanceSymbol: string): string[] {
     `${lower}@miniTicker`,
     `${lower}@depth5`,
     `${lower}@aggTrade`,
+    // 1m and 15m were missing: they were served from REST with a 120s cache
+    // (STALE_MARKET_DATA_MS), so the 1m chart/indicators lagged a minute or two
+    // behind Binance while 5m/1h were live. Streaming them makes every candle live.
+    `${lower}@kline_1m`,
     `${lower}@kline_5m`,
+    `${lower}@kline_15m`,
     `${lower}@kline_1h`,
   ];
 }
@@ -1665,7 +1670,7 @@ function handleMessage(cs: CombinedSocket, raw: Buffer | string): void {
         isFutures,
       });
     }
-    // 4. Live Kline Streams (5m & 1h)
+    // 4. Live Kline Streams (1m, 5m, 15m & 1h)
     else if (stream.includes("@kline_")) {
       const k = data.k;
       if (k) {
