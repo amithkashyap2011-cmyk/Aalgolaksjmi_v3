@@ -26,6 +26,10 @@ setupMongooseGlobalObjectIdCastProtection();
 
 // 🛡️ CRITICAL FIX: Force IPv4 for Node.js fetch() to prevent "fetch failed" with Binance API
 dns.setDefaultResultOrder("ipv4first");
+// "Today" (daily P&L, daily-loss limits, Indian day tables) is the IST trading day. Every
+// setHours(0,0,0,0) day boundary in the server follows the process time zone, so pin it:
+// the daily reset must be 00:00 IST whatever the host machine's zone is set to.
+process.env.TZ = process.env.TZ || "Asia/Kolkata";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.resolve(__dirname, "..", ".env"), quiet: true });

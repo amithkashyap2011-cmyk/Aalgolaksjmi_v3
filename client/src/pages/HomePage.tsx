@@ -752,7 +752,16 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
               <span style={{ fontSize: 13, fontWeight: 900, color: terminalDailyPnl >= 0 ? "#34d399" : "#f87171", fontFamily: "monospace" }}>
                 {formatVal(terminalDailyPnl)}
               </span>
-              <div style={{ fontSize: 8.5, color: "#64748b", fontWeight: 600, marginTop: 1 }}>Since midnight today</div>
+              <div style={{ fontSize: 8.5, color: "#64748b", fontWeight: 600, marginTop: 1 }}>Since 00:00 IST · resets daily</div>
+              {terminalTab !== 'all' && (
+                // The per-terminal figure hid trades made on the other terminal (e.g. today's SPOT
+                // trades read +$0.00 on the Futures tab), so always show the account-wide number too.
+                <div style={{ fontSize: 8.5, color: "#94a3b8", fontWeight: 700, marginTop: 2 }}
+                  title="All crypto today: realized (closed since 00:00 IST) + live open P&L across SPOT and FUTURES">
+                  All crypto: {formatVal((todayRealized.total || 0) + futOpenPnl + spotOpenPnl)}
+                  {" "}(Spot {formatVal((todayRealized.spot || 0) + spotOpenPnl)} · Fut {formatVal((todayRealized.futures || 0) + futOpenPnl)})
+                </div>
+              )}
             </div>
 
             {/* 2. Live Active Trades */}
