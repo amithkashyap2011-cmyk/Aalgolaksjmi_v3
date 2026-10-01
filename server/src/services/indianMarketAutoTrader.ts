@@ -157,7 +157,9 @@ export class IndianMarketAutoTrader {
       throw new Error("KILL_SWITCH_ACTIVE: Trading execution is halted by emergency kill switch.");
     }
 
-    const targetSymbol = overrideSymbol || (await this.findBestAICandidate(userId, 55))?.symbol || "NIFTY50";
+    // Keep the whole AI candidate: its direction must be honoured by the strategy choice below.
+    const aiCandidate = overrideSymbol ? null : await this.findBestAICandidate(userId, 55);
+    const targetSymbol = overrideSymbol || aiCandidate?.symbol || "NIFTY50";
     const normUnderlying = InstrumentMaster.normalizeUnderlying(targetSymbol);
     const ticker = MOCK_LIVE_INDIAN_TIKERS[targetSymbol] || {
       ltp: 24500, open: 24400, high: 24600, low: 24350, volume: 1000000, rsi14: 62, adx14: 28
@@ -222,7 +224,8 @@ export class IndianMarketAutoTrader {
     let { wallet, accountType: walletAccType, availableMargin } = paper.getIndianWalletWithFallback(userId, mode, accType);
 
     // 1. Evaluate & construct best trade through Strategy Engine
-    const tradeBundle = StrategyEngine.evaluateAndConstructBestTrade(context, currentCapital, 1.0);
+    const aiDirection = aiCandidate && (aiCandidate.aiSignal === "LONG" || aiCandidate.aiSignal === "SHORT") ? aiCandidate.aiSignal : undefined;
+    const tradeBundle = StrategyEngine.evaluateAndConstructBestTrade(context, currentCapital, 1.0, aiDirection);
     if (!tradeBundle) {
       throw new Error("NO_QUALIFIED_STRATEGY_SIGNAL: No strategy satisfied entry criteria.");
     }

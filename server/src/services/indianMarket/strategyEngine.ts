@@ -164,9 +164,23 @@ export class StrategyEngine {
   public static evaluateAndConstructBestTrade(
     context: MarketEvaluationContext,
     accountCapital: number,
-    riskPercent: number
+    riskPercent: number,
+    /** Direction of the AI scan that selected this stock. When given, a strategy whose
+     *  direction CONTRADICTS it is not allowed to trade (NEUTRAL strategies are). */
+    aiDirection?: "LONG" | "SHORT"
   ): { strategy: BaseStrategy; trade: StructuredTrade } | null {
-    const signals = this.evaluateAll(context);
+    let signals = this.evaluateAll(context);
+    if (aiDirection) {
+      // The AI scan only chose the symbol; its LONG/SHORT call used to be discarded, so the
+      // rule engine could open a bull call spread (RSI>55) on a stock the AI rated SELL.
+      const want = aiDirection === "LONG" ? "BULLISH" : "BEARISH";
+      const opposite = aiDirection === "LONG" ? "BEARISH" : "BULLISH";
+      const before = signals.length;
+      signals = signals.filter((x) => (x.signal as any).direction !== opposite);
+      if (before > 0 && signals.length === 0) {
+        console.warn(`[STRATEGY_ENGINE] AI says ${aiDirection} (${want}) but every qualifying rule strategy was ${opposite} — no trade.`);
+      }
+    }
     if (signals.length === 0) return null;
 
     const best = signals[0];
