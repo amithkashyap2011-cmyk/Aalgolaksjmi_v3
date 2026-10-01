@@ -247,6 +247,19 @@ function saveState(): void {
   }
 }
 
+/**
+ * Models that must never carry ensemble weight: demoted/shadow-only. Both the saved-state loader and
+ * the per-cycle dynamic re-weighting honour this, otherwise a demotion is undone on the next cycle
+ * (applyDynamicMarketWeights clamps every enabled model to >= 0.05).
+ *   transformer   — transformer_micro_v1.pt output is constant for every input (collapsed)
+ *   mamba-hybrid  — random-init research model, SHADOW by design
+ * Set AQEA_UNSHADOW_TRANSFORMER=true after a genuine retrain to let the Transformer vote again.
+ */
+function isShadowOnly(id: string): boolean {
+  if (id === "transformer") return process.env.AQEA_UNSHADOW_TRANSFORMER !== "true";
+  return id === "mamba-hybrid";
+}
+
 function loadState(): void {
   try {
     if (!fs.existsSync(STATE_FILE)) return;
@@ -261,10 +274,7 @@ function loadState(): void {
     // Demotions must survive the saved state: transformer_micro_v1.pt returns the same output
     // for every input (collapsed), so its saved 0.25 weight kept it voting in the ensemble fusion
     // after it was demoted to SHADOW. Set AQEA_UNSHADOW_TRANSFORMER=true after a real retrain.
-    if (process.env.AQEA_UNSHADOW_TRANSFORMER !== "true") {
-      const tf = models.find((m) => m.id === "transformer");
-      if (tf) tf.weight = 0;
-    }
+    for (const m of models) if (isShadowOnly(m.id)) m.weight = 0;
     console.log("[modelRegistry] Restored user model toggles from disk.");
   } catch (err) {
     console.warn("[modelRegistry] Failed to load persisted state:", (err as Error).message);
@@ -402,6 +412,7 @@ export function applyDynamicMarketWeights(volatilityRatio: number, adx: number |
   const isRanging = adx !== null && adx < 20;
 
   for (const model of models) {
+    if (isShadowOnly(model.id)) { model.weight = 0; continue; }
     if (!model.enabled) continue;
 
     // Default baseline weights
