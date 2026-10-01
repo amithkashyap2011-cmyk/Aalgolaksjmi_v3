@@ -26,6 +26,8 @@ export interface TradeExitState {
   momentumPartialTaken?: boolean;
   /** Sizes the breakeven fee buffer; unset keeps the futures-sized 0.1%. */
   accountType?: "SPOT" | "FUTURES";
+  /** Book (with accountType) that scopes per-position agent state such as the AI-flip counter. */
+  mode?: "PAPER" | "LIVE";
 }
 
 /**

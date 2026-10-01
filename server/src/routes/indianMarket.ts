@@ -1093,17 +1093,25 @@ router.post("/close-position", requirePermission("CANCEL_ORDER"), async (req: Au
       qty,
       spec.contractMultiplier
     );
+    // After partial exit fills, quantity is only what remains, and pnl/margin/charges already
+    // reflect the filled part. Only the remaining fraction's margin is still locked, and the
+    // accumulated partial P&L must be kept (it used to be overwritten by this remaining-leg P&L).
+    const hadPartialExits = Number(trade.meta?.filledExitQty) > 0 && Number(trade.meta?.filledExitQty) < Number(trade.origQty || 0);
+    const origQtyForClose = hadPartialExits && Number(trade.origQty) > 0 ? Number(trade.origQty) : qty;
+    const remainingFraction = Math.max(0, Math.min(1, qty / origQtyForClose));
+    const priorPartialPnl = hadPartialExits ? Number(trade.pnl) || 0 : 0;
     const totalNotional = roundTo2(trade.entryPrice * qty * spec.contractMultiplier);
     // Return exactly what was debited at open. Returning full notional when
     // only the required margin had been debited credited free cash on every
     // manual square-off; legacy trades without the field keep the old rule.
     const debited = Number(trade.meta?.marginDebitedINR);
-    const marginReturned = roundTo2(debited > 0 ? debited : totalNotional / (trade.leverage || 1));
+    const marginReturned = roundTo2(debited > 0 ? debited * remainingFraction : totalNotional / (trade.leverage || 1));
+    const totalRealizedPnl = roundTo2(priorPartialPnl + realizedPnl);
 
     trade.status = "CLOSED";
     trade.exitPrice = exitPrice;
-    trade.pnl = realizedPnl;
-    trade.netPnl = realizedPnl;
+    trade.pnl = totalRealizedPnl;
+    trade.netPnl = totalRealizedPnl;
     trade.closedAt = new Date();
     trade.exitReason = "MANUAL_SQUARE_OFF";
     if (!trade.meta) trade.meta = {};
@@ -1114,8 +1122,11 @@ router.post("/close-position", requirePermission("CANCEL_ORDER"), async (req: Au
     const accType = trade.accountType || "INDIAN_NSE";
     const wallet = paper.getWallet(userId, trade.mode as any, accType as any);
     const currentBal = wallet.get("INR") || 0;
-    const chargesPaid = chargesAtClose(trade);
-    trade.meta.chargesDeducted = chargesPaid;
+    // Charges already paid on earlier partial fills are not charged again.
+    const chargesPaid = hadPartialExits
+      ? Math.max(0, roundTo2(chargesAtClose(trade) - (Number(trade.meta?.chargesDeducted) || 0)))
+      : chargesAtClose(trade);
+    trade.meta.chargesDeducted = hadPartialExits ? roundTo2((Number(trade.meta?.chargesDeducted) || 0) + chargesPaid) : chargesPaid;
     trade.markModified?.("meta");
     await trade.save();
     const nextBal = roundTo2(currentBal + marginReturned + realizedPnl - chargesPaid);

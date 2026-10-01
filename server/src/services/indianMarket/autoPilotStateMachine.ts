@@ -88,8 +88,10 @@ export class AutoPilotStateMachine {
   /**
    * Generates a unique, deterministic idempotency key for an exit action
    */
-  public static generateIdempotencyKey(tradeId: string, triggerType: "TARGET" | "STOP" | "MANUAL"): string {
-    return `${tradeId}_EXIT_${triggerType}`;
+  public static generateIdempotencyKey(tradeId: string, triggerType: "TARGET" | "STOP" | "MANUAL", filledSoFar = 0): string {
+    // Each partial-fill stage gets its own key: the unsuffixed key stayed registered after a partial
+    // fill, so the remaining quantity could never be exited again by the same trigger.
+    return filledSoFar > 0 ? `${tradeId}_EXIT_${triggerType}_AFTER_${filledSoFar}` : `${tradeId}_EXIT_${triggerType}`;
   }
 
   /**
@@ -401,7 +403,7 @@ export class AutoPilotStateMachine {
     }
 
     // 6. Check Idempotency Key (In-memory + Persistent Distributed Registry - Section 8)
-    const idempotencyKey = this.generateIdempotencyKey(tradeId, triggerType);
+    const idempotencyKey = this.generateIdempotencyKey(tradeId, triggerType, Number(tradeDoc.meta?.filledExitQty) || 0);
     if (this.idempotencyRegistry.has(idempotencyKey)) {
       await DistributedCoordinator.releaseLock(lockResource);
       return { ...defaultResult, reason: "IDEMPOTENCY_TRIGGER_ALREADY_LOCKED" };
@@ -574,6 +576,10 @@ export class AutoPilotStateMachine {
       const totalFilledNow = exactAdd(alreadyFilled, filledQty);
       const remainingQty = Math.max(0, origQty - totalFilledNow);
 
+      // Persist the ORIGINAL quantity before it is reduced below. Without it the next fill read
+      // origQty = the already-reduced quantity, so remaining/margin fractions were computed against
+      // the wrong base (over-releasing margin on the final fill after a partial).
+      if (!tradeDoc.origQty) tradeDoc.origQty = origQty;
       tradeDoc.meta.filledExitQty = totalFilledNow;
       tradeDoc.meta.exitPrice = actualExitPrice;
       tradeDoc.exitPrice = actualExitPrice;
@@ -611,7 +617,7 @@ export class AutoPilotStateMachine {
         // used for the debit — NOT full notional. The persisted
         // meta.marginDebitedINR makes debit and credit symmetric; legacy
         // trades fall back to computeRequiredMargin's own notional branch.
-        const origTotalQty = Number(tradeDoc.quantity) || origQty || filledQty || 1;
+        const origTotalQty = origQty || Number(tradeDoc.quantity) || filledQty || 1;
         const fillFraction = Math.max(0, Math.min(1, filledQty / origTotalQty));
         const debitedTotal = IndianRiskManager.computeRequiredMargin({
           risk: { riskAmount: Number(tradeDoc.meta?.marginDebitedINR) || 0 },

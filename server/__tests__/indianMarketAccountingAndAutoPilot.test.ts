@@ -405,6 +405,38 @@ describe("Production Accounting & Auto-Pilot Reconciliation Test Suite", () => {
       expect(exactAdd(res.realizedPnl!, remainingUnrealized)).toBe(280761.00);
     });
 
+    test("Two-stage fill on a trade stored WITHOUT origQty still exits the whole position (origQty is persisted at the first partial)", async () => {
+      AutoPilotStateMachine.setMode("AUTO");
+      const mockBroker = new MockBrokerAdapter();
+      mockBroker.partialFillQty = 100;
+
+      const tradeDoc: any = {
+        _id: "trade_two_stage",
+        symbol: "NIFTY26SEP24500CE",
+        side: "BUY",
+        quantity: 300, // real trades are created without origQty
+        entryPrice: 57.93,
+        tp: 86.89,
+        status: "OPEN",
+        mode: "PAPER",
+        meta: {},
+        save: async () => {},
+      };
+      const tick: TickData = { symbol: "NIFTY26SEP24500CE", ltp: 993.80, timestamp: Date.now() };
+
+      const first = await AutoPilotStateMachine.processTick(tradeDoc, tick, mockBroker);
+      expect(first.remainingQty).toBe(200);
+      expect(tradeDoc.origQty).toBe(300); // persisted before quantity was reduced
+
+      mockBroker.partialFillQty = null; // second order fills everything that is left
+      tradeDoc.status = "OPEN";
+      const second = await AutoPilotStateMachine.processTick(tradeDoc, { ...tick, timestamp: Date.now() }, mockBroker);
+      expect(second.filledQty).toBe(200);
+      expect(second.remainingQty).toBe(0);
+      expect(tradeDoc.meta.filledExitQty).toBe(300);
+      expect(tradeDoc.status).toBe("CLOSED");
+    });
+
     test("Auto-Pilot mode PAUSED prevents execution", async () => {
       AutoPilotStateMachine.setMode("PAUSED");
       const mockBroker = new MockBrokerAdapter();

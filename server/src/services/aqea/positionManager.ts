@@ -118,7 +118,9 @@ export class PositionManager {
 
     // Build tracking key for reversal detection
     const oppDir = isLong ? "SHORT" : "LONG";
-    const stateKey = `${userId}:${symbol}:${oppDir}`;
+    // Scoped to the book: SPOT vs FUTURES (and PAPER vs LIVE) positions on the same symbol must not
+    // share the consecutive-flip counter, or one book's ticks confirm another book's trend-flip exit.
+    const stateKey = `${userId}:${state.mode ?? "*"}:${state.accountType ?? "*"}:${symbol}:${oppDir}`;
 
     // Live directional call from the ensemble this tick.
     const decision = (aqeaDecision.decision as string) || "HOLD";

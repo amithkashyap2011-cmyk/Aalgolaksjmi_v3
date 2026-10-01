@@ -1037,7 +1037,8 @@ async function processSymbol(
           tp2Hit: pos.meta?.tp2Hit || false,
           tp3Hit: pos.meta?.tp3Hit || false,
           momentumPartialTaken: pos.meta?.momentumPartialTaken || false,
-          accountType
+          accountType,
+          mode
         },
         aqeaDecision,
         ctx.ind.close,
@@ -1244,7 +1245,7 @@ export async function handleLong(
   // Agentic pre-trade gate: block entries whose regime/symbol bucket has
   // negative rolling expectancy, or whose TP1 edge can't clear fees.
   const governorVerdict = await tradeGovernor.permit({
-    userId, symbol, side: "BUY",
+    userId, mode, accountType, symbol, side: "BUY",
     regime: decisionPath.regime,
     entryPrice: currentPrice,
     tp: riskProfile.tp1,
@@ -1530,7 +1531,7 @@ export async function handleShort(
 
   // Agentic pre-trade gate (same as LONG): expectancy + fee-edge check.
   const governorVerdict = await tradeGovernor.permit({
-    userId, symbol, side: "SELL",
+    userId, mode, accountType, symbol, side: "SELL",
     regime: decisionPath.regime,
     entryPrice: currentPrice,
     tp: riskProfile.tp1,

@@ -365,6 +365,7 @@ export class AuthoritativeLedger {
       price: avgEntryPrice,
       quantity: origQty,
       strikePrice: spec.strike,
+      productType: (trade.productType === "CNC" ? "CNC" : trade.productType === "NRML" ? "NRML" : "MIS") as any,
     };
     const chargesBreakdown = IndianCostModel.calculateOrderCost(costParams);
     // A closed trade has paid BOTH legs. Only the entry leg used to be costed, so the

@@ -19,6 +19,8 @@ export interface TradeCostParams {
   price: number;
   quantity: number;
   strikePrice?: number;
+  /** Cash-equity product: CNC = delivery, MIS (default) = intraday. Ignored for F&O. */
+  productType?: "MIS" | "NRML" | "CNC";
 }
 
 export interface TradeCostBreakdown {
@@ -44,15 +46,25 @@ export class IndianCostModel {
     const { instrumentType, action, price, quantity } = params;
     const isBuy = action === "BUY";
     const turnover = price * quantity;
+    const isEquity = instrumentType === "EQUITY";
+    const isDelivery = isEquity && params.productType === "CNC";
 
-    // 1. Brokerage
-    const brokerage = this.FLAT_BROKERAGE_PER_ORDER;
+    // 1. Brokerage. F&O is a flat ₹20/order. Cash equity: delivery (CNC) is free; intraday is
+    // the lower of ₹20 and 0.03% of turnover — the flat ₹20 over-charged small stock orders
+    // (a ₹830 trade paid ₹20, 2.4% of its value, instead of ₹0.25).
+    const brokerage = !isEquity
+      ? this.FLAT_BROKERAGE_PER_ORDER
+      : isDelivery
+        ? 0
+        : Math.min(this.FLAT_BROKERAGE_PER_ORDER, Math.max(0.01, turnover * 0.0003));
 
     // 2. STT (Securities Transaction Tax)
     // - Futures: 0.02% on Sell side only
     // - Options: 0.10% (0.0010) on Sell side of premium
     let stt = 0;
-    if (!isBuy) {
+    if (isDelivery) {
+      stt = turnover * 0.001; // 0.1% on BOTH buy and sell for equity delivery
+    } else if (!isBuy) {
       if (instrumentType === "FUTURE") {
         stt = turnover * 0.0002; // 0.02%
       } else if (instrumentType === "CE" || instrumentType === "PE" || (instrumentType as any) === "OPTION") {
@@ -87,7 +99,7 @@ export class IndianCostModel {
       } else if (instrumentType === "CE" || instrumentType === "PE" || (instrumentType as any) === "OPTION") {
         stampDuty = turnover * 0.00003;
       } else {
-        stampDuty = turnover * 0.00015;
+        stampDuty = turnover * (isDelivery ? 0.00015 : 0.00003); // delivery 0.015%, intraday 0.003%
       }
     }
 

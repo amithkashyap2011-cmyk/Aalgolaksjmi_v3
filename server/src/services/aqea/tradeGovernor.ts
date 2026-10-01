@@ -62,8 +62,17 @@ export interface GovernorPolicy {
   symbols: Record<string, BucketStats>;
 }
 
+/** Which book a policy / permit belongs to. PAPER vs LIVE and SPOT vs FUTURES have different costs,
+ *  leverage and fills, so their trades must not feed each other's expectancy buckets. */
+export interface GovernorScope {
+  mode?: "PAPER" | "LIVE";
+  accountType?: "SPOT" | "FUTURES";
+}
+
 export interface PermitRequest {
   userId: string;
+  mode?: "PAPER" | "LIVE";
+  accountType?: "SPOT" | "FUTURES";
   symbol: string;
   side: "BUY" | "SELL";
   regime?: string;
@@ -96,15 +105,23 @@ function bucketStats(pnls: number[], minSamples: number): BucketStats {
   return { n, totalPnl, mean, stderr, blocked };
 }
 
-export async function getPolicy(userId: string): Promise<GovernorPolicy> {
-  const cached = policyCache.get(userId);
+function scopeKey(userId: string, scope?: GovernorScope): string {
+  return `${userId}|${scope?.mode ?? "*"}|${scope?.accountType ?? "*"}`;
+}
+
+export async function getPolicy(userId: string, scope?: GovernorScope): Promise<GovernorPolicy> {
+  const cacheKey = scopeKey(userId, scope);
+  const cached = policyCache.get(cacheKey);
   if (cached && Date.now() - cached.computedAt < POLICY_TTL_MS) return cached;
 
   const minSamples = envNum("AQEA_GOVERNOR_MIN_SAMPLES", 25);
   const since = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000);
-  const trades = await Trade.find({
-    userId, status: "CLOSED", strategy: /AQEA/, closedAt: { $gte: since },
-  })
+  // Scoped to the book being traded. This pooled PAPER+LIVE and SPOT+FUTURES trades into one
+  // expectancy bucket, so e.g. losing FUTURES shorts could block SPOT longs on the same symbol.
+  const query: Record<string, unknown> = { userId, status: "CLOSED", strategy: /AQEA/, closedAt: { $gte: since } };
+  if (scope?.mode) query.mode = scope.mode;
+  if (scope?.accountType) query.accountType = scope.accountType;
+  const trades = await Trade.find(query)
     .sort({ closedAt: -1 })
     .limit(WINDOW_MAX_TRADES)
     .select("symbol pnl marketRegime meta.closeReason")
@@ -129,7 +146,7 @@ export async function getPolicy(userId: string): Promise<GovernorPolicy> {
     regimes: Object.fromEntries([...byRegime].map(([k, v]) => [k, bucketStats(v, minSamples)])),
     symbols: Object.fromEntries([...bySymbol].map(([k, v]) => [k, bucketStats(v, minSamples)])),
   };
-  policyCache.set(userId, policy);
+  policyCache.set(cacheKey, policy);
   return policy;
 }
 
@@ -162,7 +179,7 @@ export async function permit(req: PermitRequest): Promise<PermitVerdict> {
 
   let verdict: PermitVerdict;
   try {
-    const policy = await getPolicy(req.userId);
+    const policy = await getPolicy(req.userId, { mode: req.mode, accountType: req.accountType });
 
     // 1. Edge gate — expected gross at TP1 vs round-trip cost.
     const edgeMult = envNum("AQEA_GOVERNOR_EDGE_MULT", 2);
@@ -183,7 +200,7 @@ export async function permit(req: PermitRequest): Promise<PermitVerdict> {
     const regime = req.regime || "UNKNOWN";
     const regimeStats = policy.regimes[regime];
     if (regimeStats?.blocked) {
-      const key = `${req.userId}:REGIME:${regime}`;
+      const key = `${scopeKey(req.userId, req)}:REGIME:${regime}`;
       if (tryProbe(key)) {
         verdict = { allowed: true, probe: true, reason: `probing blocked regime ${regime} (mean $${regimeStats.mean.toFixed(4)}/trade over ${regimeStats.n})` };
       } else {
@@ -196,7 +213,7 @@ export async function permit(req: PermitRequest): Promise<PermitVerdict> {
     // 3. Symbol gate.
     const symbolStats = policy.symbols[req.symbol];
     if (symbolStats?.blocked) {
-      const key = `${req.userId}:SYMBOL:${req.symbol}`;
+      const key = `${scopeKey(req.userId, req)}:SYMBOL:${req.symbol}`;
       if (tryProbe(key)) {
         verdict = { allowed: true, probe: true, reason: `probing blocked symbol ${req.symbol} (mean $${symbolStats.mean.toFixed(4)}/trade over ${symbolStats.n})` };
       } else {
