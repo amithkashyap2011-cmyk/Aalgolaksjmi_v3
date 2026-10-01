@@ -257,6 +257,10 @@ function saveState(): void {
  */
 function isShadowOnly(id: string): boolean {
   if (id === "transformer") return process.env.AQEA_UNSHADOW_TRANSFORMER !== "true";
+  // lstm-bilstm: VotingRegistry already demotes LSTM to SHADOW (OUTPUT_COLLAPSED +7.95 logit bias; graded
+  // 42.7% hit / -4 bp per call), but it kept a 0.25 ensemble weight, so it still moved the ensemble
+  // score that is blended 50% into the engine's final score. Set AQEA_UNSHADOW_LSTM=true after a retrain.
+  if (id === "lstm-bilstm") return process.env.AQEA_UNSHADOW_LSTM !== "true";
   return id === "mamba-hybrid";
 }
 

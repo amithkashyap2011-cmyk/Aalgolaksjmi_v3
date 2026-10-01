@@ -7,6 +7,7 @@ describe("shadow-only models keep weight 0 through dynamic re-weighting", () => 
       applyDynamicMarketWeights(vol, adx as any);
       expect(getModel("transformer")?.weight).toBe(0);
       expect(getModel("mamba-hybrid")?.weight).toBe(0);
+      expect(getModel("lstm-bilstm")?.weight).toBe(0);
       expect(getModel("cnn")?.weight).toBeGreaterThanOrEqual(0.05);
     }
   });
