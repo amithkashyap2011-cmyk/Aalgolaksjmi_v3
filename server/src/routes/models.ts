@@ -74,7 +74,7 @@ router.get("/training-status", async (_req, res) => {
 
     // ── CNN telemetry ──────────────────────────────────────────────
     const [totalCount, cnnGraded, cnnAll, ppoAll, cnnAccuracy] = await Promise.all([
-      AIPredictionTelemetry.countDocuments(),
+      AIPredictionTelemetry.estimatedDocumentCount(),
       AIPredictionTelemetry.find({
         model_name: "CNN_1D_V1",
         isCorrect: { $exists: true },
