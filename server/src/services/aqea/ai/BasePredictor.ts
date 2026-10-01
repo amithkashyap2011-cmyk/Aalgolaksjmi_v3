@@ -11,6 +11,7 @@ import { FeatureVector } from "../featureStore.js";
 import { AIPredictionTelemetry } from "../../../models/AIPredictionTelemetry.js";
 import mongoose from "mongoose";
 import { isQuantEngineAvailable } from "../../../config/serviceDiscovery.js";
+import { ModelEdgeGate } from "./ModelEdgeGate.js";
 
 export abstract class BasePredictor implements IAIPredictor {
   protected abstract modelName: string;
@@ -94,6 +95,26 @@ export abstract class BasePredictor implements IAIPredictor {
         }).catch((err: any) => {
           BasePredictor.logTelemetryError(err);
         });
+      }
+
+      // Measured-calibration veto. Runs AFTER the raw call was logged above so a
+      // blocked confidence bucket keeps being graded (and can re-open on its own).
+      const edge = await ModelEdgeGate.check(this.modelName, result.confidence, result.direction);
+      if (!edge.allowed) {
+        return {
+          direction: "HOLD",
+          confidence: 0,
+          probability: 0.5,
+          predictor: this.modelName,
+          meta: {
+            ...result.meta,
+            prediction_id,
+            edgeGated: true,
+            edgeGateReason: edge.reason,
+            rawDirection: result.direction,
+            rawConfidence: result.confidence
+          }
+        };
       }
 
       return {

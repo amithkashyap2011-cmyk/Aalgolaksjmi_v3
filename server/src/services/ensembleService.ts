@@ -16,6 +16,7 @@ import { buildSequenceInput, predictSequence, predictSequenceLocalAttention, pre
 import { getQuantModelHealth, quantModelMayVote, type QuantModelHealthMap, type QuantModelKey } from "./ensemble/modelHealthService.js";
 import { mambaPredictor } from "./aqea/ai/MambaPredictor.js";
 import { transformerPredictor } from "./aqea/ai/TransformerPredictor.js";
+import { ModelEdgeGate } from "./aqea/ai/ModelEdgeGate.js";
 import { buildMLFeatures, type MLFeatures, type MLPrediction } from "./mlModelService.js";
 import * as binance from "./binanceService.js";
 import * as selfLearning from "./selfLearningService.js";
@@ -602,9 +603,13 @@ async function executeBuildEnsembleReport(
           symbol: normalizedSymbol,
           features: { ohlcv: institutionalVec.slice(0, 5), indicators: institutionalVec.slice(5) },
         })
-          .then((resp) => resp
-            ? classifierToContribution(resp, "cnn-1d", "DEEP_LEARNING", w, "Trained 1-D CNN (quant engine): real LONG/SHORT/HOLD class probabilities.")
-            : gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "quant-engine CNN endpoint unavailable"))
+          .then(async (resp) => {
+            if (!resp) return gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "quant-engine CNN endpoint unavailable");
+            // Same measured-calibration veto as BasePredictor: CNN confidence >= 0.8 is anti-predictive.
+            const edge = await ModelEdgeGate.check("CNN_1D_V1", Number(resp.confidence ?? 0), String(resp.direction ?? "HOLD"));
+            if (!edge.allowed) return gatedPlaceholder("cnn-1d", "DEEP_LEARNING", edge.reason || "edge gate");
+            return classifierToContribution(resp, "cnn-1d", "DEEP_LEARNING", w, "Trained 1-D CNN (quant engine): real LONG/SHORT/HOLD class probabilities.");
+          })
           .catch(() => gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "quant-engine CNN call failed")),
       );
     } else if (enabledIds.has("cnn")) {
