@@ -548,6 +548,9 @@ async function executeBuildEnsembleReport(
    *  weight when enabled AND the backing checkpoint is HEALTHY, else 0. */
   const gatedWeight = (registryId: string, healthKey: QuantModelKey): number => {
     if (!enabledIds.has(registryId)) return 0;
+    // A registry weight of 0 (shadow-only / demoted) is final — the MoE re-weighting must not
+    // lift it back to a small positive floor (the collapsed Transformer showed 0.008).
+    if ((registryWeights[registryId] ?? 0) <= 0) return 0;
     const w = modelWeights[registryId] ?? 0;
     if (w <= 0) return 0;
     return quantModelMayVote(healthKey, healthMap) ? w : 0;
