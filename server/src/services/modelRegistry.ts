@@ -258,6 +258,13 @@ function loadState(): void {
         model.weight = saved.weight;
       }
     }
+    // Demotions must survive the saved state: transformer_micro_v1.pt returns the same output
+    // for every input (collapsed), so its saved 0.25 weight kept it voting in the ensemble fusion
+    // after it was demoted to SHADOW. Set AQEA_UNSHADOW_TRANSFORMER=true after a real retrain.
+    if (process.env.AQEA_UNSHADOW_TRANSFORMER !== "true") {
+      const tf = models.find((m) => m.id === "transformer");
+      if (tf) tf.weight = 0;
+    }
     console.log("[modelRegistry] Restored user model toggles from disk.");
   } catch (err) {
     console.warn("[modelRegistry] Failed to load persisted state:", (err as Error).message);

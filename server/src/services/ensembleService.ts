@@ -715,6 +715,21 @@ async function executeBuildEnsembleReport(
     if (r) models.push(r);
   }
 
+  // The heuristic voters are FALLBACKS ("NOT a trained model"): they were always voting at 0.04
+  // each, with a bullish lean (pLong 0.76 / 0.82 on BTC), diluting the real models. They only
+  // vote when no real voting model has weight; otherwise they stay listed for transparency at 0.
+  const realVoterWeight = models
+    .filter((m) => m.category !== "HEURISTIC" && m.category !== "REINFORCEMENT")
+    .reduce((sum, m) => sum + (m.weight || 0), 0);
+  if (realVoterWeight > 0) {
+    for (const m of models) {
+      if (m.category === "HEURISTIC" && m.weight > 0) {
+        m.weight = 0;
+        m.notes = `${m.notes} (Listed only — not voting while real models are active.)`;
+      }
+    }
+  }
+
   // Safety net: the heuristic fallback voters above always carry weight, so a
   // zero-weight ensemble should never happen — but if it somehow does, add one
   // honestly-labeled heuristic voter rather than a fake named model.

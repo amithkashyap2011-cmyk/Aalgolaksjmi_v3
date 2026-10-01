@@ -116,10 +116,11 @@ router.get("/training-status", async (_req, res) => {
     const ppoCorrect = ppoPredictions.filter((r: any) => r.isCorrect).length;
     const ppoTotal = ppoPredictions.length;
     
-    // Calibrated PPO baseline (68.5% win rate = +0.00037 avg reward/step) when live sample < 10
-    const ppoWinRate = ppoTotal >= 10 ? (ppoCorrect / ppoTotal) : 0.685;
-    const ppoRewardPerStep = Number(((ppoWinRate * 0.002) - 0.001).toFixed(5));
-    const ppoPromoted = ppoWinRate >= 0.50;
+    // No fabricated baseline: with fewer than 10 graded predictions there is no win rate,
+    // so report 0 reward and "not promoted" instead of an invented 68.5%.
+    const ppoWinRate = ppoTotal >= 10 ? (ppoCorrect / ppoTotal) : 0;
+    const ppoRewardPerStep = ppoTotal >= 10 ? Number(((ppoWinRate * 0.002) - 0.001).toFixed(5)) : 0;
+    const ppoPromoted = ppoTotal >= 10 && ppoWinRate >= 0.50;
 
     // CNN promotion check: promoted if F1 >= 0.45
     const cnnPromoted = cnnF1 >= 0.45;
@@ -176,88 +177,114 @@ router.get("/training-status", async (_req, res) => {
  * GET /models/matrix-stats
  * Returns domain-differentiated AI model telemetry for Indian Equities vs Crypto Perpetuals
  */
+/** Measured 25m directional performance per model, from graded prediction telemetry (5 min cache). */
+const MATRIX_MODELS: Array<{ telemetry: string; id: string; name: string; category: string; registryId: string; predictor: string }> = [
+  { telemetry: "CNN_1D_V1", id: "cnn", name: "CNN Signal (Quant Engine)", category: "DEEP LEARNING", registryId: "cnn", predictor: "CNN" },
+  { telemetry: "LNN_CONTINUOUS_V1", id: "lnn", name: "LNN (RSI x ADX momentum formula)", category: "RULE-BASED", registryId: "lnn", predictor: "LNN" },
+  { telemetry: "GBM_TREES_V1", id: "gbm", name: "GBM Trees (Quant Engine)", category: "DECISION TREES", registryId: "gbm", predictor: "GBM" },
+  { telemetry: "LSTM_SEQUENCE_V1", id: "lstm", name: "BiLSTM Sequence (Quant Engine)", category: "RECURRENT", registryId: "lstm-bilstm", predictor: "LSTM" },
+  { telemetry: "TRANSFORMER_MICRO_V1", id: "transformer", name: "Transformer Micro (collapsed checkpoint)", category: "ATTENTION MATRIX", registryId: "transformer", predictor: "TRANSFORMER" },
+  { telemetry: "MAMBA_V1", id: "mamba", name: "Mamba Research (Shadow Only)", category: "STATE SPACE", registryId: "mamba-hybrid", predictor: "MAMBA" },
+  { telemetry: "PPO_EXECUTION_V1", id: "ppo-agent", name: "PPO Execution Agent", category: "REINFORCEMENT", registryId: "ppo-agent", predictor: "PPO" },
+];
+let matrixCache: { at: number; stats: Record<string, { n: number; hit: number; meanBps: number }> } | null = null;
+
+async function measuredModelStats() {
+  if (matrixCache && Date.now() - matrixCache.at < 5 * 60_000) return matrixCache.stats;
+  const stats: Record<string, { n: number; hit: number; meanBps: number }> = {};
+  for (const m of MATRIX_MODELS) {
+    const rows: any[] = await AIPredictionTelemetry.find(
+      { model_name: m.telemetry, price25m: { $exists: true }, isFallback: { $ne: true }, direction: { $in: ["LONG", "SHORT"] } },
+      { direction: 1, priceAtPrediction: 1, price25m: 1 },
+    ).sort({ timestamp: -1 }).limit(3000).lean();
+    let hits = 0, sumBps = 0, n = 0;
+    for (const r of rows) {
+      if (!(r.priceAtPrediction > 0) || !Number.isFinite(r.price25m)) continue;
+      const ret = (r.price25m - r.priceAtPrediction) / r.priceAtPrediction;
+      const signed = r.direction === "LONG" ? ret : -ret;
+      n++; if (signed > 0) hits++; sumBps += signed * 1e4;
+    }
+    stats[m.telemetry] = { n, hit: n ? hits / n : 0, meanBps: n ? sumBps / n : 0 };
+  }
+  matrixCache = { at: Date.now(), stats };
+  return stats;
+}
+
+/**
+ * GET /models/matrix-stats
+ * Measured (not hardcoded) model telemetry. Crypto: graded 25m directional hit rate and mean
+ * return per call from prediction telemetry. Indian: realised paper results per rule strategy —
+ * Indian entries are rule-based, there are no ML models behind them.
+ * (This endpoint used to return fixed "92.3% / 77.4% / 84.5% measured" figures and a constant
+ * "LONG 88%" ensemble signal that were never computed from anything.)
+ */
 router.get("/matrix-stats", async (req, res) => {
   try {
     const domain = (req.query.domain as string) || "ALL";
 
     if (domain === "INDIAN") {
+      const { Trade } = await import("../models/Trade.js");
+      const trades: any[] = await Trade.find({ status: "CLOSED", accountType: { $in: ["INDIAN_NSE", "INDIAN_BSE", "INDIAN_NIFTY50", "INDIAN_FNO"] } }, { strategy: 1, pnl: 1 }).lean();
+      const by: Record<string, { n: number; w: number; net: number }> = {};
+      for (const t of trades) {
+        const k = t.strategy || "UNKNOWN";
+        const r = (by[k] ??= { n: 0, w: 0, net: 0 });
+        r.n++; if ((t.pnl ?? 0) > 0) r.w++; r.net += t.pnl ?? 0;
+      }
+      const models = Object.entries(by).sort((a, b) => b[1].n - a[1].n).map(([k, r]) => ({
+        id: k.toLowerCase(), name: k.replace(/_/g, " "), category: "RULE-BASED STRATEGY", latency: "—",
+        accuracy: `${(100 * r.w / r.n).toFixed(0)}% win (n=${r.n}, realised paper)`, weight: 0,
+        sharpe: `${r.net >= 0 ? "+" : "−"}₹${Math.abs(Math.round(r.net)).toLocaleString("en-IN")} gross`, status: "healthy",
+      }));
       return res.json({
         domain: "INDIAN",
-        domainTitle: "🇮🇳 INDIAN EQUITIES & DERIVATIVES AI MATRIX",
-        activeCount: 5,
-        ensembleSignal: "LONG",
-        confidence: 88,
+        domainTitle: "🇮🇳 INDIAN MARKET — RULE-BASED STRATEGIES (no ML models drive entries)",
+        activeCount: models.length,
+        ensembleSignal: null,
+        confidence: null,
         domainInsights: {
           exchanges: "NSE & BSE India (₹ INR)",
-          harmonicModels: "Gayatri (24 Signals) & Ohmkara (528 Hz)",
-          targetUniverse: "NIFTY 50, BANKNIFTY, Bluechips",
-          winRate: "92.3% Measured (Lakshmi Model)",
+          harmonicModels: "Rule-based strategy engine (RSI / VWAP / ADX), AI scan picks the symbol",
+          targetUniverse: "NIFTY 50, BANKNIFTY, bluechips",
+          winRate: trades.length ? `${(100 * trades.filter((t) => (t.pnl ?? 0) > 0).length / trades.length).toFixed(1)}% realised (n=${trades.length})` : "no closed trades",
           session: "IST 09:15-15:30 (Angel One SmartAPI)",
         },
-        weights: [
-          { name: "Gayatri 24-Signal Frequency", weight: 30, color: "#f59e0b" },
-          { name: "Ohmkara 528 Hz Oscillator", weight: 25, color: "#3b82f6" },
-          { name: "Lakshmi Win Probability Model", weight: 25, color: "#10b981" },
-          { name: "XGBoost Indian Momentum", weight: 10, color: "#8b5cf6" },
-          { name: "LightGBM F&O Order Flow", weight: 10, color: "#ec4899" },
-        ],
-        models: [
-          { id: "gayatri", name: "Gayatri 24-Signal Frequency", category: "HARMONIC", latency: "3ms", accuracy: "84.5% measured", weight: "30%", sharpe: "+0.42", status: "HEALTHY", rating: "★★★★★" },
-          { id: "ohmkara", name: "Ohmkara 528 Hz Harmonic Oscillator", category: "QUANT RESONANCE", latency: "5ms", accuracy: "81.2% measured", weight: "25%", sharpe: "+0.38", status: "HEALTHY", rating: "★★★★★" },
-          { id: "lakshmi", name: "Lakshmi Pattern Win Classifier", category: "DEEP LEARNING", latency: "6ms", accuracy: "92.3% measured", weight: "25%", sharpe: "+0.55", status: "PROMOTED", rating: "★★★★★" },
-          { id: "xgboost-in", name: "XGBoost Indian Momentum Engine", category: "DECISION TREES", latency: "4ms", accuracy: "78.9% measured", weight: "10%", sharpe: "+0.28", status: "HEALTHY", rating: "★★★★☆" },
-          { id: "lightgbm-in", name: "LightGBM F&O Orderbook Flow", category: "BOOSTING", latency: "4ms", accuracy: "76.5% measured", weight: "10%", sharpe: "+0.24", status: "HEALTHY", rating: "★★★★☆" },
-        ]
+        weights: [],
+        models,
       });
     }
 
-    if (domain === "CRYPTO") {
-      return res.json({
-        domain: "CRYPTO",
-        domainTitle: "🪙 CRYPTO PERPETUALS AI MATRIX (24/7)",
-        activeCount: 5,
-        ensembleSignal: "LONG",
-        confidence: 76,
-        domainInsights: {
-          exchanges: "Binance Futures (USDT)",
-          harmonicModels: "Transformer Micro & Mamba Research",
-          targetUniverse: "BTCUSDT, ETHUSDT, Altcoins",
-          winRate: "77.4% Measured (Transformer)",
-          session: "24/7/365 Continuous Feed",
-        },
-        weights: [
-          { name: "Transformer Micro (Quant Engine)", weight: 25, color: "#3b82f6" },
-          { name: "PPO Agent (Execution Engine)", weight: 25, color: "#10b981" },
-          { name: "Mamba Research (Shadow)", weight: 20, color: "#8b5cf6" },
-          { name: "CNN Signal (Quant Engine)", weight: 15, color: "#f59e0b" },
-          { name: "xLSTM Volatility Engine", weight: 15, color: "#6366f1" },
-        ],
-        models: [
-          { id: "transformer", name: "Transformer Micro (Quant Engine)", category: "ATTENTION MATRIX", latency: "8ms", accuracy: "77.4% measured", weight: "25%", sharpe: "+0.35", status: "HEALTHY", rating: "★★★★★" },
-          { id: "ppo-agent", name: "PPO Agent (Quant Engine)", category: "REINFORCEMENT", latency: "12ms", accuracy: "n/a — execution agent", weight: "25%", sharpe: "+0.08", status: "HEALTHY", rating: "★★★★★" },
-          { id: "mamba", name: "Mamba Research (Shadow Only)", category: "STATE SPACE", latency: "6ms", accuracy: "79.1% measured", weight: "20%", sharpe: "+0.32", status: "HEALTHY", rating: "★★★★☆" },
-          { id: "cnn", name: "CNN Signal (Quant Engine)", category: "DEEP LEARNING", latency: "4ms", accuracy: "76.0% measured", weight: "15%", sharpe: "+0.30", status: "HEALTHY", rating: "★★★★☆" },
-          { id: "xlstm", name: "xLSTM Volatility Engine", category: "RECURRENT SHADOW", latency: "9ms", accuracy: "74.8% measured", weight: "15%", sharpe: "+0.26", status: "HEALTHY", rating: "★★★★☆" },
-        ]
-      });
-    }
-
-    // Default "ALL"
+    const stats = await measuredModelStats();
+    const reg = registry.getAllModels();
+    const rows = MATRIX_MODELS.map((m) => {
+      const st = stats[m.telemetry];
+      const entry = reg.find((e) => e.id === m.registryId);
+      const w = entry?.weight ?? 0;
+      return {
+        id: m.id, name: m.name, category: m.category, latency: "—",
+        accuracy: st && st.n >= 30 ? `${(st.hit * 100).toFixed(1)}% hit (n=${st.n}, 25m)` : "no graded directional calls",
+        weight: w,
+        sharpe: st && st.n >= 30 ? `${st.meanBps >= 0 ? "+" : ""}${st.meanBps.toFixed(1)} bp/call` : "—",
+        status: entry?.status ?? "healthy",
+      };
+    });
+    const weights = rows.filter((r) => r.weight > 0).map((r, i) => ({ name: r.name, weight: Math.round(r.weight * 100), color: ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#6366f1", "#ec4899", "#14b8a6"][i % 7] }));
+    const cnn = stats["CNN_1D_V1"];
     return res.json({
-      domain: "ALL",
-      domainTitle: "⚡ CROSS-ASSET ENSEMBLE AI MATRIX",
-      activeCount: 7,
-      ensembleSignal: "LONG",
-      confidence: 84,
-      weights: [
-        { name: "Lakshmi Win Model", weight: 25, color: "#10b981" },
-        { name: "Gayatri 24-Signal", weight: 20, color: "#f59e0b" },
-        { name: "CNN Signal", weight: 15, color: "#3b82f6" },
-        { name: "XGBoost", weight: 15, color: "#8b5cf6" },
-        { name: "LightGBM", weight: 10, color: "#ec4899" },
-        { name: "xLSTM", weight: 10, color: "#6366f1" },
-        { name: "PPO Agent", weight: 5, color: "#14b8a6" },
-      ]
+      domain,
+      domainTitle: domain === "CRYPTO" ? "🪙 CRYPTO — MEASURED MODEL PERFORMANCE (graded 25m outcomes)" : "⚡ CROSS-ASSET — MEASURED MODEL PERFORMANCE",
+      activeCount: rows.length,
+      ensembleSignal: null,
+      confidence: null,
+      domainInsights: {
+        exchanges: "Binance (USDT)",
+        harmonicModels: "Measured from prediction telemetry",
+        targetUniverse: "Crypto watchlist",
+        winRate: cnn && cnn.n >= 30 ? `${(cnn.hit * 100).toFixed(1)}% CNN hit rate (n=${cnn.n})` : "no graded data",
+        session: "24/7/365 Continuous Feed",
+      },
+      weights,
+      models: rows,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
