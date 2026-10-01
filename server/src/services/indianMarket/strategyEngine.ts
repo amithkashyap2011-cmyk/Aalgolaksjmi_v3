@@ -167,9 +167,18 @@ export class StrategyEngine {
     riskPercent: number,
     /** Direction of the AI scan that selected this stock. When given, a strategy whose
      *  direction CONTRADICTS it is not allowed to trade (NEUTRAL strategies are). */
-    aiDirection?: "LONG" | "SHORT"
+    aiDirection?: "LONG" | "SHORT",
+    /** Directions the broad market currently forbids (see indexTrendGuard). */
+    blockDirections: Array<"BULLISH" | "BEARISH"> = []
   ): { strategy: BaseStrategy; trade: StructuredTrade } | null {
     let signals = this.evaluateAll(context);
+    if (blockDirections.length > 0) {
+      const before = signals.length;
+      signals = signals.filter((x) => !blockDirections.includes((x.signal as any).direction));
+      if (before > 0 && signals.length === 0) {
+        console.warn(`[STRATEGY_ENGINE] Index trend blocks ${blockDirections.join("/")} entries — no trade.`);
+      }
+    }
     if (aiDirection) {
       // The AI scan only chose the symbol; its LONG/SHORT call used to be discarded, so the
       // rule engine could open a bull call spread (RSI>55) on a stock the AI rated SELL.

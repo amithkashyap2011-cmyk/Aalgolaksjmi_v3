@@ -30,6 +30,7 @@ import { PaperExecutionAdapter, LiveBrokerExecutionAdapter, BrokerAdapter } from
 import { IndianAuditLogger } from "./indianMarket/auditLogger.js";
 import { StructuredTrade, UnderlyingSymbol } from "./indianMarket/strategyTypes.js";
 import { PortfolioIntelligenceEngine } from "./agentic/portfolio/PortfolioIntelligenceEngine.js";
+import { currentIndexTrend, blockedDirections } from "./indianMarket/indexTrendGuard.js";
 
 // Pricing and valuation re-exports
 export { MOCK_LIVE_INDIAN_TIKERS, resolveLivePriceForIndianTrade } from "./indianMarket/indianPricing.js";
@@ -225,7 +226,8 @@ export class IndianMarketAutoTrader {
 
     // 1. Evaluate & construct best trade through Strategy Engine
     const aiDirection = aiCandidate && (aiCandidate.aiSignal === "LONG" || aiCandidate.aiSignal === "SHORT") ? aiCandidate.aiSignal : undefined;
-    const tradeBundle = StrategyEngine.evaluateAndConstructBestTrade(context, currentCapital, 1.0, aiDirection);
+    const indexTrend = currentIndexTrend();
+    const tradeBundle = StrategyEngine.evaluateAndConstructBestTrade(context, currentCapital, 1.0, aiDirection, blockedDirections(indexTrend.bias));
     if (!tradeBundle) {
       throw new Error("NO_QUALIFIED_STRATEGY_SIGNAL: No strategy satisfied entry criteria.");
     }
@@ -409,7 +411,13 @@ export class IndianMarketAutoTrader {
         // Persist the exact margin debited at open so the exit releases the
         // SAME amount (proportional to fill) instead of full notional — the
         // asymmetry here was minting INR on every close.
-        meta: { marginDebitedINR: requiredMargin, entryPriceSource: priced.source },
+        meta: {
+          marginDebitedINR: requiredMargin,
+          entryPriceSource: priced.source,
+          // Audit trail: what the AI scan and the broad market said when this was opened.
+          aiSignalAtEntry: aiCandidate ? { signal: aiCandidate.aiSignal, confidence: aiCandidate.aiConfidence } : null,
+          indexTrendAtEntry: { bias: indexTrend.bias, avgPct: indexTrend.avgPct === null ? null : Number(indexTrend.avgPct.toFixed(2)) },
+        },
         autoCloseStatus: "ARMED",
         entrySource: "RULE_BASED_DERIVATIVES_ENGINE",
         decisionPath: ["RULE_BASED_PIPELINE", trade.strategy, regimeAnalysis.regime],
