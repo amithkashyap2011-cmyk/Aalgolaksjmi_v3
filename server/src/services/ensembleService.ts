@@ -335,7 +335,13 @@ function classifierToContribution(
  */
 export function aggregateContributions(models: ModelContribution[], regimeScore: number) {
   const voters = models.filter((m) => m.category !== "REINFORCEMENT");
-  const totalWeight = voters.reduce((sum, m) => sum + m.weight, 0) || 1;
+  const rawWeight = voters.reduce((sum, m) => sum + m.weight, 0);
+  // No voter carries weight (every real model gated/shadow/offline): a neutral, zero-confidence
+  // answer — not 0/0 and not a signal invented from the non-trained heuristic formulas.
+  if (!(rawWeight > 0)) {
+    return { longProbability: 0.5, shortProbability: 0.5, confidence: 0, expectedReturn: 0, expectedDrawdown: 0.05 };
+  }
+  const totalWeight = rawWeight;
   const avg = (pick: (m: ModelContribution) => number) =>
     voters.reduce((sum, m) => sum + pick(m) * m.weight, 0) / totalWeight;
   return {
@@ -718,26 +724,16 @@ async function executeBuildEnsembleReport(
     if (r) models.push(r);
   }
 
-  // The heuristic voters are FALLBACKS ("NOT a trained model"): they were always voting at 0.04
-  // each, with a bullish lean (pLong 0.76 / 0.82 on BTC), diluting the real models. They only
-  // vote when no real voting model has weight; otherwise they stay listed for transparency at 0.
-  const realVoterWeight = models
-    .filter((m) => m.category !== "HEURISTIC" && m.category !== "REINFORCEMENT")
-    .reduce((sum, m) => sum + (m.weight || 0), 0);
-  if (realVoterWeight > 0) {
-    for (const m of models) {
-      if (m.category === "HEURISTIC" && m.weight > 0) {
-        m.weight = 0;
-        m.notes = `${m.notes} (Listed only — not voting while real models are active.)`;
-      }
+  // The heuristic formulas are NOT trained models and lean bullish (pLong 0.72-0.82 on BTC). They are
+  // listed for transparency at weight 0 and never vote — when every real model is gated or in shadow
+  // the ensemble is NEUTRAL and the engine falls back to its own core/technical score. (They used to
+  // vote at 0.04 each always, then as a fallback; with the edge gate and shadow demotions the fallback
+  // case is common, and it turned into a LONG 0.74 "ensemble signal" made of formulas.)
+  for (const m of models) {
+    if (m.category === "HEURISTIC" && m.weight > 0) {
+      m.weight = 0;
+      m.notes = `${m.notes} (Listed only — heuristic formulas never vote.)`;
     }
-  }
-
-  // Safety net: the heuristic fallback voters above always carry weight, so a
-  // zero-weight ensemble should never happen — but if it somehow does, add one
-  // honestly-labeled heuristic voter rather than a fake named model.
-  if (!models.some((m) => m.weight > 0)) {
-    models.push(predictHeuristicTabular(mlFeatures, 0.01, fundingRate, volatilityScore, 1.0));
   }
 
   const { longProbability, shortProbability, confidence, expectedReturn, expectedDrawdown } =
