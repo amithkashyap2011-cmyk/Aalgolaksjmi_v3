@@ -2032,7 +2032,7 @@ export default function ZerodhaKiteTerminal({
                     </span>
                   </div>
                   <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
-                    Profit Factor: <b>{currentMetrics.profitFactor || 2.1}x</b>
+                    Profit Factor: <b>{currentMetrics.profitFactor ? `${currentMetrics.profitFactor}x` : "—"}</b>
                   </div>
                 </div>
 

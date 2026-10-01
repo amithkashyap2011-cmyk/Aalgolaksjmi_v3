@@ -626,7 +626,8 @@ router.get("/analytics", async (req, res) => {
       // so this matches the ledger-backed Total Realized card.
       const charges = Number(trades.reduce((acc, t: any) => acc + (AuthoritativeLedger.buildAuthoritativePosition(t).charges || 0), 0).toFixed(2));
       const net = Number((totalWin - totalLoss - charges).toFixed(2));
-      const profitFactor = totalLoss > 0 ? Number((totalWin / totalLoss).toFixed(2)) : (totalWin > 0 ? 3.5 : 1.0);
+      // No losses => profit factor is undefined (was a made-up 3.5 / 1.0); null renders as "—".
+      const profitFactor = totalLoss > 0 ? Number((totalWin / totalLoss).toFixed(2)) : null;
       return {
         count,
         wins: wins.length,
@@ -644,6 +645,16 @@ router.get("/analytics", async (req, res) => {
     const todayTrades = closedTrades.filter((t: any) => t.closedAt && new Date(t.closedAt).getTime() >= startOfToday);
     const weekTrades = closedTrades.filter((t: any) => t.closedAt && new Date(t.closedAt).getTime() >= startOfWeek);
     const monthTrades = closedTrades.filter((t: any) => t.closedAt && new Date(t.closedAt).getTime() >= startOfMonth);
+
+    // Real peak-to-trough of cumulative net P&L (after ledger charges) over closed trades,
+    // oldest first. This was a hardcoded "-3.8%" string.
+    let cum = 0, peak = 0, maxDdInr = 0;
+    for (const t of [...closedTrades].reverse()) {
+      cum += (t.pnl || 0) - (AuthoritativeLedger.buildAuthoritativePosition(t).charges || 0);
+      peak = Math.max(peak, cum);
+      maxDdInr = Math.max(maxDdInr, peak - cum);
+    }
+    const maxDrawdown = `-₹${Math.round(maxDdInr).toLocaleString("en-IN")}`;
 
     const dailyMetrics = calcMetrics(todayTrades);
     const weeklyMetrics = calcMetrics(weekTrades);
@@ -678,10 +689,13 @@ router.get("/analytics", async (req, res) => {
         winRate: allMetrics.winRate,
         profitFactor: allMetrics.profitFactor,
         netPnL: allMetrics.netPnL,
-        maxDrawdown: "-3.8%",
+        maxDrawdown,
         daily: {
           netPnL: dailyMetrics.netPnL,
           tradesCount: dailyMetrics.count,
+          winsCount: dailyMetrics.wins,
+          lossesCount: dailyMetrics.losses,
+          profitFactor: dailyMetrics.profitFactor,
           winRate: dailyMetrics.winRate,
           grossProfit: dailyMetrics.grossProfit,
           grossLoss: dailyMetrics.grossLoss,
@@ -690,6 +704,9 @@ router.get("/analytics", async (req, res) => {
         weekly: {
           netPnL: weeklyMetrics.netPnL,
           tradesCount: weeklyMetrics.count,
+          winsCount: weeklyMetrics.wins,
+          lossesCount: weeklyMetrics.losses,
+          profitFactor: weeklyMetrics.profitFactor,
           winRate: weeklyMetrics.winRate,
           grossProfit: weeklyMetrics.grossProfit,
           grossLoss: weeklyMetrics.grossLoss,
@@ -698,6 +715,9 @@ router.get("/analytics", async (req, res) => {
         monthly: {
           netPnL: monthlyMetrics.netPnL,
           tradesCount: monthlyMetrics.count,
+          winsCount: monthlyMetrics.wins,
+          lossesCount: monthlyMetrics.losses,
+          profitFactor: monthlyMetrics.profitFactor,
           winRate: monthlyMetrics.winRate,
           grossProfit: monthlyMetrics.grossProfit,
           grossLoss: monthlyMetrics.grossLoss,
@@ -1177,7 +1197,10 @@ router.get("/history", async (req, res) => {
       const exitVal = (t.exitPrice || t.entryPrice || 0) * (t.quantity || 1);
       const pnl = t.pnl || 0;
       const pnlPct = entryVal > 0 ? (pnl / entryVal) * 100 : 0;
-      const charges = Number((Math.max(20, (entryVal + exitVal) * 0.0006)).toFixed(2));
+      // Same ledger charges as /analytics, /funds and /daily-summary. This used its own
+      // max(20, turnover*0.06%) estimate, so per-trade net (and any sum of these rows)
+      // disagreed with the dashboard totals (59 trades: net 13,549 here vs 11,714 there).
+      const charges = Number((AuthoritativeLedger.buildAuthoritativePosition(t).charges || 0).toFixed(2));
       return {
         tradeId: t._id.toString(),
         symbol: t.symbol,
