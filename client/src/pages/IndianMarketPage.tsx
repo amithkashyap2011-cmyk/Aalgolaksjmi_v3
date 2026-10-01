@@ -833,6 +833,13 @@ export default function IndianMarketPage() {
           tradeCount={Number((funds as any).tradesCountINR) || 0}
           peak={Number((funds as any).peakDeployedINR) || 0}
           loading={(funds as any).totalDepositsINR === undefined}
+          today={(funds as any).todayNetPnlINR === undefined ? undefined : {
+            net: Number((funds as any).todayNetPnlINR) || 0,
+            realized: Number((funds as any).todayRealizedPnlINR) || 0,
+            charges: Number((funds as any).todayChargesINR) || 0,
+            open: Number((funds as any).todayUnrealizedPnlINR) || 0,
+            label: "IST trading day · resets daily",
+          }}
           note={executionMode === "LIVE" ? "LIVE — Angel One account" : "PAPER account"}
         />
 

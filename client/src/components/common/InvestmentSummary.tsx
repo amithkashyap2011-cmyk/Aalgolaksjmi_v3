@@ -29,12 +29,14 @@ interface Props {
   hidden?: boolean;
   /** Data not loaded yet — show dashes instead of a misleading −100%. */
   loading?: boolean;
+  /** Today's result (resets with the trading day). net = realized − charges + open. */
+  today?: { net: number; realized: number; charges: number; open: number; label?: string };
 }
 
 const fmt = (cur: string, v: number) =>
   `${v < 0 ? "−" : ""}${cur}${Math.abs(v).toLocaleString(cur === "₹" ? "en-IN" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function InvestmentSummary({ currency, invested, netPnl, inOpenTrades, openCount, deployed, tradeCount, peak, secondary, note, hidden: hiddenProp, loading }: Props) {
+export default function InvestmentSummary({ currency, invested, netPnl, inOpenTrades, openCount, deployed, tradeCount, peak, secondary, note, hidden: hiddenProp, loading, today }: Props) {
   const hidden = hiddenProp || loading;
   const current = invested + netPnl;
   const pct = invested > 0 ? (netPnl / invested) * 100 : 0;
@@ -54,6 +56,22 @@ export default function InvestmentSummary({ currency, invested, netPnl, inOpenTr
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        {today && (() => {
+          const tUp = today.net >= 0;
+          const tc = tUp ? "#34d399" : "#f87171";
+          return (
+            <div title="Today only: closed trades (after charges) + open positions. Resets every trading day." style={{ flex: "1 1 190px", minWidth: 0, padding: "10px 14px", borderRadius: 10, background: tUp ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: `1px solid ${tUp ? "rgba(16,185,129,0.35)" : "rgba(239,68,68,0.35)"}` }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>Today's P/L</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: tc, fontFamily: "monospace", marginTop: 4, whiteSpace: "nowrap" }}>{hidden ? mask : `${tUp ? "+" : ""}${fmt(currency, today.net)}`}</div>
+              {!hidden && (
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                  Closed {fmt(currency, today.realized)} · Charges {fmt(currency, -today.charges)} · Open {fmt(currency, today.open)}
+                </div>
+              )}
+              <div style={{ fontSize: 9, color: "#64748b", marginTop: 1 }}>{today.label || "Since 00:00 IST · resets daily"}</div>
+            </div>
+          );
+        })()}
         {cell("Deposited", hidden ? mask : fmt(currency, invested), "#f8fafc", sub(invested), "Money you put into this account — most of it stays as cash until a trade uses it")}
         {cell("Current value", hidden ? mask : fmt(currency, current), "#f8fafc", sub(current), "Deposited + net P/L")}
         {cell(

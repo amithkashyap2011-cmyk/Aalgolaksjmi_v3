@@ -1243,6 +1243,13 @@ export default function ZerodhaKiteTerminal({
             tradeCount={Number(funds.tradesCountINR) || 0}
             peak={Number(funds.peakDeployedINR) || 0}
             loading={funds.totalDepositsINR === undefined}
+            today={funds.todayNetPnlINR === undefined ? undefined : {
+              net: Number(funds.todayNetPnlINR) || 0,
+              realized: Number(funds.todayRealizedPnlINR) || 0,
+              charges: Number(funds.todayChargesINR) || 0,
+              open: Number(funds.todayUnrealizedPnlINR) || 0,
+              label: "IST trading day · resets daily",
+            }}
           />
           <DailyCapitalTable currency="₹" endpoint={`/api/indian-market/daily-summary?mode=${kiteDailyMode}&days=30`} />
 
