@@ -64,6 +64,8 @@ export interface ChecklistInput {
   ohmSyncValue: number;       // 0‑1 safety band from AI sub‑system
   lastTradeMinutesAgo: number;
   isOverdrive?: boolean;      // Settings.overdrive — relaxes the daily-frequency cap (see behaviourModel.dogScore)
+  /** User's max concurrent positions (Settings.maxConcurrentPositions); R6 was hardcoded to 5. */
+  maxOpenPositions?: number;
 }
 
 /* ── Builder ──────────────────────────────────────────── */
@@ -157,9 +159,10 @@ export function buildChecklist(input: ChecklistInput): ChecklistResult {
     risk.defaultSL > 0 && (risk.defaultTP / risk.defaultSL) >= 1.5,
     `R:R = 1:${(risk.defaultTP / (risk.defaultSL || 1)).toFixed(1)}`);
 
-  add("R6", "Open positions < 5", "RISK", true,
-    openPositionCount < 5,
-    `Open=${openPositionCount}`);
+  const maxOpen = Number.isFinite(input.maxOpenPositions) && (input.maxOpenPositions as number) > 0 ? (input.maxOpenPositions as number) : 5;
+  add("R6", `Open positions < ${maxOpen}`, "RISK", true,
+    openPositionCount < maxOpen,
+    `Open=${openPositionCount}, max=${maxOpen}`);
 
   add("R7", "Trailing SL configured", "RISK", false,
     risk.trailingSL > 0,

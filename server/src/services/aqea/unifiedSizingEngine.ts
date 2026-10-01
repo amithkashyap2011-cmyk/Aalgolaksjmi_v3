@@ -299,9 +299,21 @@ export class UnifiedSizingEngine {
         0
       );
 
-      return (totalMargin / balance) * 100;
+      return heatPercent(totalMargin, balance);
     } catch {
       return 0;
     }
   }
+}
+
+/**
+ * Capital heat = margin deployed / total capital. `balance` here is FREE cash (the wallet's USDT),
+ * which shrinks as positions are opened, so dividing by it overstated heat (e.g. $20 deployed with
+ * $80 free read 25%, not 20%; $60 deployed with $20 free read 300%) and tripped the 40% LIVE block
+ * too early — the same free-cash-vs-equity mistake already fixed in RiskEngine. Total capital is
+ * free cash + deployed margin.
+ */
+export function heatPercent(totalMargin: number, freeBalance: number): number {
+  const capital = Math.max(0, freeBalance) + Math.max(0, totalMargin);
+  return capital > 0 ? (Math.max(0, totalMargin) / capital) * 100 : 0;
 }
