@@ -30,6 +30,7 @@ import mongoose from "mongoose";
 
 export const EDGE_GATE_MIN_SAMPLES = 150;
 export const EDGE_GATE_SAMPLE_LIMIT = 8000;
+export const EDGE_GATE_WINDOW_MS = 7 * 86_400_000;
 const REFRESH_MS = 15 * 60_000;
 const BUCKET_WIDTH = 0.1;
 
@@ -109,15 +110,18 @@ export class ModelEdgeGate {
 
   private static async refresh(model: string): Promise<void> {
     try {
+      // Bounded: a model with few directional calls (Mamba, PPO) otherwise forces a scan of the whole
+      // multi-million-row collection (2-8 s); a 7-day window + maxTimeMS keeps it on the index range.
       const rows = await AIPredictionTelemetry.find(
         {
           model_name: model,
+          timestamp: { $gte: new Date(Date.now() - EDGE_GATE_WINDOW_MS) },
           price25m: { $exists: true },
           isFallback: { $ne: true },
           direction: { $in: ["LONG", "SHORT"] },
         },
         { direction: 1, confidence: 1, priceAtPrediction: 1, price25m: 1 },
-      ).sort({ timestamp: -1 }).limit(EDGE_GATE_SAMPLE_LIMIT).lean();
+      ).sort({ timestamp: -1 }).limit(EDGE_GATE_SAMPLE_LIMIT).maxTimeMS(4000).lean();
       this.cache.set(model, { at: Date.now(), buckets: computeEdgeBuckets(rows as unknown as EdgeRow[]) });
     } catch (err: any) {
       // Fail open, but retry on the next TTL instead of hammering Mongo.
@@ -131,8 +135,8 @@ export class ModelEdgeGate {
   }
 
   /**
-   * Check a model's call. Never throws and never blocks on a slow DB longer than
-   * the first-ever load: stale buckets are served while a refresh runs.
+   * Check a model's call. Never throws and never waits on the database: stale (or, on the very
+   * first call, missing) buckets are used while a refresh runs in the background.
    */
   static async check(model: string, confidence: number, direction: string): Promise<{ allowed: boolean; reason?: string }> {
     if (!this.enabled() || (direction !== "LONG" && direction !== "SHORT")) return { allowed: true };
@@ -141,23 +145,17 @@ export class ModelEdgeGate {
 
     let entry = this.cache.get(model);
     const stale = !entry || Date.now() - entry.at > REFRESH_MS;
-    if (stale) {
-      if (!entry?.inflight) {
-        const p = this.refresh(model).finally(() => {
-          const e = this.cache.get(model);
-          if (e) delete e.inflight;
-        });
-        if (!entry) {
-          this.cache.set(model, { at: 0, buckets: undefined, inflight: p });
-          await p;
-        } else {
-          entry.inflight = p;
-        }
-      } else if (!entry.buckets) {
-        await entry.inflight;
-      }
-      entry = this.cache.get(model);
+    if (stale && !entry?.inflight) {
+      const p = this.refresh(model).finally(() => {
+        const e = this.cache.get(model);
+        if (e) delete e.inflight;
+      });
+      // Never block a prediction on the telemetry query: stale buckets are served while it refreshes,
+      // and on the very first call the model simply passes (fail open) until the buckets arrive.
+      if (!entry) this.cache.set(model, { at: 0, buckets: undefined, inflight: p });
+      else entry.inflight = p;
     }
+    entry = this.cache.get(model);
     const d = decideEdge(entry?.buckets, confidence);
     return d.allowed ? { allowed: true } : { allowed: false, reason: d.reason };
   }

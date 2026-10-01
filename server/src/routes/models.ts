@@ -189,14 +189,22 @@ const MATRIX_MODELS: Array<{ telemetry: string; id: string; name: string; catego
 ];
 let matrixCache: { at: number; stats: Record<string, { n: number; hit: number; meanBps: number }> } | null = null;
 
-async function measuredModelStats() {
-  if (matrixCache && Date.now() - matrixCache.at < 5 * 60_000) return matrixCache.stats;
+let matrixRefreshing: Promise<void> | null = null;
+
+async function refreshMeasuredStats(): Promise<void> {
+  const since = new Date(Date.now() - 3 * 86_400_000);
   const stats: Record<string, { n: number; hit: number; meanBps: number }> = {};
-  for (const m of MATRIX_MODELS) {
-    const rows: any[] = await AIPredictionTelemetry.find(
-      { model_name: m.telemetry, price25m: { $exists: true }, isFallback: { $ne: true }, direction: { $in: ["LONG", "SHORT"] } },
-      { direction: 1, priceAtPrediction: 1, price25m: 1 },
-    ).sort({ timestamp: -1 }).limit(3000).lean();
+  await Promise.all(MATRIX_MODELS.map(async (m) => {
+    // PPO is a sizing agent (never LONG/SHORT): querying for directional rows scanned the whole
+    // collection for nothing (8 s). Windowed + maxTimeMS for the rest.
+    if (m.telemetry === "PPO_EXECUTION_V1") { stats[m.telemetry] = { n: 0, hit: 0, meanBps: 0 }; return; }
+    let rows: any[] = [];
+    try {
+      rows = await AIPredictionTelemetry.find(
+        { model_name: m.telemetry, timestamp: { $gte: since }, price25m: { $exists: true }, isFallback: { $ne: true }, direction: { $in: ["LONG", "SHORT"] } },
+        { direction: 1, priceAtPrediction: 1, price25m: 1 },
+      ).sort({ timestamp: -1 }).limit(3000).maxTimeMS(5000).lean();
+    } catch { /* leave empty: shown as "no graded directional calls" */ }
     let hits = 0, sumBps = 0, n = 0;
     for (const r of rows) {
       if (!(r.priceAtPrediction > 0) || !Number.isFinite(r.price25m)) continue;
@@ -205,9 +213,18 @@ async function measuredModelStats() {
       n++; if (signed > 0) hits++; sumBps += signed * 1e4;
     }
     stats[m.telemetry] = { n, hit: n ? hits / n : 0, meanBps: n ? sumBps / n : 0 };
-  }
+  }));
   matrixCache = { at: Date.now(), stats };
-  return stats;
+}
+
+/** Stale-while-revalidate: only the very first request waits; later ones get the cache instantly. */
+async function measuredModelStats() {
+  const fresh = matrixCache && Date.now() - matrixCache.at < 5 * 60_000;
+  if (!fresh && !matrixRefreshing) {
+    matrixRefreshing = refreshMeasuredStats().finally(() => { matrixRefreshing = null; });
+  }
+  if (!matrixCache) await matrixRefreshing;
+  return matrixCache!.stats;
 }
 
 /**
