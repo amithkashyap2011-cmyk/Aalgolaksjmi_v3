@@ -59,6 +59,8 @@ export class IndianMarketAutoTrader {
   private static daemonTimer: NodeJS.Timeout | null = null;
   private static lastScanTime: string | null = null;
   private static lastAutoTrade: any = null;
+  private static tickInFlight = false;
+  private static autoExecInFlight = new Set<string>();
 
   /**
    * Scans all supported Indian market symbols and selects the top candidate
@@ -158,6 +160,27 @@ export class IndianMarketAutoTrader {
       throw new Error("KILL_SWITCH_ACTIVE: Trading execution is halted by emergency kill switch.");
     }
 
+    // One auto-execution per user at a time. The duplicate-position guards read
+    // Mongo/in-memory state BEFORE the trade document exists, so two overlapping
+    // runs (a slow 10s daemon tick overlapping the next, or the manual auto
+    // button during a tick) both passed and opened the same trade twice.
+    if (this.autoExecInFlight.has(userId)) {
+      throw new Error("AUTO_TRADE_IN_FLIGHT: another auto-execution is already running for this user.");
+    }
+    this.autoExecInFlight.add(userId);
+    try {
+      return await this.autoExecuteBestTradeInner(userId, mode, productType, overrideSymbol);
+    } finally {
+      this.autoExecInFlight.delete(userId);
+    }
+  }
+
+  private static async autoExecuteBestTradeInner(
+    userId: string,
+    mode: "PAPER" | "LIVE",
+    productType: "MIS" | "CNC",
+    overrideSymbol?: string
+  ): Promise<any> {
     // Keep the whole AI candidate: its direction must be honoured by the strategy choice below.
     const aiCandidate = overrideSymbol ? null : await this.findBestAICandidate(userId, 55);
     const targetSymbol = overrideSymbol || aiCandidate?.symbol || "NIFTY50";
@@ -334,12 +357,21 @@ export class IndianMarketAutoTrader {
     // this exact hazard on the crypto side) closes that window.
     const requiredMargin = IndianRiskManager.computeRequiredMargin(trade);
     if (mode === "PAPER") {
+      let shortfall = false;
       await paper.withWalletLock(userId, mode, walletAccType, async () => {
         const freshWallet = paper.getWallet(userId, mode, walletAccType as any);
-        const freshRemaining = Math.max(0, (freshWallet.get("INR") || 0) - requiredMargin);
+        const freshBalance = freshWallet.get("INR") || 0;
+        // A concurrent debit since the margin check can leave less than is needed.
+        // Flooring at zero while still recording the FULL margin on the trade
+        // released more cash at close than was ever debited (phantom INR).
+        if (freshBalance + 1e-9 < requiredMargin) { shortfall = true; return; }
+        const freshRemaining = freshBalance - requiredMargin;
         freshWallet.set("INR", freshRemaining);
         await paper.setWalletBalance(userId, mode, "INR", freshRemaining, walletAccType as any);
       });
+      if (shortfall) {
+        throw new Error("INSUFFICIENT_MARGIN: wallet balance fell below the required margin before the debit.");
+      }
     } else {
       wallet.set("INR", Math.max(0, availableMargin - requiredMargin));
     }
@@ -543,6 +575,9 @@ export class IndianMarketAutoTrader {
     }
 
     this.daemonTimer = setInterval(async () => {
+      // A tick can outlast the 10s interval (Mongo/quant load); never overlap.
+      if (this.tickInFlight) return;
+      this.tickInFlight = true;
       try {
         this.lastScanTime = new Date().toISOString();
 
@@ -622,6 +657,8 @@ export class IndianMarketAutoTrader {
         if (process.env.NODE_ENV !== "test") {
           console.error("[INDIAN_AUTO_TRADER] Daemon tick error:", err.message);
         }
+      } finally {
+        this.tickInFlight = false;
       }
     }, 10000);
   }

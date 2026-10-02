@@ -333,10 +333,13 @@ export class IndianRiskManager {
     trade: StructuredTrade,
     accountCapital: number,
     availableMargin: number,
-    userId: string = "guest-user",
+    rawUserId: string = "guest-user",
     bypassSessionCheck = false,
     bypassAutoTradeCheck = false
   ): Promise<RiskValidationResult> {
+    // recordTradeOutcome keys the consecutive-loss pause and strike cooldowns by
+    // the RESOLVED id; reading them back with the raw "guest-user" id never matched.
+    const userId = this.resolveUserId(rawUserId);
     const settings = await this.getSettings(userId);
     const checks: Record<string, { passed: boolean; message: string }> = {};
 
