@@ -36,6 +36,23 @@ BOOT_BLOCK = 50
 BOOT_SAMPLES = 500
 
 
+def atomic_save(path, writer) -> None:
+    """Write a checkpoint via `writer(tmp_path)` then os.replace() it into place,
+    so a crash mid-save can never leave a torn file that a hot-reload or a
+    restart would load (a bare torch.save/joblib.dump truncates in place)."""
+    path = os.fspath(path)
+    tmp = f"{path}.tmp"
+    try:
+        writer(tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
 def directional_returns(pred, future_ret) -> Tuple[np.ndarray, np.ndarray]:
     """Gross per-call return of the LONG/SHORT predictions (LONG earns the
     forward return, SHORT its negative). HOLD calls and undefined returns are

@@ -79,12 +79,14 @@ class LSTMPredictor:
                 return
             import json
             schema = json.loads(V2_SCHEMA.read_text())
-            self.means = np.array(schema["MEANS"], dtype=np.float32)
-            self.stds = np.array(schema["STDS"], dtype=np.float32)
+            means = np.array(schema["MEANS"], dtype=np.float32)
+            stds = np.array(schema["STDS"], dtype=np.float32)
             new_model = BiLSTM(input_features=len(schema["FEATURE_NAMES"]), hidden_dim=64, num_layers=2)
             new_model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
             new_model.eval()
-            self.model = new_model
+            # Swap stats together with the model, and only after the weights loaded:
+            # a failed reload must keep the OLD stats paired with the OLD model.
+            self.means, self.stds, self.model = means, stds, new_model
             self.checkpoint_loaded = True
             print(f"[LSTM] Loaded v2 weights from {model_path}")
         except Exception as e:
@@ -131,9 +133,9 @@ class LSTMPredictor:
         except Exception as e:
             return self._neutral(f"WINDOW_FETCH_FAILED: {e}")
         try:
-            normalized = (window - self.means) / (self.stds + 1e-8)
-            tensor_in = torch.from_numpy(normalized.astype(np.float32)).unsqueeze(0)  # (1, seq, F)
             with self._lock, torch.no_grad():
+                normalized = (window - self.means) / (self.stds + 1e-8)
+                tensor_in = torch.from_numpy(normalized.astype(np.float32)).unsqueeze(0)  # (1, seq, F)
                 probs = torch.softmax(self.model(tensor_in), dim=1).squeeze(0).numpy()
             p_long, p_short, p_hold = float(probs[0]), float(probs[1]), float(probs[2])
             idx = int(np.argmax(probs))

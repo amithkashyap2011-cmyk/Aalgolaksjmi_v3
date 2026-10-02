@@ -1663,22 +1663,6 @@ function setupSocketListeners(
         const margin = lev > 0 ? notional / lev : notional;
         const pnlPct = margin > 0 ? (netPnl / margin) * 100 : 0;
 
-        // 🛡️ Forensic position telemetry trace on live tick
-        console.log(`[POSITION_UI_TRACE] ${JSON.stringify({
-          symbol: pos.symbol,
-          side: isLong ? "LONG" : "SHORT",
-          quantity: qty,
-          entryPrice: entry,
-          markPrice: price,
-          leverage: lev,
-          notional: Number(notional.toFixed(4)),
-          margin: Number(margin.toFixed(4)),
-          unrealizedPnl: Number(netPnl.toFixed(4)),
-          pnlPercent: Number(pnlPct.toFixed(4)),
-          timestamp: Date.now(),
-          source: "FRONTEND_SOCKET_TICK"
-        })}`);
-
         return { 
           ...pos, 
           markPrice: price,

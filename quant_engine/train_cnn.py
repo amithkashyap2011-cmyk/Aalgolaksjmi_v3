@@ -434,7 +434,7 @@ def train_cnn(warm_start: bool = False) -> dict:
         if SCHEMA_PATH.exists():
             SCHEMA_BACKUP_PATH.write_bytes(SCHEMA_PATH.read_bytes())
         CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(model.state_dict(), CHECKPOINT_PATH)
+        promotion_gate.atomic_save(CHECKPOINT_PATH, lambda t: torch.save(model.state_dict(), t))
         _write_schema(means, stds)
         state["last_promoted_f1"] = new_f1
         state["last_promoted_at"] = datetime.now(timezone.utc).isoformat()

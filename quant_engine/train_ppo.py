@@ -34,6 +34,7 @@ except Exception:
 import torch.optim as optim
 
 import ppo_replay_buffer
+import promotion_gate
 from data_pipeline import (SYMBOLS, INTERVAL, KLINE_LIMIT, build_training_universe,
                            fetch_klines_paginated)
 from ppo_execution_agent import ActorCritic
@@ -518,7 +519,7 @@ def train_ppo(warm_start: bool = False) -> dict:
         if CHECKPOINT_PATH.exists():
             BACKUP_PATH.write_bytes(CHECKPOINT_PATH.read_bytes())
         CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(model.state_dict(), CHECKPOINT_PATH)
+        promotion_gate.atomic_save(CHECKPOINT_PATH, lambda t: torch.save(model.state_dict(), t))
         state_json["last_promoted_avg_reward_per_step"] = avg_reward_per_step
         state_json["last_promoted_heldout_avg_reward_per_step"] = heldout_avg
         state_json["last_promoted_at"] = datetime.now(timezone.utc).isoformat()

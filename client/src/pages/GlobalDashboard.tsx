@@ -64,9 +64,13 @@ export default function GlobalDashboard() {
       const walletRes = await fetch("/aqea-ui/dashboard?accountType=BOTH");
       const walletData = walletRes.ok ? await walletRes.json() : null;
 
+      // Both sources down: keep the last good snapshot rather than overwriting it
+      // with zeros / invented numbers that read as a real net worth.
+      if (!indiaData && !walletData) throw new Error("funds endpoints unavailable");
+
       const fx = indiaData?.inrRate || 95.613964;
 
-      const indiaEquity = indiaData?.totalEquityINR ?? 20000;
+      const indiaEquity = indiaData?.totalEquityINR ?? 0;
       const indiaTodayPnl = indiaData?.todayPnlINR ?? 0;
       const indiaRealizedPnl = indiaData?.realizedPnlINR ?? 0;
       const indiaUnrealizedPnl = indiaData?.unrealizedPnlINR ?? 0;
@@ -116,7 +120,7 @@ export default function GlobalDashboard() {
   }, [mode, indianMode]);
 
   const fxRate = data?.fxRate || 95.613964;
-  const indiaInr = data?.india.equityINR ?? 20000;
+  const indiaInr = data?.india.equityINR ?? 0;
   const indiaUsdDisplay = indiaInr / fxRate;
   const cryptoUsdt = data?.crypto.equityUSDT ?? 0;
   const combinedUsd = indiaUsdDisplay + cryptoUsdt;
@@ -251,7 +255,7 @@ export default function GlobalDashboard() {
             <div>
               <div style={{ fontSize: 10, color: "#64748b" }}>Available Cash</div>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#cbd5e1", fontFamily: "monospace" }}>
-                ₹{(data?.india.cashINR ?? 20000).toLocaleString("en-IN")}
+                ₹{(data?.india.cashINR ?? 0).toLocaleString("en-IN")}
               </div>
             </div>
             <div>

@@ -177,7 +177,7 @@ def train_gbm() -> dict:
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         if CHECKPOINT_PATH.exists():
             BACKUP_PATH.write_bytes(CHECKPOINT_PATH.read_bytes())
-        joblib.dump(model, CHECKPOINT_PATH)
+        promotion_gate.atomic_save(CHECKPOINT_PATH, lambda t: joblib.dump(model, t))
 
     state = _load_state()
     state.update({
