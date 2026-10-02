@@ -227,12 +227,15 @@ export async function buildContext(
   const mlFeatures = buildMLFeatures(
     ind, weights, dailyPnl, riskConfig.maxDailyLoss, tradesToday, openPositionCount,
   );
-  const seqInput = buildSequenceInput(symbol, "5m", bars, 60);
-  const [mlPrediction, dlPrediction, htfTrendBullish] = await Promise.all([
-    mlPredict(mlFeatures).catch(() => ({ profitProbability: 0.5, expectedReturn: 0, confidence: 0, modelName: "stub" })),
-    dlPredict(seqInput).catch(() => ({ directionScore: 0.5, predictedMove: 0, confidence: 0, modelName: "stub" })),
-    htfTrendPromise,
-  ]);
+  // The legacy ML/DL predictions were computed here for every symbol on every tick — two quant-engine
+  // calls (the DL one to the collapsed Transformer, with a 4 s abort + local-heuristic fallback) —
+  // but nothing ever reads ctx.mlPrediction / ctx.dlPrediction: the AQEA engine does its own model
+  // calls. Under load those timeouts burned the 55 s tick budget (146 "Global tick exceeded" in a
+  // day). Inert placeholders keep the context shape; the unused feature builders stay for callers.
+  void mlFeatures;
+  const mlPrediction: MLPrediction = { profitProbability: 0.5, expectedReturn: 0, confidence: 0, modelName: "unused" } as MLPrediction;
+  const dlPrediction: DLPrediction = { directionScore: 0.5, predictedMove: 0, confidence: 0, modelName: "unused" } as DLPrediction;
+  const htfTrendBullish = await htfTrendPromise;
 
   // Merge AI-configurable thresholds into riskConfig so checklist can read them
   // without needing a separate settings reference.
