@@ -21,6 +21,9 @@ class FeatureSchemaV8:
     MEANS = np.array(_schema_data["MEANS"], dtype=np.float32)
     STDS = np.array(_schema_data["STDS"], dtype=np.float32)
     DIMENSION = _schema_data["DIMENSION"]
+    # Version stamp shared with the checkpoint it was fitted with (None for
+    # legacy files written before stamping existed).
+    STAMP = _schema_data.get("MODEL_STAMP")
 
     @classmethod
     def reload(cls):
@@ -29,6 +32,7 @@ class FeatureSchemaV8:
         cls.MEANS = np.array(data["MEANS"], dtype=np.float32)
         cls.STDS = np.array(data["STDS"], dtype=np.float32)
         cls.DIMENSION = data["DIMENSION"]
+        cls.STAMP = data.get("MODEL_STAMP")
 
     @classmethod
     def normalize(cls, vector: np.ndarray) -> np.ndarray:

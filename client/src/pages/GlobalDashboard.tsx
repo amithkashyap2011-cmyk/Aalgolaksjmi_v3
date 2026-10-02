@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { resolveFxRate } from "../lib/fx";
 import {
   Globe,
   Landmark,
@@ -43,7 +44,7 @@ interface GlobalFundsState {
     source: string;
     status: string;
   };
-  fxRate: number;
+  fxRate: number | null;
   lastUpdated: string;
 }
 
@@ -68,7 +69,7 @@ export default function GlobalDashboard() {
       // with zeros / invented numbers that read as a real net worth.
       if (!indiaData && !walletData) throw new Error("funds endpoints unavailable");
 
-      const fx = indiaData?.inrRate || 95.613964;
+      const fx = resolveFxRate(indiaData?.inrRate, data?.fxRate);
 
       const indiaEquity = indiaData?.totalEquityINR ?? 0;
       const indiaTodayPnl = indiaData?.todayPnlINR ?? 0;
@@ -119,11 +120,15 @@ export default function GlobalDashboard() {
     return () => clearInterval(timer);
   }, [mode, indianMode]);
 
-  const fxRate = data?.fxRate || 95.613964;
+  const fxRate = data?.fxRate ?? null;
+  const hasFx = fxRate !== null;
   const indiaInr = data?.india.equityINR ?? 0;
-  const indiaUsdDisplay = indiaInr / fxRate;
   const cryptoUsdt = data?.crypto.equityUSDT ?? 0;
+  const indiaUsdDisplay = hasFx ? indiaInr / fxRate : 0;
   const combinedUsd = indiaUsdDisplay + cryptoUsdt;
+  const cryptoInr = hasFx ? cryptoUsdt * fxRate : 0;
+  const combinedInr = indiaInr + cryptoInr;
+  const fmtInr2 = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const handleNavigateToMarket = (market: "INDIA" | "CRYPTO") => {
     setActiveMarket(market);
@@ -178,7 +183,7 @@ export default function GlobalDashboard() {
           </span>
         </div>
         <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "monospace" }}>
-          RBI Ref FX: 1 USD = ₹{fxRate.toFixed(2)} INR · Last verified: {data?.lastUpdated || "Live"}
+          {hasFx ? `FX: 1 USD ≈ ₹${fxRate.toFixed(2)} INR (live, from server)` : "FX rate unavailable — INR/USD conversion not shown"} · Last verified: {data?.lastUpdated || "Live"}
         </div>
       </div>
 
@@ -190,15 +195,17 @@ export default function GlobalDashboard() {
               Total Combined Display Value
             </div>
             <div style={{ fontSize: 36, fontWeight: 900, color: "#f8fafc", fontFamily: "monospace", marginTop: 4 }}>
-              ₹{(indiaInr + cryptoUsdt * fxRate).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {hasFx ? `₹${fmtInr2(combinedInr)}` : "—"}
               <span style={{ fontSize: 14, color: "#64748b", fontWeight: 600, marginLeft: 8 }}>INR (DISPLAY ONLY)</span>
             </div>
             <div style={{ fontSize: 22, fontWeight: 800, color: "#94a3b8", fontFamily: "monospace", marginTop: 2 }}>
-              ${combinedUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {hasFx ? `$${combinedUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
               <span style={{ fontSize: 12, color: "#64748b", fontWeight: 600, marginLeft: 6 }}>USD</span>
             </div>
             <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>
-              Formula: India ₹{indiaInr.toLocaleString("en-IN")} + (Crypto ${cryptoUsdt.toFixed(2)} USDT × ₹{fxRate.toFixed(2)}) · 1 USD = ₹{fxRate.toFixed(2)}
+              {hasFx
+                ? <>Formula: India ₹{indiaInr.toLocaleString("en-IN")} + (Crypto ${cryptoUsdt.toFixed(2)} USDT × ₹{fxRate.toFixed(2)})</>
+                : <>India ₹{indiaInr.toLocaleString("en-IN")} · Crypto ${cryptoUsdt.toFixed(2)} USDT (no FX rate, not combined)</>}
             </div>
           </div>
 
@@ -206,15 +213,15 @@ export default function GlobalDashboard() {
             <div style={{ background: "rgba(15, 23, 42, 0.6)", border: "1px solid rgba(234, 88, 12, 0.3)", borderRadius: 10, padding: "10px 16px", minWidth: 160 }}>
               <div style={{ fontSize: 10, fontWeight: 800, color: "#fb923c", textTransform: "uppercase" }}>India Contribution</div>
               <div style={{ fontSize: 16, fontWeight: 800, color: "#f8fafc", fontFamily: "monospace", marginTop: 2 }}>
-                ₹{indiaInr.toLocaleString("en-IN")} <span style={{ fontSize: 10, color: "#94a3b8" }}>({((indiaInr / (indiaInr + cryptoUsdt * fxRate || 1)) * 100).toFixed(0)}%)</span>
+                ₹{indiaInr.toLocaleString("en-IN")} {hasFx && <span style={{ fontSize: 10, color: "#94a3b8" }}>({((indiaInr / (combinedInr || 1)) * 100).toFixed(0)}%)</span>}
               </div>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>${indiaUsdDisplay.toFixed(2)} USD</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{hasFx ? `$${indiaUsdDisplay.toFixed(2)} USD` : "USD n/a"}</div>
             </div>
 
             <div style={{ background: "rgba(15, 23, 42, 0.6)", border: "1px solid rgba(37, 99, 235, 0.3)", borderRadius: 10, padding: "10px 16px", minWidth: 160 }}>
               <div style={{ fontSize: 10, fontWeight: 800, color: "#60a5fa", textTransform: "uppercase" }}>Crypto Contribution</div>
               <div style={{ fontSize: 16, fontWeight: 800, color: "#f8fafc", fontFamily: "monospace", marginTop: 2 }}>
-                ₹{(cryptoUsdt * fxRate).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span style={{ fontSize: 10, color: "#94a3b8" }}>({((cryptoUsdt * fxRate / (indiaInr + cryptoUsdt * fxRate || 1)) * 100).toFixed(0)}%)</span>
+                {hasFx ? `₹${fmtInr2(cryptoInr)}` : "—"} {hasFx && <span style={{ fontSize: 10, color: "#94a3b8" }}>({((cryptoInr / (combinedInr || 1)) * 100).toFixed(0)}%)</span>}
               </div>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>${cryptoUsdt.toFixed(2)} USDT Paper</div>
             </div>
