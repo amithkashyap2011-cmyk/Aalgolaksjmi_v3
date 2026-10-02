@@ -13,8 +13,10 @@ import * as selfLearning from "../services/selfLearningService.js";
 import { Trade } from "../models/Trade.js";
 import * as paper from "../services/paperState.js";
 import mongoose from "mongoose";
+import { authAndAdminMutations } from "../middleware/auth.js";
 
 const router = Router();
+router.use(...authAndAdminMutations);
 
 /**
  * GET /api/aqea/governance/summary

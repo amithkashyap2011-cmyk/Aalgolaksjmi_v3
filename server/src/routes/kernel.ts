@@ -13,8 +13,10 @@ import { AgentEventBus } from "../kernel/AgentEventBus.js";
 import { AgentMemory } from "../kernel/AgentMemory.js";
 import { AgentGoalManager } from "../kernel/AgentGoalManager.js";
 import { ControlMode } from "../kernel/types.js";
+import { authAndAdminMutations } from "../middleware/auth.js";
 
 const router = Router();
+router.use(...authAndAdminMutations);
 
 /**
  * GET /api/kernel/status

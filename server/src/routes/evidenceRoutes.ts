@@ -10,8 +10,10 @@ import { BenchmarkEngine } from "../evidence/benchmarkEngine.js";
 import { TimelineGenerator } from "../evidence/timelineGenerator.js";
 import { ReportGenerator } from "../evidence/reportGenerator.js";
 import { TradeEvidence, ModelEvidence, StrategyEvidence } from "../models/Evidence.js";
+import { authAndAdminMutations } from "../middleware/auth.js";
 
 const router = express.Router();
+router.use(...authAndAdminMutations);
 
 /**
  * GET /api/evidence/summary

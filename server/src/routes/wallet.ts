@@ -11,7 +11,7 @@
  */
 import { Router } from "express";
 import crypto from "node:crypto";
-import { authGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, type AuthRequest } from "../middleware/auth.js";
 import { WalletTransaction } from "../models/WalletTransaction.js";
 import * as paper from "../services/paperState.js";
 import * as binance from "../services/binanceService.js";
@@ -235,7 +235,7 @@ export async function computeAccountBalance(userId: string, mode: "PAPER" | "LIV
 }
 
 /* ── Unified Multi-Account Summary (1 Instant Request) ───── */
-router.get("/summary", optionalAuth, async (req: AuthRequest, res) => {
+router.get("/summary", authGuard, async (req: AuthRequest, res) => {
   try {
     const mode = (req.query?.mode as "PAPER" | "LIVE") || "PAPER";
     const userId = req.userId || (req.body?.userId && mongoose.Types.ObjectId.isValid(req.body.userId) ? String(req.body.userId) : "guest-user");
@@ -265,7 +265,7 @@ router.get("/summary", optionalAuth, async (req: AuthRequest, res) => {
 });
 
 /* ── Single Account Balance ─────────────────────────────── */
-router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
+router.get("/balance", authGuard, async (req: AuthRequest, res) => {
   try {
     const mode = (req.query?.mode as "PAPER" | "LIVE") || "PAPER";
     const accountType = (req.query?.accountType as string) || "FUTURES";
@@ -291,7 +291,7 @@ router.get("/balance", optionalAuth, async (req: AuthRequest, res) => {
 });
 
 /* ── Live Binance Multi-Wallet & Assets Endpoint ─────────── */
-router.get("/binance-live", optionalAuth, async (req: AuthRequest, res) => {
+router.get("/binance-live", authGuard, async (req: AuthRequest, res) => {
   try {
     const userId = req.userId || "6a39c0e7a5e2995ed257ca68";
     if (mongoose.connection.readyState !== 1) {
@@ -605,7 +605,7 @@ router.post("/deposit/test-funds", authGuard, async (req: AuthRequest, res) => {
 });
 
 /* ── Authoritative Idempotent Paper Account Initialization ── */
-router.post("/initialize-paper", optionalAuth, async (req: AuthRequest, res) => {
+router.post("/initialize-paper", authGuard, async (req: AuthRequest, res) => {
   try {
     const { amount, accountType = "INDIAN_NSE", currency = "INR", txnRef } = req.body || {};
     const userId = req.userId || (req.body?.userId && mongoose.Types.ObjectId.isValid(req.body.userId) ? String(req.body.userId) : "6a39c0e7a5e2995ed257ca68");
@@ -639,7 +639,7 @@ router.post("/initialize-paper", optionalAuth, async (req: AuthRequest, res) => 
 
 /* ── Transaction history ──────────────────────────────── */
 
-router.get("/transactions", optionalAuth, async (req: AuthRequest, res) => {
+router.get("/transactions", authGuard, async (req: AuthRequest, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
       return res.json({ transactions: [], total: 0 });
@@ -730,8 +730,8 @@ router.post("/deposit/upi", authGuard, async (req: AuthRequest, res) => {
 router.post("/withdraw/upi", authGuard, async (req: AuthRequest, res) => {
   try {
     const { usdtAmount, upiId, accountType = "FUTURES", mode = "PAPER", name } = req.body as { usdtAmount: number; upiId: string; accountType?: string; mode?: "PAPER" | "LIVE"; name?: string };
-    if (!usdtAmount || usdtAmount <= 0) {
-      res.status(400).json({ error: "Amount must be positive" });
+    if (typeof usdtAmount !== "number" || !Number.isFinite(usdtAmount) || usdtAmount <= 0 || typeof upiId !== "string") {
+      res.status(400).json({ error: "Amount must be a positive number" });
       return;
     }
     if (!upiId || !upiId.includes("@")) {
@@ -874,7 +874,8 @@ router.post("/withdraw/crypto", authGuard, async (req: AuthRequest, res) => {
       mode?: "PAPER" | "LIVE";
     };
 
-    if (!symbol || !amount || amount <= 0 || !address || !network) {
+    if (!symbol || typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 ||
+        typeof symbol !== "string" || typeof address !== "string" || typeof network !== "string" || !address || !network) {
       res.status(400).json({ error: "All fields are required and amount must be positive" });
       return;
     }
@@ -1127,7 +1128,7 @@ router.post("/p2p/buy", authGuard, async (req: AuthRequest, res) => {
 });
 
 /* ── Dummy Paper Deposit ──────────────────────────────── */
-router.post("/deposit/paper", optionalAuth, async (req: AuthRequest, res) => {
+router.post("/deposit/paper", authGuard, async (req: AuthRequest, res) => {
   try {
     const { amount, accountType, currency = "USDT", confirmConversion = false, setExact = false } = req.body as {
       amount: number;
@@ -1572,7 +1573,7 @@ router.post("/transfer", authGuard, async (req: AuthRequest, res) => {
 });
 
 /* ── Custom Capital Allocation (Spot vs Futures) ────────── */
-router.post("/allocate", optionalAuth, async (req: AuthRequest, res) => {
+router.post("/allocate", authGuard, async (req: AuthRequest, res) => {
   try {
     const { spotAmount, futuresAmount } = req.body as { spotAmount: number; futuresAmount: number };
     const mode = (req.body?.mode as string) || "PAPER";

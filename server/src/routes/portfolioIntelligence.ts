@@ -14,7 +14,9 @@ import { PortfolioCapitalAllocationEngine } from "../services/agentic/portfolio/
 import { PortfolioOptimizerEngine } from "../services/agentic/portfolio/optimizer/PortfolioOptimizerEngine.js";
 import { PortfolioAuditLogger } from "../services/agentic/portfolio/audit/PortfolioAuditLogger.js";
 
+import { authAndAdminMutations } from "../middleware/auth.js";
 const router = Router();
+router.use(...authAndAdminMutations);
 
 /**
  * GET /api/portfolio-intelligence/snapshot

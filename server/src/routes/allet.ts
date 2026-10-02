@@ -12,7 +12,7 @@ import { peakConcurrentCapital } from "../services/capitalPeak.js";
 import { dailyBreakdown } from "../services/dailyBreakdown.js";
 import { UITelemetryService } from "../services/uiTelemetry.js";
 import { Router } from "express";
-import { authGuard, adminGuard, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, adminGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
 import { Settings } from "../models/Settings.js";
 import { Trade } from "../models/Trade.js";
 import { WalletSnapshot } from "../models/WalletSnapshot.js";
@@ -55,7 +55,7 @@ router.post("/weights-update", authGuard, adminGuard, async (req, res) => {
   }
 });
 
-router.get("/current-weights", authGuard, async (req: AuthRequest, res) => {
+router.get("/current-weights", optionalAuth, async (req: AuthRequest, res) => {
   try {
     let settings: any = null;
     if (mongoose.connection.readyState === 1 && req.userId) {
@@ -169,7 +169,7 @@ router.get("/current-weights", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/current-animal-weights", authGuard, async (req: AuthRequest, res) => {
+router.get("/current-animal-weights", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const klines = await binance.getKlines("BTCUSDT", "5m", undefined, undefined, 200);
     if (!klines || klines.length === 0) {
@@ -288,7 +288,7 @@ router.get("/current-animal-weights", authGuard, async (req: AuthRequest, res) =
   }
 });
 
-router.get("/market-check", authGuard, async (req: AuthRequest, res) => {
+router.get("/market-check", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbol = ((req.query.symbol as string) || "BTCUSDT").toUpperCase();
     const interval = (req.query.interval as string) || "5m";
@@ -482,11 +482,11 @@ router.get("/performance", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/live-decisions", authGuard, (_req, res) => {
+router.get("/live-decisions", optionalAuth, (_req, res) => {
   res.json({ decisions: UITelemetryService.getLatestDecisions(), now: Date.now() });
 });
 
-router.get("/ensemble-report", authGuard, async (req: AuthRequest, res) => {
+router.get("/ensemble-report", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbol = ((req.query.symbol as string) || "BTCUSDT").toUpperCase();
     const interval = (req.query.interval as string) || "5m";
@@ -541,7 +541,7 @@ router.get("/control/status", async (req, res) => {
 });
 
 /* ── get alerts ───────────────────────────────────────── */
-router.get("/alerts", authGuard, async (req: AuthRequest, res) => {
+router.get("/alerts", optionalAuth, async (req: AuthRequest, res) => {
   try {
     let alerts: any[] = [];
     
@@ -569,20 +569,6 @@ router.get("/alerts", authGuard, async (req: AuthRequest, res) => {
 });
 
 /* ── place order ──────────────────────────────────────── */
-
-/**
- * Leverage of a position after adding `addNotional` (locking `addMargin`) to
- * `existing`. Margin released on close is qty*entry/leverage, so the stored
- * leverage must equal total notional / total margin actually debited —
- * stamping the new order's leverage on the whole position releases the wrong
- * margin on close (money created or destroyed when the two leverages differ).
- */
-export function blendedLeverage(existing: { quantity: number; entryPrice: number; leverage?: number }, addNotional: number, addMargin: number): number {
-  const exNotional = existing.quantity * existing.entryPrice;
-  const exMargin = exNotional / (existing.leverage || 1);
-  const totalMargin = exMargin + addMargin;
-  return totalMargin > 0 ? (exNotional + addNotional) / totalMargin : (existing.leverage || 1);
-}
 
 router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
   try {
@@ -1007,7 +993,6 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
       // wallet key, matching the pattern already used by
       // debitWalletAndCreateTrade/creditWalletAndCloseTrade.
       let insufficientBalance = false;
-      let posLeverage = finalLeverage; // leverage the resulting position carries (blended when averaging in)
       let clampedBalance = 0;
       let actualDebit = 0;
       let memoryTrade: any;
@@ -1017,12 +1002,10 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
         if (side === "BUY") {
           cost = (quantity * simEntryPrice) / finalLeverage;
           if (existing && existing.side === "BUY") {
-            // Increase long — average up (entry price is notional-weighted;
-            // `cost` is margin and must not be mixed into a price average)
-            const totalValue = (existing.quantity * existing.entryPrice) + (quantity * simEntryPrice);
+            // Increase long — average up
+            const totalValue = (existing.quantity * existing.entryPrice) + cost;
             finalQty = existing.quantity + quantity;
             finalEntry = totalValue / finalQty;
-            posLeverage = blendedLeverage(existing, quantity * simEntryPrice, cost);
           } else if (existing && existing.side === "SELL") {
             // Reduce short — compute PnL
             isReducingPosition = true;
@@ -1058,10 +1041,9 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
           } else if (existing && existing.side === "SELL") {
             // Increase short — average down
             cost = (quantity * simEntryPrice) / finalLeverage;
-            const totalValue = (existing.quantity * existing.entryPrice) + (quantity * simEntryPrice);
+            const totalValue = (existing.quantity * existing.entryPrice) + cost;
             finalQty = existing.quantity + quantity;
             finalEntry = totalValue / finalQty;
-            posLeverage = blendedLeverage(existing, quantity * simEntryPrice, cost);
           } else {
              // Open new short
              cost = (quantity * simEntryPrice) / finalLeverage;
@@ -1073,11 +1055,8 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
         const freshUsdt = paper.getWallet(req.userId!, mode, accountType || "FUTURES").get("USDT") ?? 0;
         const newBalance = freshUsdt - cost;
 
-        // PAPER fills at the quoted price, so there is no slippage to absorb: the
-        // old 5%+$1 buffer let an order costing more than the wallet open for
-        // free (clamped to 0 below, debiting less than the margin it locked) —
-        // even a $0 wallet could open a position up to $1 of margin.
-        if (newBalance < -1e-6) {
+        // 5% Slippage Tolerance Buffer to accommodate micro-delays
+        if (newBalance < -(freshUsdt * 0.05 + 1)) {
           insufficientBalance = true;
           return;
         }
@@ -1107,7 +1086,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
           quantity: isReducingPosition ? reduceQtyUsed : finalQty,
           entryPrice: isReducingPosition ? (existing?.entryPrice ?? finalEntry) : finalEntry,
           exitPrice: exitPriceUsed,
-          leverage: isReducingPosition ? (existing?.leverage || finalLeverage) : posLeverage,
+          leverage: isReducingPosition ? (existing?.leverage || finalLeverage) : finalLeverage,
           sl: slPrice,
           tp: tpPrice,
           pnl: realizedPnl,
@@ -1184,7 +1163,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
             // checks) — silently multiplying the real margin in use.
             await Trade.updateOne(
               { _id: existing.tradeId },
-              { $set: { quantity: finalQty, entryPrice: finalEntry, leverage: posLeverage } },
+              { $set: { quantity: finalQty, entryPrice: finalEntry, leverage: finalLeverage } },
             );
             memoryTrade._id = existing.tradeId;
           } else {
@@ -1222,7 +1201,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
             quantity: finalQty,
             entryPrice: finalEntry,
             tradeId: memoryTrade._id,
-            leverage: posLeverage,
+            leverage: finalLeverage,
             accountType: accountType as "SPOT" | "FUTURES" || "FUTURES",
           });
         } else if (finalQty > 0 && isReducingPosition) {
@@ -1265,7 +1244,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
 
 /* ── open positions ───────────────────────────────────── */
 
-router.get("/open-positions", authGuard, async (req: AuthRequest, res) => {
+router.get("/open-positions", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const mode = (req.query?.mode as string) || "PAPER";
     const accountType = req.query?.accountType as string;
@@ -1332,8 +1311,7 @@ router.post("/update-sl-tp", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
-    // SPOT has no leverage: "changing" it would release margin that was paid in full.
-    if (leverage !== undefined && typeof leverage === "number" && leverage > 0 && (trade.accountType || "FUTURES") === "FUTURES") {
+    if (leverage !== undefined && typeof leverage === "number" && leverage > 0) {
       const oldLeverage = trade.leverage || 1;
       const newLeverage = leverage;
       if (oldLeverage !== newLeverage) {
@@ -1521,7 +1499,7 @@ router.post("/wallet/reset", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/wallet/allocate", authGuard, async (req: AuthRequest, res) => {
+router.post("/wallet/allocate", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const { spotAmount, futuresAmount } = req.body as { spotAmount: number; futuresAmount: number };
     const mode = (req.body?.mode as string) || "PAPER";
@@ -1575,9 +1553,6 @@ router.post("/wallet/adjust", authGuard, async (req: AuthRequest, res) => {
     const wallet = paper.getWallet(req.userId!, mode, accountType);
     const prev = wallet.get("USDT") ?? 0;
     const next = prev + delta;
-    if (next < 0) {
-      return res.status(400).json({ error: `Adjustment would make the balance negative (${prev.toFixed(4)} ${delta})` }) as any;
-    }
     await paper.setWalletBalance(req.userId!, mode, "USDT", next, accountType);
 
     if (mongoose.connection.readyState === 1) {
@@ -1608,11 +1583,7 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
     const closeReason = req.body?.reason === "EXPLORATION_TIME_EXIT" && mode === "PAPER" ? "EXPLORATION_TIME_EXIT" : "MANUAL";
     if (!tradeId) return res.status(400).json({ error: "tradeId required" }) as any;
 
-    // `mode` comes from the request body, so it must match the trade's own
-    // mode: closing a LIVE trade through the PAPER branch credited a PAPER
-    // wallet (phantom money, no exchange order), and closing a PAPER trade as
-    // LIVE would send a real exchange order for a simulated position.
-    const trade = await Trade.findOne({ _id: tradeId, userId: req.userId!, status: "OPEN", mode });
+    const trade = await Trade.findOne({ _id: tradeId, userId: req.userId!, status: "OPEN" });
     if (!trade) return res.status(404).json({ error: "Open trade not found" }) as any;
 
     let exitPrice = trade.entryPrice;
@@ -1654,9 +1625,6 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
             "meta.closeReason": "MANUAL_LIVE_FORCE_SYNC"
           }
         });
-        // Drop the in-memory position too, or the SL/TP monitor / engine exit
-        // would later fire a real exchange order for a position already closed.
-        paper.removePosition(req.userId!, trade.symbol, mode, trade.accountType || "FUTURES");
 
         return res.json({
           success: true,
@@ -1805,8 +1773,6 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
             $set: { quantity: remainingQty, "meta.closeReason": "MANUAL_LIVE_PARTIAL", "meta.exitClientOrderId": exitClientOrderId, "meta.exitBinanceOrderId": result.orderId },
             $inc: { "meta.partialPnl": pnl },
           });
-          const memPos = paper.getPosition(req.userId!, trade.symbol, mode, trade.accountType || "FUTURES");
-          if (memPos) paper.setPosition(req.userId!, trade.symbol, mode, { ...memPos, quantity: remainingQty });
           return res.json({ success: true, partial: true, executedQty: closedQty, remainingQty, exitPrice, pnl: +pnl.toFixed(4), symbol: trade.symbol });
         }
       } catch (err: any) {
@@ -1830,7 +1796,6 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
       await Trade.updateOne({ _id: tradeId }, {
         $set: { status: "CLOSED", exitPrice, pnl, grossPnl, feeCost, netPnl: pnl, closedAt: new Date(), "meta.closeReason": "MANUAL_LIVE", "meta.exitClientOrderId": exitClientOrderId, "meta.exitBinanceOrderId": result.orderId }
       });
-      paper.removePosition(req.userId!, trade.symbol, mode, trade.accountType || "FUTURES");
     } else {
       // PAPER MODE Close
       try {
@@ -1859,16 +1824,11 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
       // lost (invisible to hydrate(), which only restores OPEN trades).
       const tradeLeverage = trade.leverage || 1;
       const initialMargin = (trade.quantity * trade.entryPrice) / tradeLeverage;
-      // Realized P&L from earlier partial exits was already credited to the
-      // wallet then; the stored trade record must still report the whole
-      // trade's result (the engine's own full close does the same).
-      const priorPartialPnl = Number((trade as any).meta?.partialPnl) || 0;
-      const totalPnl = pnl + priorPartialPnl;
       const claimed = await paper.creditWalletAndCloseTrade(
         req.userId!, mode, trade.accountType || "FUTURES", initialMargin + pnl,
         (session) => Trade.findOneAndUpdate(
           { _id: tradeId, status: "OPEN" },
-          { $set: { status: "CLOSED", exitPrice, pnl: totalPnl, grossPnl: grossPnl + priorPartialPnl, feeCost, netPnl: totalPnl, closedAt: new Date(), "meta.closeReason": closeReason } },
+          { $set: { status: "CLOSED", exitPrice, pnl, grossPnl, feeCost, netPnl: pnl, closedAt: new Date(), "meta.closeReason": closeReason } },
           { session },
         ),
       );
@@ -1943,7 +1903,7 @@ router.patch("/modify-position", authGuard, async (req: AuthRequest, res) => {
 
 /* ── HARD RESET — wipe all trades, positions, alerts and set wallet to 100 USDT ── */
 
-router.post("/hard-reset", authGuard, async (req: AuthRequest, res) => {
+router.post("/hard-reset", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const rawUserId = req.userId || "guest-user";
     const primaryUserId = rawUserId.toString();
@@ -2094,7 +2054,7 @@ router.get("/debug-state", authGuard, adminGuard, async (req: AuthRequest, res) 
   }
 });
 
-router.get("/spectral-regime", authGuard, async (req: AuthRequest, res) => {
+router.get("/spectral-regime", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const report = getRegimeReport();
     res.json(report);
@@ -2108,7 +2068,7 @@ const tickerPricesCache = new Map<string, { timestamp: number; data: any }>();
 const ticker24hrCache = new Map<string, { timestamp: number; data: any }>();
 
 /* ── get current ticker prices ──────────────────────────────── */
-router.get("/ticker-prices", authGuard, async (req: AuthRequest, res) => {
+router.get("/ticker-prices", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbolsQuery = (req.query.symbols as string | undefined) || "";
     const cacheKey = symbolsQuery || "DEFAULT";
@@ -2137,7 +2097,7 @@ router.get("/ticker-prices", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/ticker-24hr", authGuard, async (req: AuthRequest, res) => {
+router.get("/ticker-24hr", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbolsQuery = (req.query.symbols as string | undefined) || "";
     const cacheKey = symbolsQuery || "DEFAULT";
@@ -2175,7 +2135,7 @@ router.get("/ticker-24hr", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/leaderboard", authGuard, async (req: AuthRequest, res) => {
+router.get("/leaderboard", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;

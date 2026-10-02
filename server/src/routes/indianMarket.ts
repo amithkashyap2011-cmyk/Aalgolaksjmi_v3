@@ -43,12 +43,12 @@ import { AutoPilotStateMachine } from "../services/indianMarket/autoPilotStateMa
 import { TradingKillSwitch } from "../services/indianMarket/security/tradingKillSwitch.js";
 import { OrderValidator } from "../services/indianMarket/security/orderValidator.js";
 import { DataIntegrityScanner } from "../services/indianMarket/security/dataIntegrityScanner.js";
-import { optionalAuth, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, enforceOwnUserId, type AuthRequest } from "../middleware/auth.js";
 import { buildEntryTelemetryReport } from "../services/indianMarket/entryTelemetry.js";
 import { requirePermission } from "../middleware/rbac.js";
 
 const router = express.Router();
-router.use(optionalAuth);
+router.use(authGuard, enforceOwnUserId);
 
 export function resolveIndianUserId(rawUserId?: string): string {
   if (!rawUserId || rawUserId === "guest-user" || rawUserId === "undefined" || rawUserId === "000000000000000000000000") {

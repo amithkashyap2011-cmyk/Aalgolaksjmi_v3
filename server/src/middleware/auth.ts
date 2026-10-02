@@ -119,6 +119,20 @@ export async function adminGuard(req: AuthRequest, res: Response, next: NextFunc
   }
 }
 
+/**
+ * Non-admin callers may only act on their own account: overwrite any
+ * client-supplied userId (query/body) with the authenticated one. Prevents
+ * IDOR via ?userId= / {userId} on routers that historically trusted them.
+ * ADMIN (incl. the loopback demo identity) keeps the override ability.
+ */
+export function enforceOwnUserId(req: AuthRequest, _res: Response, next: NextFunction): void {
+  if (req.userId && String(req.user?.role || "").toUpperCase() !== "ADMIN") {
+    if (req.query && typeof req.query === "object" && "userId" in req.query) (req.query as any).userId = req.userId;
+    if (req.body && typeof req.body === "object" && "userId" in req.body) req.body.userId = req.userId;
+  }
+  next();
+}
+
 export function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
   if (header?.startsWith("Bearer ")) {
@@ -137,7 +151,7 @@ export function optionalAuth(req: AuthRequest, _res: Response, next: NextFunctio
   // is usable without a login. In production an anonymous/invalid-token request
   // must stay unauthenticated (req.userId undefined) so downstream guards 401
   // instead of silently transacting against a real account.
-  if (!req.userId && process.env.NODE_ENV !== "production") {
+  if (!req.userId && devBypassAllowed(req)) {
     req.userId = DEMO_USER_ID;
     req.user = { id: DEMO_USER_ID, role: "ADMIN" };
   }
@@ -150,3 +164,17 @@ export function signToken(userId: string, role?: string): string {
   if (role) payload.role = role;
   return jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: "7d" });
 }
+
+/**
+ * Router-level guard for control/ML-admin routers that historically had no
+ * auth at all: every request needs a valid identity (loopback operator or
+ * JWT) and non-GET/HEAD requests additionally require ADMIN.
+ */
+export const authAndAdminMutations = [
+  authGuard,
+  (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+    return adminGuard(req, res, next);
+  },
+  enforceOwnUserId,
+];

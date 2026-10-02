@@ -16,7 +16,9 @@ import { AutonomousResearchEngine } from "../services/phase27/autonomousResearch
 import { ResearchHypothesis } from "../models/ResearchHypothesis.js";
 import { ResearchReport } from "../models/ResearchReport.js";
 
+import { authAndAdminMutations } from "../middleware/auth.js";
 const router = Router();
+router.use(...authAndAdminMutations);
 
 // GET /api/phase27/weaknesses
 router.get("/weaknesses", (_req, res) => {

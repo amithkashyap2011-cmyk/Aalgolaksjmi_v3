@@ -18,7 +18,9 @@ import { MonteCarloEngine } from "../services/v5_1/monteCarloEngine.js";
 import { CapitalAllocationOptimizer } from "../services/v5_1/capitalAllocationOptimizer.js";
 import { ResearchExperiment } from "../models/ResearchExperiment.js";
 
+import { authAndAdminMutations } from "../middleware/auth.js";
 const router = Router();
+router.use(...authAndAdminMutations);
 
 // GET /api/v5_1/research
 router.get("/research", async (_req, res) => {

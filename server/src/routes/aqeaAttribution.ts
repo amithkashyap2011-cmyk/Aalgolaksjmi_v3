@@ -7,8 +7,10 @@ import { Router } from "express";
 import { AqeaDecisionAttribution } from "../models/AqeaDecisionAttribution.js";
 import { OutcomeAttributionService } from "../services/aqea/outcomeAttribution.js";
 import mongoose from "mongoose";
+import { authAndAdminMutations } from "../middleware/auth.js";
 
 const router = Router();
+router.use(...authAndAdminMutations);
 
 /**
  * GET /api/aqea-attribution/outcomes

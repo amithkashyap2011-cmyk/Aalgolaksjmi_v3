@@ -21,7 +21,9 @@ import { ReportExporter } from "../services/analytics/reportExporter.js";
 import { ModelTradeContribution } from "../models/ModelTradeContribution.js";
 import { ModelDrift } from "../models/ModelDrift.js";
 
+import { authAndAdminMutations } from "../middleware/auth.js";
 const router = Router();
+router.use(...authAndAdminMutations);
 
 // GET /api/analytics/models
 router.get("/models", async (_req, res) => {

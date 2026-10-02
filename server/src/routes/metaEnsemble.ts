@@ -16,7 +16,9 @@ import { MetaEnsembleEngine } from "../services/ensemble/metaEnsembleEngine.js";
 import { ModelHealth } from "../models/ModelHealth.js";
 import { ModelLifecycleLog } from "../models/ModelLifecycleLog.js";
 
+import { authAndAdminMutations } from "../middleware/auth.js";
 const router = Router();
+router.use(...authAndAdminMutations);
 
 // GET /api/meta-ensemble/registry
 router.get("/registry", async (_req, res) => {

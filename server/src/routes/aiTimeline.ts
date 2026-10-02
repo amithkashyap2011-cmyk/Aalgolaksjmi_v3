@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { AIDecision } from "../models/AIDecision.js";
-import { optionalAuth, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, type AuthRequest } from "../middleware/auth.js";
 
 const router = Router();
 
-router.get("/timeline", optionalAuth, async (req: AuthRequest, res) => {
+router.get("/timeline", authGuard, async (req: AuthRequest, res) => {
   try {
     const { symbol, limit = 50 } = req.query;
     let timeline: any[] = [];

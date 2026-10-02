@@ -393,7 +393,7 @@ router.get("/", async (req: AuthRequest, res) => {
 });
 
 /* ── Toggle model enable/disable ── */
-router.post("/:id/toggle", authGuard, async (req: AuthRequest, res) => {
+router.post("/:id/toggle", authGuard, adminGuard, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params as { id: string };
     const { enabled } = req.body;
@@ -471,7 +471,7 @@ router.post("/weights", authGuard, adminGuard, (req, res) => {
 });
 
 /* ── Trigger health checks ── */
-router.post("/health-check", async (_req, res) => {
+router.post("/health-check", authGuard, async (_req, res) => {
   try {
     await registry.runHealthChecks();
     res.json({ models: registry.getAllModels() });
