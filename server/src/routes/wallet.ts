@@ -67,6 +67,31 @@ function invalidateWalletAggregatesCache() {
   walletAggregatesCache.clear();
 }
 
+/**
+ * Net capital moved INTO this wallet by internal PAPER transfers (negative = moved out).
+ * The transfer route stores ONE ADJUSTMENT record on the receiving wallet with
+ * "Internal transfer: <amt> USDT FROM → TO" in the note; the sending wallet has no record.
+ * Without netting these, a 160 USDT FUTURES→SPOT transfer made the Futures terminal read
+ * "−98% / −$153.80" (equity 2.55 vs its original 156.35 deposit) and the Spot terminal show
+ * +$160 of profit that never happened.
+ */
+export function netTransfersFor(
+  accountType: string,
+  docs: Array<{ amount?: number; accountType?: string; note?: string }>,
+): number {
+  let net = 0;
+  for (const d of docs) {
+    const amt = Number(d.amount) || 0;
+    const m = /USDT\s+([A-Z_]+)\s*(?:→|->)\s*([A-Z_]+)/.exec(d.note || "");
+    const to = (m?.[2] || d.accountType || "").toUpperCase();
+    const from = (m?.[1] || "").toUpperCase();
+    if (!amt || !to || from === to) continue;
+    if (to === accountType) net += amt;
+    if (from === accountType) net -= amt;
+  }
+  return net;
+}
+
 async function getCachedWalletAggregates(userId: string, mode: string, accountType: string, rate: number) {
   const key = `${userId}:${mode}:${accountType}`;
   const cached = walletAggregatesCache.get(key);
@@ -106,6 +131,18 @@ async function getCachedWalletAggregates(userId: string, mode: string, accountTy
         ])
       ]);
 
+      if (mode === "PAPER" && !accountType.startsWith("INDIAN_")) {
+        // Isolated: a failure here must never zero the deposit/withdrawal totals below.
+        try {
+          const xfers = await WalletTransaction.find(
+            { userId: userObjId, type: "ADJUSTMENT", txnRef: /^XFER/, status: "COMPLETED" },
+            { amount: 1, accountType: 1, note: 1 },
+          ).lean();
+          totalDepositsUsdt += netTransfersFor(accountType, xfers as any);
+        } catch (xErr: any) {
+          console.warn("[wallet] internal-transfer netting skipped:", xErr?.message);
+        }
+      }
       for (const g of depGroups) {
         const cur = (g._id || "USDT").toUpperCase();
         if (cur === "USDT") totalDepositsUsdt += g.total;
