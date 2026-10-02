@@ -20,6 +20,24 @@ import { StrikeSelector } from "./strikeSelector.js";
 import { optionContracts, exchangeLotSize } from "./angelOne/optionContracts.js";
 import { INDIAN_SYMBOLS } from "../../config/indianSymbols.js";
 
+const staticLotWarned = new Set<string>();
+/** Warns once per symbol when a static lot size is used because live contract data is unavailable. */
+export function warnStaticLotOnce(symbol: string, lotSize: number): void {
+  if (staticLotWarned.has(symbol)) return;
+  staticLotWarned.add(symbol);
+  console.warn(`[InstrumentMaster] STATIC_LOT_FALLBACK ${symbol}: live contract data unavailable, using static lot size ${lotSize} (may be stale — verify against NSE's lot-size circular)`);
+}
+/** Test hook. */
+export function _resetStaticLotWarnings(): void {
+  staticLotWarned.clear();
+}
+
+/**
+ * NEEDS VERIFICATION against NSE's current lot-size circular (not changed — cannot be
+ * verified from code/live data here): MIDCPNIFTY lotSize 50, BANKEX lotSize 15,
+ * HDFCBANK lotSize 650, RELIANCE strikeStep 20 (and the other static values below).
+ * Live scrip-master contract data overrides these whenever it is loaded.
+ */
 export interface UnderlyingContractSpec {
   underlying: UnderlyingSymbol;
   name: string;
@@ -160,6 +178,7 @@ export class InstrumentMaster {
     const base = this.staticSpec(norm, underlying);
     // Live exchange lot wins over the static table (which drifts).
     const live = exchangeLotSize(norm);
+    if (!live) warnStaticLotOnce(norm, base.lotSize);
     return live && live !== base.lotSize ? { ...base, lotSize: live } : base;
   }
 

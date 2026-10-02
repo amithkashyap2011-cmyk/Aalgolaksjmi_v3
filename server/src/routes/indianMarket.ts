@@ -6,6 +6,7 @@
 
 import { resolvePeriod, productFor, widenStops, exitDeadline, positionalAllowed } from "../services/indianMarket/positional.js";
 import { expiryDateOfTrade } from "../services/indianMarket/expiryFromSymbol.js";
+import { manualSessionGate, expiryDayEntryGate, offHoursManualAllowed } from "../services/indianMarket/entryGates.js";
 import { resolveIndianLeverage } from "../services/indianMarket/leverage.js";
 import { InstrumentMaster } from "../services/indianMarket/instrumentMaster.js";
 import { optionContracts } from "../services/indianMarket/angelOne/optionContracts.js";
@@ -417,6 +418,10 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
         message: "This endpoint has no real broker integration and cannot place a LIVE order. Use PAPER mode.",
       });
     }
+    if (process.env.NODE_ENV !== "test") {
+      const sess = manualSessionGate();
+      if (!sess.ok) return res.status(400).json({ error: sess.reason });
+    }
     const strategyId = sId || strategy;
     const userId = resolveIndianUserId(req.body.userId as string);
     const strat = StrategyEngine.getStrategy(strategyId as StrategyId);
@@ -455,7 +460,7 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
       regime,
     };
 
-    const accType = (underlying === "SENSEX" || underlying === "BSE") ? "INDIAN_BSE" : (underlying === "NIFTY" || underlying === "BANKNIFTY" || underlying === "NIFTY50") ? "INDIAN_NIFTY50" : "INDIAN_NSE";
+    const accType = (underlying === "SENSEX" || underlying === "BSE") ? "INDIAN_BSE" : (underlying === "NIFTY" || underlying === "BANKNIFTY" || underlying === "FINNIFTY" || underlying === "NIFTY50") ? "INDIAN_NIFTY50" : "INDIAN_NSE";
     // walletAccType tracks which account type `wallet` actually ends up
     // pointing at — the persisted Trade record below must use this (not a
     // hardcoded accountType) or closing this trade credits margin back to a
@@ -465,7 +470,9 @@ router.post("/execute-strategy", requirePermission("CREATE_ORDER"), async (req, 
     const trade = strat.constructTrade(signal, context, availableMargin, 1.0);
     trade.mode = mode as any;
 
-    const riskCheck = await IndianRiskManager.validateTrade(trade, availableMargin, availableMargin, userId, true, true);
+    // Market session is enforced for new entries (also checked up-front above); only the
+    // explicit off-hours override bypasses validateTrade's session + MIS-cutoff checks.
+    const riskCheck = await IndianRiskManager.validateTrade(trade, availableMargin, availableMargin, userId, offHoursManualAllowed(), true);
 
     if (!riskCheck.approved) {
       return res.status(400).json({ error: `RISK_REJECTED: ${riskCheck.rejectionReason}` });
@@ -792,6 +799,14 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
         message: "Emergency Panic Stop is currently ACTIVE. New orders are blocked.",
       });
     }
+
+    // New entries need an open session (trading day, 09:15-15:30 IST) unless explicitly overridden.
+    if (process.env.NODE_ENV !== "test") {
+      const sess = manualSessionGate();
+      if (!sess.ok) return res.status(400).json({ error: sess.reason });
+    }
+    const expiryGate = expiryDayEntryGate({ symbol });
+    if (!expiryGate.ok) return res.status(400).json({ error: expiryGate.reason });
 
     const config = INDIAN_SYMBOLS[symbol];
     if (!config) {

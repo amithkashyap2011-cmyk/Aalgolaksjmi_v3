@@ -8,6 +8,8 @@
  * before expiry (an option carried into its last days loses value fast and can expire
  * worthless or get assigned).
  */
+import { ExchangeCalendar } from "./exchangeCalendar.js";
+
 export type Period = "INTRADAY" | "POSITIONAL";
 export type Product = "MIS" | "CNC" | "NRML";
 
@@ -41,14 +43,16 @@ export function widenStops(i: { isLong: boolean; entry: number; sl: number; tp: 
 
 const IST_MS = 5.5 * 3_600_000;
 
-/** The date `days` weekdays before `iso` (YYYY-MM-DD). Holidays are not modelled. */
+/** The date `days` trading days (weekends and NSE holidays skipped) before `iso` (YYYY-MM-DD). */
 function weekdaysBefore(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   let left = days;
   while (left > 0) {
     d.setUTCDate(d.getUTCDate() - 1);
     const dow = d.getUTCDay();
-    if (dow !== 0 && dow !== 6) left--;
+    // 06:30Z = 12:00 IST, the same calendar day for the IST holiday lookup.
+    const isHoliday = ExchangeCalendar.isHoliday(new Date(`${d.toISOString().slice(0, 10)}T06:30:00Z`));
+    if (dow !== 0 && dow !== 6 && !isHoliday) left--;
   }
   return d.toISOString().slice(0, 10);
 }

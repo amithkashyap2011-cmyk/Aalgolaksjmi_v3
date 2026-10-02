@@ -14,6 +14,7 @@ import {
 import { IndianRiskSettings, IIndianRiskSettings } from "../../models/IndianRiskSettings.js";
 import { IndianMarketHours } from "../indianMarketHours.js";
 import { ExchangeCalendar } from "./exchangeCalendar.js";
+import { expiryDayEntryGate } from "./entryGates.js";
 import { IndianAuditLogger } from "./auditLogger.js";
 import * as paper from "../paperState.js";
 import { Trade } from "../../models/Trade.js";
@@ -401,6 +402,26 @@ export class IndianRiskManager {
     }
     checks["MARKET_HOURS"] = { passed: true, message: "Market session is active." };
 
+    // 3a. EXPIRY-DAY (0-DTE) ENTRY GATE + zero-size rejection (applies to every path, incl. manual)
+    const expiryGate = expiryDayEntryGate(trade);
+    if (!expiryGate.ok) {
+      checks["EXPIRY_DAY_ENTRY"] = { passed: false, message: expiryGate.reason };
+      IndianAuditLogger.log({
+        eventType: "RISK_REJECTED",
+        underlying: trade.underlying,
+        strategy: trade.strategy,
+        details: { tradeId: trade.tradeId },
+        reason: expiryGate.reason,
+      });
+      return { approved: false, rejectionReason: expiryGate.reason, checks };
+    }
+    checks["EXPIRY_DAY_ENTRY"] = { passed: true, message: "Contract does not expire today." };
+    if (!(trade.quantity > 0)) {
+      const reason = "POSITION_SIZE_ZERO: a single lot's max loss exceeds the per-trade risk cap";
+      checks["POSITION_SIZE"] = { passed: false, message: reason };
+      return { approved: false, rejectionReason: reason, checks };
+    }
+
     // 3b. INTRADAY MIS CUTOFF CHECK (15:10 IST)
     // Prevents fresh MIS entries in the final 20 minutes before market close,
     // avoiding collision with the mandatory 15:15 IST auto-square-off window.
@@ -683,7 +704,8 @@ export class IndianRiskManager {
     }
 
     // Trigger daily risk lock if daily loss exceeds configured amount
-    const effectiveMaxDailyLoss = Math.max(settings.maxDailyLossAmount || 25000, 25000);
+    // The user's configured limit wins; 25000 is only the default when none is set.
+    const effectiveMaxDailyLoss = settings.maxDailyLossAmount > 0 ? settings.maxDailyLossAmount : 25000;
     if (dailyPnL <= -effectiveMaxDailyLoss) {
       settings.dailyRiskLock = true;
       await settings.save();
