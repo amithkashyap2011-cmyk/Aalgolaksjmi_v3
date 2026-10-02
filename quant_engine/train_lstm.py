@@ -192,7 +192,7 @@ def train_lstm() -> dict:
             BACKUP_PATH.write_bytes(CHECKPOINT_PATH.read_bytes())
         if SCHEMA_PATH.exists():
             SCHEMA_BACKUP_PATH.write_bytes(SCHEMA_PATH.read_bytes())
-        torch.save(model.state_dict(), CHECKPOINT_PATH)
+        promotion_gate.atomic_save(CHECKPOINT_PATH, lambda t: torch.save(model.state_dict(), t))
         tmp = SCHEMA_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps({
             "FEATURE_NAMES": FEATURE_COLS, "SEQ_LEN": SEQ_LEN, "INPUT_VERSION": INPUT_VERSION,

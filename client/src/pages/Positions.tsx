@@ -105,7 +105,7 @@ export default function Positions() {
     if (tab !== "OPEN") return;
     const t = setInterval(() => load(true), 4000); // live PnL refresh (silent)
     return () => clearInterval(t);
-  }, [mode, tab, accountType]);
+  }, [userId, mode, tab, accountType]);
 
   const handleSaveLevel = async (tradeId: string, patch: { sl?: number; tp?: number }) => {
     await api.updateSlTp({ tradeId, ...patch }).catch(console.error);
