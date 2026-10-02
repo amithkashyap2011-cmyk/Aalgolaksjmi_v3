@@ -13,11 +13,11 @@
 import express from "express";
 import { AgentKernel } from "../services/agentic/AgentKernel.js";
 import { HumanOverrideMode } from "../services/agentic/types.js";
-import { optionalAuth, authGuard, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, type AuthRequest } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/rbac.js";
 
 const router = express.Router();
-router.use(optionalAuth);
+router.use(authGuard);
 
 /**
  * GET /api/agent-control/status

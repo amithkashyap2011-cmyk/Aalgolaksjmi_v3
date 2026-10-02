@@ -19,7 +19,9 @@ import { PromotionEvaluator } from "../services/championChallenger/promotionEval
 import { RollbackManager } from "../services/championChallenger/rollbackManager.js";
 import { DeploymentHistory } from "../models/DeploymentHistory.js";
 
+import { authAndAdminMutations } from "../middleware/auth.js";
 const router = Router();
+router.use(...authAndAdminMutations);
 
 // GET /api/models
 router.get("/", async (_req, res) => {

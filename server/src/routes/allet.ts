@@ -12,7 +12,7 @@ import { peakConcurrentCapital } from "../services/capitalPeak.js";
 import { dailyBreakdown } from "../services/dailyBreakdown.js";
 import { UITelemetryService } from "../services/uiTelemetry.js";
 import { Router } from "express";
-import { authGuard, adminGuard, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, adminGuard, optionalAuth, type AuthRequest } from "../middleware/auth.js";
 import { Settings } from "../models/Settings.js";
 import { Trade } from "../models/Trade.js";
 import { WalletSnapshot } from "../models/WalletSnapshot.js";
@@ -55,7 +55,7 @@ router.post("/weights-update", authGuard, adminGuard, async (req, res) => {
   }
 });
 
-router.get("/current-weights", authGuard, async (req: AuthRequest, res) => {
+router.get("/current-weights", optionalAuth, async (req: AuthRequest, res) => {
   try {
     let settings: any = null;
     if (mongoose.connection.readyState === 1 && req.userId) {
@@ -169,7 +169,7 @@ router.get("/current-weights", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/current-animal-weights", authGuard, async (req: AuthRequest, res) => {
+router.get("/current-animal-weights", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const klines = await binance.getKlines("BTCUSDT", "5m", undefined, undefined, 200);
     if (!klines || klines.length === 0) {
@@ -288,7 +288,7 @@ router.get("/current-animal-weights", authGuard, async (req: AuthRequest, res) =
   }
 });
 
-router.get("/market-check", authGuard, async (req: AuthRequest, res) => {
+router.get("/market-check", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbol = ((req.query.symbol as string) || "BTCUSDT").toUpperCase();
     const interval = (req.query.interval as string) || "5m";
@@ -482,11 +482,11 @@ router.get("/performance", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/live-decisions", authGuard, (_req, res) => {
+router.get("/live-decisions", optionalAuth, (_req, res) => {
   res.json({ decisions: UITelemetryService.getLatestDecisions(), now: Date.now() });
 });
 
-router.get("/ensemble-report", authGuard, async (req: AuthRequest, res) => {
+router.get("/ensemble-report", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbol = ((req.query.symbol as string) || "BTCUSDT").toUpperCase();
     const interval = (req.query.interval as string) || "5m";
@@ -541,7 +541,7 @@ router.get("/control/status", async (req, res) => {
 });
 
 /* ── get alerts ───────────────────────────────────────── */
-router.get("/alerts", authGuard, async (req: AuthRequest, res) => {
+router.get("/alerts", optionalAuth, async (req: AuthRequest, res) => {
   try {
     let alerts: any[] = [];
     
@@ -1244,7 +1244,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
 
 /* ── open positions ───────────────────────────────────── */
 
-router.get("/open-positions", authGuard, async (req: AuthRequest, res) => {
+router.get("/open-positions", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const mode = (req.query?.mode as string) || "PAPER";
     const accountType = req.query?.accountType as string;
@@ -1499,7 +1499,7 @@ router.post("/wallet/reset", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/wallet/allocate", authGuard, async (req: AuthRequest, res) => {
+router.post("/wallet/allocate", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const { spotAmount, futuresAmount } = req.body as { spotAmount: number; futuresAmount: number };
     const mode = (req.body?.mode as string) || "PAPER";
@@ -1903,7 +1903,7 @@ router.patch("/modify-position", authGuard, async (req: AuthRequest, res) => {
 
 /* ── HARD RESET — wipe all trades, positions, alerts and set wallet to 100 USDT ── */
 
-router.post("/hard-reset", authGuard, async (req: AuthRequest, res) => {
+router.post("/hard-reset", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const rawUserId = req.userId || "guest-user";
     const primaryUserId = rawUserId.toString();
@@ -2054,7 +2054,7 @@ router.get("/debug-state", authGuard, adminGuard, async (req: AuthRequest, res) 
   }
 });
 
-router.get("/spectral-regime", authGuard, async (req: AuthRequest, res) => {
+router.get("/spectral-regime", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const report = getRegimeReport();
     res.json(report);
@@ -2068,7 +2068,7 @@ const tickerPricesCache = new Map<string, { timestamp: number; data: any }>();
 const ticker24hrCache = new Map<string, { timestamp: number; data: any }>();
 
 /* ── get current ticker prices ──────────────────────────────── */
-router.get("/ticker-prices", authGuard, async (req: AuthRequest, res) => {
+router.get("/ticker-prices", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbolsQuery = (req.query.symbols as string | undefined) || "";
     const cacheKey = symbolsQuery || "DEFAULT";
@@ -2097,7 +2097,7 @@ router.get("/ticker-prices", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/ticker-24hr", authGuard, async (req: AuthRequest, res) => {
+router.get("/ticker-24hr", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const symbolsQuery = (req.query.symbols as string | undefined) || "";
     const cacheKey = symbolsQuery || "DEFAULT";
@@ -2135,7 +2135,7 @@ router.get("/ticker-24hr", authGuard, async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/leaderboard", authGuard, async (req: AuthRequest, res) => {
+router.get("/leaderboard", optionalAuth, async (req: AuthRequest, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;

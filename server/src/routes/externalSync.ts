@@ -40,12 +40,12 @@ router.get("/status", optionalAuth, async (req: AuthRequest, res) => {
   });
 });
 
-router.post("/time", async (_req, res) => {
+router.post("/time", authGuard, async (_req, res) => {
   await binance.syncTime();
   res.json({ ok: true, timeSync: binance.getTimeSyncInfo() });
 });
 
-router.post("/exchange-info", async (_req, res) => {
+router.post("/exchange-info", authGuard, async (_req, res) => {
   try {
     binance.invalidateExchangeInfoCache();
     const [spot, futures] = await Promise.all([

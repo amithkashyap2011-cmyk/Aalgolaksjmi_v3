@@ -18,7 +18,7 @@ import bcrypt from "bcrypt";
 import { z } from "zod";
 import { User } from "../models/User.js";
 import { Settings } from "../models/Settings.js";
-import { authGuard, signToken, type AuthRequest } from "../middleware/auth.js";
+import { authGuard, isLoopbackRequest, signToken, type AuthRequest } from "../middleware/auth.js";
 import fs from "node:fs";
 import path from "node:path";
 import mongoose from "mongoose";
@@ -80,6 +80,11 @@ router.post("/login", async (req, res) => {
     // Live DB Auth
     let user = await User.findOne({ email });
     const isProduction = process.env.NODE_ENV === "production";
+    // The well-known dev demo credentials must not work for LAN peers.
+    if (email === DEV_DEMO_EMAIL && !isLoopbackRequest(req)) {
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
     if (!user && !isProduction && email === DEV_DEMO_EMAIL && password === "123456") {
       await ensureDefaultDemoUser();
       user = await User.findOne({ email });

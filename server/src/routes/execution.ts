@@ -17,7 +17,9 @@ import { ExecutionAnalyticsService } from "../services/execution/executionAnalyt
 import { ReplayEngine } from "../services/execution/replayEngine.js";
 import { LatencyEngine } from "../services/execution/latencyEngine.js";
 
+import { authAndAdminMutations } from "../middleware/auth.js";
 const router = Router();
+router.use(...authAndAdminMutations);
 
 // GET /api/execution/shadow/trades
 router.get("/shadow/trades", async (_req, res) => {

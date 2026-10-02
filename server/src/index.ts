@@ -217,6 +217,7 @@ app.use(["/indian-market/execute", "/api/indian-market/execute"], orderPlacement
 app.use(["/trading/order", "/api/trading/order"], orderPlacementLimiter);
 app.use(["/indian-market/close-position", "/api/indian-market/close-position"], orderCancellationLimiter);
 app.use(["/trading/cancel", "/api/trading/cancel"], orderCancellationLimiter);
+app.use(["/wallet/withdraw", "/api/wallet/withdraw"], orderPlacementLimiter);
 app.use(["/agent-control", "/api/agent-control", "/agent", "/api/agent"], administrativeMutationLimiter);
 
 app.use(express.json());
@@ -542,7 +543,12 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     fs.appendFileSync(tradeLog, errorMsg);
   } catch {}
   console.error(errorMsg);
-  res.status(500).json({ error: "Internal Server Error", message: err.message });
+  const status = Number(err?.status ?? err?.statusCode);
+  const safeStatus = status >= 400 && status < 500 ? status : 500;
+  res.status(safeStatus).json({
+    error: safeStatus === 500 ? "Internal Server Error" : "Bad Request",
+    message: safeStatus === 500 && process.env.NODE_ENV === "production" ? "Internal Server Error" : err.message,
+  });
 });
 
 const server = http.createServer(app);
@@ -570,6 +576,7 @@ io.on("connection", (socket) => {
 
   socket.on("subscribe", (payload: string | { symbol: string; isFutures?: boolean }) => {
     if (!payload) return;
+    if (typeof payload !== "string" && (typeof payload !== "object" || typeof payload.symbol !== "string")) return;
     let symbol: string;
     let isFutures = false;
     if (typeof payload === "string") {
@@ -578,6 +585,7 @@ io.on("connection", (socket) => {
       symbol = payload.symbol;
       isFutures = !!payload.isFutures;
     }
+    if (typeof symbol !== "string" || !/^[A-Za-z0-9_.-]{1,24}$/.test(symbol)) return;
     log(`client ${socket.id} subscribing to ${symbol} (Futures: ${isFutures})`);
     clientTickers.add(`${symbol}|${isFutures ? 1 : 0}`);
     subscribeTicker(symbol, io, isFutures, `client:${socket.id}`);
@@ -585,6 +593,7 @@ io.on("connection", (socket) => {
 
   socket.on("unsubscribe", (payload: string | { symbol: string; isFutures?: boolean }) => {
     if (!payload) return;
+    if (typeof payload !== "string" && (typeof payload !== "object" || typeof payload.symbol !== "string")) return;
     let symbol: string;
     let isFutures = false;
     if (typeof payload === "string") {
