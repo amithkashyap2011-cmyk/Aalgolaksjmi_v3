@@ -9,7 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
-export const ORPHAN_JOURNAL_PATH = path.join(__dir, "..", "..", "logs", "orphan_live_fills.jsonl");
+// Overridable (tests); defaults to server/logs/orphan_live_fills.jsonl.
+export const ORPHAN_JOURNAL_PATH = process.env.LIVE_ORPHAN_JOURNAL_PATH || path.join(__dir, "..", "..", "logs", "orphan_live_fills.jsonl");
 
 export interface LiveFill {
   userId: string;
@@ -26,9 +27,49 @@ const blocked = new Set<string>();
 const key = (userId: string, symbol: string) => `${userId}:${symbol}`;
 export const isLiveEntryBlocked = (userId: string, symbol: string) => blocked.has(key(userId, symbol));
 export const blockLiveEntry = (userId: string, symbol: string) => { blocked.add(key(userId, symbol)); };
-/** Call after an operator has reconciled the exchange position with the DB. */
-export const clearLiveEntryBlock = (userId: string, symbol: string) => { blocked.delete(key(userId, symbol)); };
+export const listLiveEntryBlocks = (): Array<{ userId: string; symbol: string }> =>
+  [...blocked].map((k) => { const i = k.indexOf(":"); return { userId: k.slice(0, i), symbol: k.slice(i + 1) }; });
+
+/**
+ * Rebuild the entry blocks from the journal. The in-memory set alone was lost on every restart,
+ * silently re-allowing entries on a symbol that still has an unmanaged exchange position. Every
+ * orphan line blocks (userId, symbol); a later {"cleared":true} line for the same pair unblocks it.
+ */
+export function loadBlocksFromJournal(file: string = ORPHAN_JOURNAL_PATH): number {
+  try {
+    if (!fs.existsSync(file)) return 0;
+    const state = new Map<string, boolean>();
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const r = JSON.parse(line);
+        if (!r?.userId || !r?.symbol) continue;
+        state.set(key(String(r.userId), String(r.symbol)), r.cleared !== true);
+      } catch { /* skip a torn line */ }
+    }
+    for (const [k, isBlocked] of state) { if (isBlocked) blocked.add(k); else blocked.delete(k); }
+    return [...state.values()].filter(Boolean).length;
+  } catch (e: any) {
+    console.error(`[ORPHAN_LIVE_FILL] could not replay journal: ${e?.message}`);
+    return 0;
+  }
+}
+
+/** Call after an operator has reconciled the exchange position with the DB. Journaled, so it survives restarts. */
+export const clearLiveEntryBlock = (userId: string, symbol: string, by = "operator") => {
+  blocked.delete(key(userId, symbol));
+  try {
+    fs.mkdirSync(path.dirname(ORPHAN_JOURNAL_PATH), { recursive: true });
+    fs.appendFileSync(ORPHAN_JOURNAL_PATH, JSON.stringify({ userId, symbol, cleared: true, by, ts: new Date().toISOString() }) + "\n");
+  } catch (e: any) {
+    console.error(`[ORPHAN_LIVE_FILL] could not journal block clear: ${e?.message}`);
+  }
+};
 export const _resetLiveEntryBlocksForTest = () => blocked.clear();
+
+// Restore blocks at import time (server boot).
+const restoredBlocks = loadBlocksFromJournal();
+if (restoredBlocks > 0) console.warn(`[ORPHAN_LIVE_FILL] ${restoredBlocks} LIVE entry block(s) restored from the journal — reconcile the exchange position(s), then clear via POST /trading/live-orphans/clear`);
 
 /** Durable journal + CRITICAL audit/alert + entry block. Never throws. */
 export async function journalOrphanFill(fill: LiveFill, error: unknown): Promise<void> {

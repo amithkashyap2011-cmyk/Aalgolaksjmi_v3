@@ -23,7 +23,7 @@ import { User } from "../models/User.js";
 import { decrypt } from "../lib/crypto.js";
 import { AIDecision } from "../models/AIDecision.js";
 import { AqeaAudit } from "../models/AqeaAudit.js";
-import { isLiveEntryBlocked, placeWithFillConfirmation, recordLiveFillWithRetry, journalOrphanFill, isAmbiguousOrderError } from "../services/liveFillGuard.js";
+import { isLiveEntryBlocked, placeWithFillConfirmation, recordLiveFillWithRetry, journalOrphanFill, isAmbiguousOrderError, listLiveEntryBlocks, clearLiveEntryBlock, ORPHAN_JOURNAL_PATH } from "../services/liveFillGuard.js";
 import { AqeaPerformance } from "../models/AqeaPerformance.js";
 import { AqeaTradeAnalytics } from "../models/AqeaTradeAnalytics.js";
 import * as binance from "../services/binanceService.js";
@@ -1632,6 +1632,22 @@ router.post("/wallet/adjust", authGuard, adminGuard, async (req: AuthRequest, re
 /* ── close-position (manual market exit) ─────────────── */
 
 const liveCloseInFlight = new Set<string>();
+/* ── LIVE orphan-fill entry blocks (see services/liveFillGuard.ts) ───────────────
+ * An exchange fill whose DB record could not be written blocks new LIVE entries for that
+ * user+symbol until an operator reconciles the position. Admin-only. */
+router.get("/live-orphans", authGuard, adminGuard, (_req: AuthRequest, res) => {
+  res.json({ blocks: listLiveEntryBlocks(), journal: ORPHAN_JOURNAL_PATH });
+});
+
+router.post("/live-orphans/clear", authGuard, adminGuard, (req: AuthRequest, res) => {
+  const { userId, symbol } = req.body || {};
+  if (!userId || !symbol || typeof userId !== "string" || typeof symbol !== "string") {
+    return res.status(400).json({ error: "userId and symbol required" }) as any;
+  }
+  clearLiveEntryBlock(userId, symbol.toUpperCase(), `admin:${req.userId}`);
+  res.json({ success: true, blocks: listLiveEntryBlocks() });
+});
+
 router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
   let inFlightKey: string | null = null;
   try {
