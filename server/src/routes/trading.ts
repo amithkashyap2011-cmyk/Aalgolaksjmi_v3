@@ -23,6 +23,7 @@ import { User } from "../models/User.js";
 import { decrypt } from "../lib/crypto.js";
 import { AIDecision } from "../models/AIDecision.js";
 import { AqeaAudit } from "../models/AqeaAudit.js";
+import { isLiveEntryBlocked, placeWithFillConfirmation, recordLiveFillWithRetry, journalOrphanFill, isAmbiguousOrderError } from "../services/liveFillGuard.js";
 import { AqeaPerformance } from "../models/AqeaPerformance.js";
 import { AqeaTradeAnalytics } from "../models/AqeaTradeAnalytics.js";
 import * as binance from "../services/binanceService.js";
@@ -824,23 +825,33 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
         ? await binance.formatFuturesQuantity(symbol, quantity)
         : await binance.formatQuantity(symbol, quantity);
 
+      if (isLiveEntryBlocked(req.userId!, symbol)) {
+        return res.status(409).json({ error: `LIVE orders for ${symbol} are blocked: an earlier filled order has no DB record (orphan fill). Reconcile the exchange position first.` });
+      }
       let result;
       const clientOrderId = binance.genClientOrderId("aalgo-ord");
+      const fillCtx = { userId: req.userId!, symbol, side, accountType: accountType || "FUTURES", clientOrderId };
       if (accountType === "FUTURES") {
         try {
           await binance.setFuturesLeverage(apiKey, apiSecret, symbol, finalLeverage);
         } catch (err: any) {
           return res.status(400).json({ error: `Binance Futures Leverage Error: ${err.message}` });
         }
-        result = await binance.placeFuturesOrder(apiKey, apiSecret, {
-          symbol, side, type: "MARKET", quantity: finalQtyStr, clientOrderId,
-        });
+        result = await placeWithFillConfirmation(fillCtx,
+          () => binance.placeFuturesOrder(apiKey, apiSecret, {
+            symbol, side, type: "MARKET", quantity: finalQtyStr, clientOrderId,
+          }),
+          () => binance.queryFuturesOrder(apiKey, apiSecret, symbol, clientOrderId));
       } else {
         try {
-          result = await binance.placeOrder(apiKey, apiSecret, {
-            symbol, side, type: "MARKET", quantity: finalQtyStr, clientOrderId,
-          }) as any;
+          result = await placeWithFillConfirmation(fillCtx,
+            () => binance.placeOrder(apiKey, apiSecret, {
+              symbol, side, type: "MARKET", quantity: finalQtyStr, clientOrderId,
+            }) as Promise<any>,
+            () => binance.queryOrder(apiKey, apiSecret, symbol, clientOrderId));
         } catch (spotErr: any) {
+          // A timed-out/5xx order may have filled; Convert would double-trade.
+          if (isAmbiguousOrderError(spotErr)) throw spotErr;
           console.log(`[trading] Spot order book failed (${spotErr.message}). Attempting Binance Convert fallback...`);
           const baseAsset = symbol.replace("USDT", "");
           const fromAsset = side === "BUY" ? "USDT" : baseAsset;
@@ -905,6 +916,7 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
         // larger on the real exchange. This mirrors the exact fix already
         // proven for PAPER mode's place-order route, using the same lock.
         let realizedPnlForResponse = 0;
+        try {
         await paper.withWalletLock(req.userId!, "LIVE", accountType || "FUTURES", async () => {
           const existing = await Trade.findOne({ userId: toValidObjectId(req.userId), mode: "LIVE", symbol, accountType: accountType || "FUTURES", status: "OPEN" });
 
@@ -944,7 +956,9 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
             }
           } else {
             // New position
-            trade = await Trade.create({
+            trade = await recordLiveFillWithRetry(
+              { userId: req.userId!, symbol, side, qty: executedQty, avgPrice: actualEntryPrice, orderId: result.orderId, clientOrderId, accountType: accountType || "FUTURES" },
+              () => Trade.create({
               userId: toValidObjectId(req.userId),
               mode: "LIVE",
               symbol,
@@ -970,9 +984,17 @@ router.post("/place-order", authGuard, async (req: AuthRequest, res) => {
               shadowVotes: {},
               coreScore: 0,
               finalScore: 0,
-            });
+            }),
+              { existsFn: () => Trade.findOne({ userId: toValidObjectId(req.userId), mode: "LIVE", "meta.clientOrderId": clientOrderId }) as any },
+            );
           }
         });
+        } catch (dbErr: any) {
+          if (!dbErr?.orphanHandled) {
+            await journalOrphanFill({ userId: req.userId!, symbol, side, qty: executedQty, avgPrice: actualEntryPrice, orderId: result.orderId, clientOrderId, accountType: accountType || "FUTURES" }, dbErr);
+          }
+          throw dbErr;
+        }
         res.json({ trade: (trade as any).toObject(), pnl: realizedPnlForResponse, warnings: (req as any).orderWarnings ?? [] });
       } else {
         res.status(500).json({ error: "DB connection required for LIVE trading" });
@@ -1609,7 +1631,9 @@ router.post("/wallet/adjust", authGuard, adminGuard, async (req: AuthRequest, re
 
 /* ── close-position (manual market exit) ─────────────── */
 
+const liveCloseInFlight = new Set<string>();
 router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
+  let inFlightKey: string | null = null;
   try {
     const { tradeId, mode = "PAPER", force = false } = req.body;
     // Only known system reasons are accepted; anything else is a manual close.
@@ -1622,6 +1646,15 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
     // LIVE would send a real exchange order for a simulated position.
     const trade = await Trade.findOne({ _id: tradeId, userId: req.userId!, status: "OPEN", mode });
     if (!trade) return res.status(404).json({ error: "Open trade not found" }) as any;
+
+    if (mode === "LIVE") {
+      const k = `${req.userId}:${String(tradeId)}`;
+      if (liveCloseInFlight.has(k)) {
+        return res.status(409).json({ error: "A close for this position is already in progress" }) as any;
+      }
+      liveCloseInFlight.add(k);
+      inFlightKey = k;
+    }
 
     let exitPrice = trade.entryPrice;
     let pnl = 0;
@@ -1905,6 +1938,8 @@ router.post("/close-position", authGuard, async (req: AuthRequest, res) => {
     res.json({ success: true, exitPrice, pnl: +pnl.toFixed(4), symbol: trade.symbol });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  } finally {
+    if (inFlightKey) liveCloseInFlight.delete(inFlightKey);
   }
 });
 

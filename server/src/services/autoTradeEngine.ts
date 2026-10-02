@@ -14,6 +14,7 @@ import { Settings, type ISettings } from "../models/Settings.js";
 import { Trade } from "../models/Trade.js";
 import { Alert } from "../models/Alert.js";
 import { safeCreateAlert } from "./alertService.js";
+import { isLiveEntryBlocked, placeWithFillConfirmation, recordLiveFillWithRetry } from "./liveFillGuard.js";
 import { ApiKeys } from "../models/ApiKeys.js";
 import { decrypt } from "../lib/crypto.js";
 import mongoose from "mongoose";
@@ -1321,8 +1322,18 @@ export async function handleLong(
       const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
       const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
 
+      if (isLiveEntryBlocked(userId, symbol)) {
+        console.warn(`[TRADE_BLOCKED] ORPHAN_FILL_UNRECONCILED symbol=${symbol} user=${userId}`);
+        if (decisionId) {
+          ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", "LIVE entries blocked: unreconciled orphan fill", "REJECTED");
+        }
+        return;
+      }
       const clientOrderId = binance.genClientOrderId("aalgo-long");
       let result: any;
+      result = await placeWithFillConfirmation(
+        { userId, symbol, side: "BUY", accountType, clientOrderId },
+        async () => {
       if (accountType === "FUTURES") {
         checkExecutionDeadline();
         await binance.setFuturesLeverage(apiKey, apiSecret, symbol, leverage);
@@ -1334,20 +1345,30 @@ export async function handleLong(
         checkExecutionDeadline();
         result = await binance.placeOrder(apiKey, apiSecret, { symbol, side: "BUY", type: "MARKET", quantity: qtyStr, clientOrderId });
       }
+      return result;
+        },
+        () => accountType === "FUTURES"
+          ? binance.queryFuturesOrder(apiKey, apiSecret, symbol, clientOrderId)
+          : binance.queryOrder(apiKey, apiSecret, symbol, clientOrderId),
+      );
       const actualExecutedQty = parseFloat(result.executedQty || result.origQty || String(quantity));
       const entryPrice = result.avgPrice
         ? parseFloat(result.avgPrice)
         : parseFloat(result.cummulativeQuoteQty || result.cumQuote || "0") / (actualExecutedQty || 1);
 
       const userObjId = toValidObjectId(userId);
-      const trade = await Trade.create({
+      const trade = await recordLiveFillWithRetry(
+        { userId, symbol, side: "BUY", qty: actualExecutedQty, avgPrice: entryPrice, orderId: result.orderId, clientOrderId, accountType },
+        () => Trade.create({
         userId: userObjId, mode: "LIVE", symbol, side: "BUY", quantity: actualExecutedQty, entryPrice, leverage,
         sl: riskProfile.sl, tp: riskProfile.tp1, tp1: riskProfile.tp1, tp2: riskProfile.tp2, tp3: riskProfile.tp3,
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
         meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId, clientOrderId, binanceOrderId: result.orderId },
-      });
+      }),
+        { existsFn: () => Trade.findOne({ userId: userObjId, mode: "LIVE", "meta.clientOrderId": clientOrderId }) as any },
+      );
 
       paper.setPosition(userId, symbol, mode, { userId, symbol, side: "BUY", quantity: actualExecutedQty, entryPrice, tradeId: trade._id.toString(), accountType, leverage, sl: riskProfile.sl, tp: riskProfile.tp1, meta: trade.meta });
       
@@ -1607,8 +1628,18 @@ export async function handleShort(
       const apiKey = decrypt({ ciphertext: keys.encryptedKey, iv: keys.iv, authTag: keys.authTag });
       const apiSecret = decrypt({ ciphertext: keys.encryptedSecret, iv: keys.ivSecret, authTag: keys.authTagSecret });
 
+      if (isLiveEntryBlocked(userId, symbol)) {
+        console.warn(`[TRADE_BLOCKED] ORPHAN_FILL_UNRECONCILED symbol=${symbol} user=${userId}`);
+        if (decisionId) {
+          ForwardTelemetryStore.updateTerminalState(decisionId, "REJECTED", "LIVE entries blocked: unreconciled orphan fill", "REJECTED");
+        }
+        return;
+      }
       const clientOrderId = binance.genClientOrderId("aalgo-shrt");
       let result: any;
+      result = await placeWithFillConfirmation(
+        { userId, symbol, side: "SELL", accountType, clientOrderId },
+        async () => {
       if (accountType === "FUTURES") {
         checkExecutionDeadline();
         await binance.setFuturesLeverage(apiKey, apiSecret, symbol, leverage);
@@ -1620,20 +1651,30 @@ export async function handleShort(
         checkExecutionDeadline();
         result = await binance.placeOrder(apiKey, apiSecret, { symbol, side: "SELL", type: "MARKET", quantity: qtyStr, clientOrderId });
       }
+      return result;
+        },
+        () => accountType === "FUTURES"
+          ? binance.queryFuturesOrder(apiKey, apiSecret, symbol, clientOrderId)
+          : binance.queryOrder(apiKey, apiSecret, symbol, clientOrderId),
+      );
       const actualExecutedQty = parseFloat(result.executedQty || result.origQty || String(quantity));
       const entryPrice = result.avgPrice
         ? parseFloat(result.avgPrice)
         : parseFloat(result.cummulativeQuoteQty || result.cumQuote || "0") / (actualExecutedQty || 1);
 
       const userObjId = toValidObjectId(userId);
-      const trade = await Trade.create({
+      const trade = await recordLiveFillWithRetry(
+        { userId, symbol, side: "SELL", qty: actualExecutedQty, avgPrice: entryPrice, orderId: result.orderId, clientOrderId, accountType },
+        () => Trade.create({
         userId: userObjId, mode: "LIVE", symbol, side: "SELL", quantity: actualExecutedQty, entryPrice, leverage,
         sl: riskProfile.sl, tp: riskProfile.tp1, tp1: riskProfile.tp1, tp2: riskProfile.tp2, tp3: riskProfile.tp3,
         qualityScore: aqeaDecision.confidence * 100, aiConfidence: aqeaDecision.confidence,
         aiReasoning: riskProfile.reason, marketRegime: decisionPath.regime, strategy: "AQEA_V33", status: "OPEN", accountType,
         entrySource, decisionPath, authorizedVotes, shadowVotes, coreScore: decisionPath.coreScore, finalScore: decisionPath.finalScore,
         meta: { ...aqeaDecision.meta, aqea: aqeaMeta, decisionId, clientOrderId, binanceOrderId: result.orderId },
-      });
+      }),
+        { existsFn: () => Trade.findOne({ userId: userObjId, mode: "LIVE", "meta.clientOrderId": clientOrderId }) as any },
+      );
 
       paper.setPosition(userId, symbol, mode, { userId, symbol, side: "SELL", quantity: actualExecutedQty, entryPrice, tradeId: trade._id.toString(), accountType, leverage, sl: riskProfile.sl, tp: riskProfile.tp1, meta: trade.meta });
       
