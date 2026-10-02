@@ -457,12 +457,13 @@ describe("AALGOLAKSHMI V3 — Final Production Hardening & Operations Audit", ()
       expect(status.cryptoSession.isOpen).toBe(true);
     });
 
-    test("Detects Milad-un-Nabi 2026-09-14 as an official statutory holiday", () => {
+    test("Detects Ganesh Chaturthi 2026-09-14 as an official statutory holiday", () => {
       const holidayDate = new Date("2026-09-14T05:00:00.000Z"); // 10:30 AM IST
       const session = AuthoritativeTimeService.getIndianSessionStatus(holidayDate);
 
       expect(session.isHoliday).toBe(true);
-      expect(session.holidayName).toContain("Milad-un-Nabi");
+      // NSE 2026 holiday list: 14 Sep is Ganesh Chaturthi (Milad-un-Nabi 2026 falls in late August).
+      expect(session.holidayName).toContain("Ganesh Chaturthi");
       expect(session.isOpen).toBe(false);
     });
   });

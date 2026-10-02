@@ -28,31 +28,24 @@ export const OFFICIAL_NSE_HOLIDAYS: Record<string, string> = {
   "2025-11-05": "Guru Nanak Jayanti",
   "2025-12-25": "Christmas",
 
-  // 2026 Statutory & Recognized Exchange Holidays
+  // 2026 NSE trading holidays (official list). Invented "(Observed)" entries — Mar 8/20/25, Apr 18,
+  // Sep 4, Oct 24, Nov 9/12/26 — were removed: Nov 9/12/26 are normal trading days (Diwali Laxmi Pujan
+  // is a Sunday Muhurat session on Nov 8; Guru Nanak Jayanti is Nov 24) and would have blocked them.
   "2026-01-26": "Republic Day",
   "2026-03-03": "Holi",
-  "2026-03-08": "Maha Shivratri (Observed)",
-  "2026-03-20": "Holi",
-  "2026-03-25": "Holi (Observed)",
   "2026-03-26": "Ram Navami",
   "2026-03-31": "Mahavir Jayanti",
   "2026-04-03": "Good Friday",
   "2026-04-14": "Dr. Ambedkar Jayanti",
-  "2026-04-18": "Good Friday (Observed)",
   "2026-05-01": "Maharashtra Day",
   "2026-05-28": "Bakri Id / Eid ul-Adha",
   "2026-06-26": "Muharram",
   "2026-08-15": "Independence Day",
-  "2026-09-04": "Janmashtami",
   "2026-09-14": "Ganesh Chaturthi",
   "2026-10-02": "Mahatma Gandhi Jayanti",
   "2026-10-20": "Dussehra",
-  "2026-10-24": "Dussehra (Observed)",
-  "2026-11-09": "Diwali - Laxmi Pujan",
   "2026-11-10": "Diwali - Balipratipada",
-  "2026-11-12": "Diwali (Observed)",
   "2026-11-24": "Guru Nanak Jayanti",
-  "2026-11-26": "Guru Nanak Jayanti (Observed)",
   "2026-12-25": "Christmas",
 
   // 2027 Statutory Holidays
