@@ -552,6 +552,12 @@ async function executeBuildEnsembleReport(
 
   /** Health-gated voting weight for a quant-engine-backed model: its registry
    *  weight when enabled AND the backing checkpoint is HEALTHY, else 0. */
+  /** Why a model is not voting: shadow-only (registry weight 0) is not the same as a degraded checkpoint. */
+  const inactiveReason = (registryId: string): string =>
+    (registryWeights[registryId] ?? 0) <= 0
+      ? "shadow-only (registry weight 0) — still runs and is graded, does not vote"
+      : "checkpoint DEGRADED/stub/missing per /health/models";
+
   const gatedWeight = (registryId: string, healthKey: QuantModelKey): number => {
     if (!enabledIds.has(registryId)) return 0;
     // A registry weight of 0 (shadow-only / demoted) is final — the MoE re-weighting must not
@@ -622,7 +628,7 @@ async function executeBuildEnsembleReport(
           .catch(() => gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "quant-engine CNN call failed")),
       );
     } else if (enabledIds.has("cnn")) {
-      models.push(gatedPlaceholder("cnn-1d", "DEEP_LEARNING", "checkpoint DEGRADED/stub/missing per /health/models"));
+      models.push(gatedPlaceholder("cnn-1d", "DEEP_LEARNING", inactiveReason("cnn")));
     }
   }
 
@@ -638,7 +644,7 @@ async function executeBuildEnsembleReport(
           .catch(() => gatedPlaceholder("lstm-bilstm", "DEEP_LEARNING", "quant-engine LSTM call failed")),
       );
     } else if (enabledIds.has("lstm-bilstm")) {
-      models.push(gatedPlaceholder("lstm-bilstm", "DEEP_LEARNING", "checkpoint DEGRADED/stub/missing per /health/models"));
+      models.push(gatedPlaceholder("lstm-bilstm", "DEEP_LEARNING", inactiveReason("lstm-bilstm")));
     }
   }
 
@@ -669,7 +675,7 @@ async function executeBuildEnsembleReport(
           .catch(() => gatedPlaceholder("ppo-execution", "REINFORCEMENT", "quant-engine PPO call failed")),
       );
     } else if (enabledIds.has("ppo-agent")) {
-      models.push(gatedPlaceholder("ppo-execution", "REINFORCEMENT", "checkpoint DEGRADED/stub/missing per /health/models"));
+      models.push(gatedPlaceholder("ppo-execution", "REINFORCEMENT", inactiveReason("ppo-agent")));
     }
   }
 
@@ -692,7 +698,7 @@ async function executeBuildEnsembleReport(
           .catch(() => gatedPlaceholder("transformer-micro", "DEEP_LEARNING", "quant-engine transformer call failed")),
       );
     } else if (enabledIds.has("transformer")) {
-      models.push(gatedPlaceholder("transformer-micro", "DEEP_LEARNING", "checkpoint DEGRADED/stub/missing per /health/models"));
+      models.push(gatedPlaceholder("transformer-micro", "DEEP_LEARNING", inactiveReason("transformer")));
     }
   }
 
