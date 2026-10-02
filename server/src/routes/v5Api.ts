@@ -11,6 +11,7 @@
  */
 
 import { Router } from "express";
+import { authAndAdminMutations } from "../middleware/auth.js";
 import { StrategyRegistryService } from "../services/v5/strategyRegistryService.js";
 import { StrategySelectorEngine } from "../services/v5/strategySelectorEngine.js";
 import { MultiStrategyEngine } from "../services/v5/multiStrategyEngine.js";
@@ -18,6 +19,9 @@ import { StrategyPerformance } from "../models/StrategyPerformance.js";
 import { StrategyRegistry } from "../models/StrategyRegistry.js";
 
 const router = Router();
+
+// Previously unauthenticated: require identity (loopback operator or JWT); mutations need ADMIN.
+router.use(...authAndAdminMutations);
 
 // GET /api/v5/strategies or /api/strategies
 router.get(["/strategies", "/"], async (req, res, next) => {

@@ -1,7 +1,11 @@
 import { Router } from "express";
+import { authAndAdminMutations } from "../middleware/auth.js";
 import { Trade } from "../models/Trade.js";
 
 const router = Router();
+
+// Previously unauthenticated: require identity (loopback operator or JWT); mutations need ADMIN.
+router.use(...authAndAdminMutations);
 
 // Simple in-memory cache
 let statsCache: any = null;

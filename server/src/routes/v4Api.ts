@@ -13,6 +13,7 @@
  */
 
 import { Router } from "express";
+import { authAndAdminMutations } from "../middleware/auth.js";
 import { MetaDecisionService } from "../services/v4/metaDecisionService.js";
 import { MarketRegimeEngine } from "../services/v4/marketRegimeEngine.js";
 import { PortfolioOptimizer } from "../services/v4/portfolioOptimizer.js";
@@ -22,6 +23,9 @@ import { EmbeddingService } from "../services/v4/embeddingService.js";
 import { TradeQualityLog } from "../models/TradeQualityLog.js";
 
 const router = Router();
+
+// Previously unauthenticated: require identity (loopback operator or JWT); mutations need ADMIN.
+router.use(...authAndAdminMutations);
 
 // POST /api/v4/meta-decision
 router.post("/meta-decision", async (req, res) => {

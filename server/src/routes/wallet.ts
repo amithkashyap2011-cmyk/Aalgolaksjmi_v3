@@ -708,9 +708,11 @@ router.post("/deposit/upi", authGuard, async (req: AuthRequest, res) => {
 
         // credit USDT to wallet
         const mode = "PAPER"; // deposits go to paper wallet for now
-        const wallet = paper.getWallet(req.userId!, mode, accountType as any);
-        const current = wallet.get("USDT") ?? 0;
-        paper.setWalletBalance(req.userId!, mode, "USDT", current + usdtAmount, accountType as any);
+        // Read-modify-write under the wallet lock, re-reading the balance inside it.
+        await paper.withWalletLock(req.userId!, mode, accountType, async () => {
+          const current = paper.getWallet(req.userId!, mode, accountType as any).get("USDT") ?? 0;
+          await paper.setWalletBalance(req.userId!, mode, "USDT", current + usdtAmount, accountType as any);
+        });
       } catch { /* log error */ }
     }, 2000);
 
@@ -804,41 +806,39 @@ router.post("/withdraw/upi", authGuard, async (req: AuthRequest, res) => {
     // race). With no intervening await, the read-then-write is atomic under
     // Node's single-threaded event loop.
     const rate = await getUsdtInrRate();
-    const wallet = paper.getWallet(req.userId!, mode, accountType as any);
-    const current = wallet.get("USDT") ?? 0;
-    if (usdtAmount > current) {
-      res.status(400).json({ error: `Insufficient balance. Available: ${current.toFixed(2)} USDT` });
-      return;
-    }
-
     const inrAmount = +(usdtAmount * rate).toFixed(2);
 
-    // Debit immediately
-    paper.setWalletBalance(req.userId!, mode, "USDT", current - usdtAmount, accountType as any);
-
-    // If the transaction record fails to write, the debit above must not
-    // silently stand with nothing to show for it — same refund-on-failure
-    // pattern already proven for manual trade placement earlier this
-    // session, applied here for the same reason.
-    let txn;
-    try {
-      txn = await WalletTransaction.create({
-        userId: req.userId,
-        type: "WITHDRAW",
-        method: "UPI",
-        amount: inrAmount,
-        currency: "INR",
-        status: "PENDING",
-        upiId,
-        txnRef: `WD${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-        note: `Withdraw ${usdtAmount} USDT → ₹${inrAmount} @ ₹${rate}/USDT`,
-        accountType,
-      });
-    } catch (createErr: any) {
-      const refundWallet = paper.getWallet(req.userId!, mode, accountType as any);
-      paper.setWalletBalance(req.userId!, mode, "USDT", (refundWallet.get("USDT") ?? 0) + usdtAmount, accountType as any);
-      throw createErr;
+    // Check funds, debit and record under the wallet lock (balance re-read inside it).
+    // If the transaction record fails to write, the debit is refunded.
+    const outcome = await paper.withWalletLock(req.userId!, mode, accountType, async () => {
+      const current = paper.getWallet(req.userId!, mode, accountType as any).get("USDT") ?? 0;
+      if (usdtAmount > current) return { insufficient: current } as const;
+      await paper.setWalletBalance(req.userId!, mode, "USDT", current - usdtAmount, accountType as any);
+      try {
+        const created = await WalletTransaction.create({
+          userId: req.userId,
+          type: "WITHDRAW",
+          method: "UPI",
+          amount: inrAmount,
+          currency: "INR",
+          status: "PENDING",
+          upiId,
+          txnRef: `WD${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+          note: `Withdraw ${usdtAmount} USDT → ₹${inrAmount} @ ₹${rate}/USDT`,
+          accountType,
+        });
+        return { txn: created } as const;
+      } catch (createErr) {
+        const cur = paper.getWallet(req.userId!, mode, accountType as any).get("USDT") ?? 0;
+        await paper.setWalletBalance(req.userId!, mode, "USDT", cur + usdtAmount, accountType as any);
+        throw createErr;
+      }
+    });
+    if ("insufficient" in outcome) {
+      res.status(400).json({ error: `Insufficient balance. Available: ${outcome.insufficient.toFixed(2)} USDT` });
+      return;
     }
+    const txn = outcome.txn;
 
     // Simulated settlement (PAPER only). Real INR payouts go through the
     // mode === "LIVE" RazorpayX branch above.
@@ -942,41 +942,39 @@ router.post("/withdraw/crypto", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
-    const wallet = paper.getWallet(req.userId!, mode, accountType as any);
-    const current = wallet.get("USDT") ?? 0; // fallback to USDT for simulated balancing
-
-    if (symbol === "USDT" && amount > current) {
-      res.status(400).json({ error: `Insufficient balance. Available: ${current.toFixed(2)} USDT` });
+    const outcome = await paper.withWalletLock(req.userId!, mode, accountType, async () => {
+      const current = paper.getWallet(req.userId!, mode, accountType as any).get("USDT") ?? 0; // USDT-only simulated balance
+      if (symbol === "USDT" && amount > current) return { insufficient: current } as const;
+      if (symbol === "USDT") {
+        await paper.setWalletBalance(req.userId!, mode, "USDT", current - amount, accountType as any);
+      }
+      // Refund-on-failure: the debit must not stand if the record write fails.
+      try {
+        const created = await WalletTransaction.create({
+          userId: req.userId,
+          type: "WITHDRAW_CRYPTO",
+          method: "CRYPTO",
+          amount,
+          currency: symbol,
+          status: "PENDING",
+          txnRef: `CRYPTO${Date.now()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+          note: `Withdraw ${amount} ${symbol} to ${address} via ${network} network`,
+          accountType,
+        });
+        return { txn: created } as const;
+      } catch (createErr) {
+        if (symbol === "USDT") {
+          const cur = paper.getWallet(req.userId!, mode, accountType as any).get("USDT") ?? 0;
+          await paper.setWalletBalance(req.userId!, mode, "USDT", cur + amount, accountType as any);
+        }
+        throw createErr;
+      }
+    });
+    if ("insufficient" in outcome) {
+      res.status(400).json({ error: `Insufficient balance. Available: ${outcome.insufficient.toFixed(2)} USDT` });
       return;
     }
-
-    // lock or debit
-    if (symbol === "USDT") {
-      paper.setWalletBalance(req.userId!, mode, "USDT", current - amount, accountType as any);
-    }
-
-    // Same refund-on-failure pattern as withdraw/upi above — the debit
-    // must not stand with nothing to show for it if the record write fails.
-    let txn;
-    try {
-      txn = await WalletTransaction.create({
-        userId: req.userId,
-        type: "WITHDRAW_CRYPTO",
-        method: "CRYPTO",
-        amount,
-        currency: symbol,
-        status: "PENDING",
-        txnRef: `CRYPTO${Date.now()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
-        note: `Withdraw ${amount} ${symbol} to ${address} via ${network} network`,
-        accountType,
-      });
-    } catch (createErr: any) {
-      if (symbol === "USDT") {
-        const refundWallet = paper.getWallet(req.userId!, mode, accountType as any);
-        paper.setWalletBalance(req.userId!, mode, "USDT", (refundWallet.get("USDT") ?? 0) + amount, accountType as any);
-      }
-      throw createErr;
-    }
+    const txn = outcome.txn;
 
     // simulate completion
     setTimeout(async () => {
@@ -1035,37 +1033,36 @@ router.post("/p2p/create", authGuard, async (req: AuthRequest, res) => {
       return;
     }
 
-    // check seller has enough balance
-    const wallet = paper.getWallet(req.userId!, "PAPER");
-    const current = wallet.get("USDT") ?? 0;
-    if (usdtAmount > current) {
-      res.status(400).json({ error: `Insufficient balance. Available: ${current.toFixed(2)} USDT` });
+    // Check funds + lock the USDT + record the offer under the wallet lock.
+    const outcome = await paper.withWalletLock(req.userId!, "PAPER", "FUTURES", async () => {
+      const current = paper.getWallet(req.userId!, "PAPER").get("USDT") ?? 0;
+      if (usdtAmount > current) return { insufficient: current } as const;
+      await paper.setWalletBalance(req.userId!, "PAPER", "USDT", current - usdtAmount);
+      // Refund-on-failure: the lock must not stand with no sell offer to show for it.
+      try {
+        const created = await WalletTransaction.create({
+          userId: req.userId,
+          type: "P2P_SELL",
+          method: "P2P",
+          amount: usdtAmount,
+          currency: "USDT",
+          status: "PENDING",
+          p2pPrice: pricePerUsdt,
+          note: `Selling ${usdtAmount} USDT @ ₹${pricePerUsdt}/USDT`,
+          accountType: "FUTURES",
+        });
+        return { offer: created } as const;
+      } catch (createErr) {
+        const cur = paper.getWallet(req.userId!, "PAPER").get("USDT") ?? 0;
+        await paper.setWalletBalance(req.userId!, "PAPER", "USDT", cur + usdtAmount);
+        throw createErr;
+      }
+    });
+    if ("insufficient" in outcome) {
+      res.status(400).json({ error: `Insufficient balance. Available: ${outcome.insufficient.toFixed(2)} USDT` });
       return;
     }
-
-    // lock the USDT
-    paper.setWalletBalance(req.userId!, "PAPER", "USDT", current - usdtAmount);
-
-    // Same refund-on-failure pattern as the withdraw routes — the lock
-    // must not stand with no sell offer to show for it if this fails.
-    let offer;
-    try {
-      offer = await WalletTransaction.create({
-        userId: req.userId,
-        type: "P2P_SELL",
-        method: "P2P",
-        amount: usdtAmount,
-        currency: "USDT",
-        status: "PENDING",
-        p2pPrice: pricePerUsdt,
-        note: `Selling ${usdtAmount} USDT @ ₹${pricePerUsdt}/USDT`,
-        accountType: "FUTURES",
-      });
-    } catch (createErr: any) {
-      const refundWallet = paper.getWallet(req.userId!, "PAPER");
-      paper.setWalletBalance(req.userId!, "PAPER", "USDT", (refundWallet.get("USDT") ?? 0) + usdtAmount);
-      throw createErr;
-    }
+    const offer = outcome.offer;
 
     res.json({ offer, message: `P2P sell offer created: ${usdtAmount} USDT @ ₹${pricePerUsdt}` });
   } catch (err: any) {
@@ -1100,9 +1097,11 @@ router.post("/p2p/buy", authGuard, async (req: AuthRequest, res) => {
     const usdtAmount = offer.amount;
 
     // credit buyer
-    const buyerWallet = paper.getWallet(req.userId!, "PAPER");
-    const buyerBalance = buyerWallet.get("USDT") ?? 0;
-    paper.setWalletBalance(req.userId!, "PAPER", "USDT", buyerBalance + usdtAmount);
+    const buyerBalance = await paper.withWalletLock(req.userId!, "PAPER", "FUTURES", async () => {
+      const bal = paper.getWallet(req.userId!, "PAPER").get("USDT") ?? 0;
+      await paper.setWalletBalance(req.userId!, "PAPER", "USDT", bal + usdtAmount);
+      return bal;
+    });
 
     // record buy side
     await WalletTransaction.create({

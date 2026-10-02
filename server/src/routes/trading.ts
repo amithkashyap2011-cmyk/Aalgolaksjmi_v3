@@ -1565,20 +1565,28 @@ router.post("/wallet/allocate", authGuard, async (req: AuthRequest, res) => {
    positions. Unlike /wallet/reset (which wipes positions), this only nudges
    the free USDT balance for one account type, e.g. to correct drift found
    by an audit. Every adjustment is logged as a WalletTransaction. ── */
-router.post("/wallet/adjust", authGuard, async (req: AuthRequest, res) => {
+router.post("/wallet/adjust", authGuard, adminGuard, async (req: AuthRequest, res) => {
   try {
     const { delta, mode = "PAPER", accountType = "FUTURES", note } = req.body;
+    // LIVE balances come from the exchange; this endpoint only edits the PAPER ledger.
+    if (mode !== "PAPER") {
+      return res.status(400).json({ error: "wallet/adjust only supports mode=PAPER" }) as any;
+    }
     if (typeof delta !== "number" || !Number.isFinite(delta)) {
       return res.status(400).json({ error: "delta (finite number) is required" }) as any;
     }
 
-    const wallet = paper.getWallet(req.userId!, mode, accountType);
-    const prev = wallet.get("USDT") ?? 0;
-    const next = prev + delta;
-    if (next < 0) {
+    const adj = await paper.withWalletLock(req.userId!, mode, accountType, async () => {
+      const prev = paper.getWallet(req.userId!, mode, accountType).get("USDT") ?? 0;
+      const next = prev + delta;
+      if (next < 0) return { prev, next, rejected: true } as const;
+      await paper.setWalletBalance(req.userId!, mode, "USDT", next, accountType);
+      return { prev, next, rejected: false } as const;
+    });
+    const { prev, next } = adj;
+    if (adj.rejected) {
       return res.status(400).json({ error: `Adjustment would make the balance negative (${prev.toFixed(4)} ${delta})` }) as any;
     }
-    await paper.setWalletBalance(req.userId!, mode, "USDT", next, accountType);
 
     if (mongoose.connection.readyState === 1) {
       await WalletTransaction.create({

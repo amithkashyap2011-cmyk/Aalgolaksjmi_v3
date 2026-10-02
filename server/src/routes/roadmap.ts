@@ -7,6 +7,7 @@
  */
 
 import { Router } from "express";
+import { authAndAdminMutations } from "../middleware/auth.js";
 import { PortfolioOptimizationEngine } from "../services/institutionalRoadmap/portfolioOptimizationEngine.js";
 import { MicrostructureEngine } from "../services/institutionalRoadmap/microstructureEngine.js";
 import { SystemMonitoringEngine } from "../services/institutionalRoadmap/systemMonitoringEngine.js";
@@ -14,6 +15,9 @@ import { ProductionOpsManager } from "../services/institutionalRoadmap/productio
 import { InstitutionalCertificationEngine } from "../services/institutionalRoadmap/institutionalCertificationEngine.js";
 
 const router = Router();
+
+// Previously unauthenticated: require identity (loopback operator or JWT); mutations need ADMIN.
+router.use(...authAndAdminMutations);
 
 // GET /api/institutional/roadmap
 router.get("/roadmap", (_req, res) => {

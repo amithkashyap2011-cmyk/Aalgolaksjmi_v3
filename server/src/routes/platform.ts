@@ -5,11 +5,25 @@
  */
 
 import { Router } from "express";
+import { authAndAdminMutations } from "../middleware/auth.js";
 import { PlatformTelemetry } from "../services/platformTelemetry.js";
 import { DependencyAudit } from "../services/dependencyAudit.js";
 import { SecurityAudit } from "../services/securityAuditReport.js";
 
 const router = Router();
+
+// Previously unauthenticated. /platform/health stays open as a liveness probe;
+// everything else needs identity (loopback operator or JWT), mutations ADMIN.
+router.use((req, res, next) => {
+  if (req.path === "/health") return next();
+  return (authAndAdminMutations[0] as any)(req, res, (err?: any) => {
+    if (err) return next(err);
+    (authAndAdminMutations[1] as any)(req, res, (e2?: any) => {
+      if (e2) return next(e2);
+      (authAndAdminMutations[2] as any)(req, res, next);
+    });
+  });
+});
 
 /**
  * GET /platform/health
