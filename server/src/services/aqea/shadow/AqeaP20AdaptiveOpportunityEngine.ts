@@ -472,8 +472,8 @@ export class AqeaP20MultiHorizonEngine {
     return {
       takeProfitMultiplier: tpMult,
       stopLossMultiplier: slMult,
-      takeProfitPrice: Number(takeProfitPrice.toFixed(2)),
-      stopLossPrice: Number(stopLossPrice.toFixed(2)),
+      takeProfitPrice: Number(takeProfitPrice.toPrecision(8)),
+      stopLossPrice: Number(stopLossPrice.toPrecision(8)),
       rewardRiskRatio,
       expectedDurationBars: selectedHorizon.horizonBars,
       optimalHorizon: selectedHorizon.horizonBars

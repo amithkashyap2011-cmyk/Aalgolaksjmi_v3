@@ -147,7 +147,8 @@ export class IndianRiskManager {
         // had passed. A DAILY lock needs an actual daily rollover: reset it
         // (and the consecutive-loss counter) the first time settings are
         // loaded on a new calendar day.
-        const today = new Date().toISOString().slice(0, 10);
+        // IST trading day (same key as the daily PnL buckets) — the UTC date rolled over at 05:30 IST.
+        const today = this.istDayKey();
         if (doc.lastDailyResetDate !== today) {
           const previousResetDate = doc.lastDailyResetDate;
           doc.lastDailyResetDate = today;
