@@ -1,7 +1,8 @@
 // PM2 process manifest — the ONE supported way to run AALGOLAKSHMI.
 //
 //   pm2 start ecosystem.config.js     # start both tiers (single instances)
-//   pm2 restart aqea-server           # after editing server code
+//   npm run deploy                    # after editing code: build server + client, restart both
+//   pm2 restart aqea-server           # restart only (does NOT rebuild — run `npm run build:server` first)
 //   pm2 logs / pm2 status / pm2 stop all
 //
 // Do NOT also run `npm run dev` — PM2 keeps exactly one server + one quant engine
@@ -11,10 +12,11 @@ module.exports = {
   apps: [
     {
       name: 'aqea-server',
-      // Run TypeScript directly via tsx (no build step). PM2 — not tsx watch —
-      // owns restarts, so there is always exactly one instance.
-      script: './node_modules/.bin/tsx',
-      args: 'src/index.ts',
+      // Runs the COMPILED server (server/dist, built by `npm run build:server`) with plain
+      // Node: no runtime TypeScript transpile (saves ~100 MB of resident memory on this
+      // 8 GB machine and cuts restart time). PM2 owns restarts, so there is always
+      // exactly one instance. After changing server code you must rebuild first.
+      script: 'dist/index.js',
       cwd: './server',
       instances: 1,
       exec_mode: 'fork',
@@ -81,10 +83,12 @@ module.exports = {
     },
     {
       name: 'aqea-client',
-      // Vite dev server (port 9994, see client/vite.config). Proxies /auth,
-      // /trading, /aqea-ui, etc. to the server on :9991.
+      // Production client: serves client/dist (built by `npm run build:client`) with
+      // `vite preview` on port 9994 — same port and the same /auth, /trading, /aqea-ui,
+      // /socket.io ... proxy to the server on :9991 as the dev server (vite.config).
+      // No HMR/file watching, so it is far lighter than `vite` dev.
       script: 'npm',
-      args: 'run dev',
+      args: 'run preview -- --host 0.0.0.0 --port 9994 --strictPort',
       cwd: './client',
       instances: 1,
       exec_mode: 'fork',

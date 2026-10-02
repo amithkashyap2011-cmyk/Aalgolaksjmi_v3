@@ -9,6 +9,7 @@
     "build": "npm run build:client && npm run build:server",
     "build:client": "cd client && npm run build",
     "build:server": "cd server && npm run build",
+    "deploy": "npm run build && pm2 restart aqea-server aqea-client",
     "install:all": "cd client && npm install && cd ../server && npm install",
     "typecheck": "cd client && npx tsc --noEmit && cd ../server && npx tsc --noEmit",
     "test": "npm run test:server && npm run test:client",

@@ -178,7 +178,9 @@ export class InstrumentMaster {
     const base = this.staticSpec(norm, underlying);
     // Live exchange lot wins over the static table (which drifts).
     const live = exchangeLotSize(norm);
-    if (!live) warnStaticLotOnce(norm, base.lotSize);
+    // Only for real underlyings: composite names (KOTAKBANK_BULL_CALL_SPREAD) and individual option
+    // contract symbols also reach getSpec and would each log a meaningless 'static lot' warning.
+    if (!live && (UNDERLYING_SPECS[norm] || INDIAN_SYMBOLS[norm])) warnStaticLotOnce(norm, base.lotSize);
     return live && live !== base.lotSize ? { ...base, lotSize: live } : base;
   }
 
