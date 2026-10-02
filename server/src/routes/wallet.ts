@@ -835,7 +835,7 @@ router.post("/withdraw/upi", authGuard, async (req: AuthRequest, res) => {
       }
     });
     if ("insufficient" in outcome) {
-      res.status(400).json({ error: `Insufficient balance. Available: ${outcome.insufficient.toFixed(2)} USDT` });
+      res.status(400).json({ error: `Insufficient balance. Available: ${(outcome.insufficient ?? 0).toFixed(2)} USDT` });
       return;
     }
     const txn = outcome.txn;
@@ -971,7 +971,7 @@ router.post("/withdraw/crypto", authGuard, async (req: AuthRequest, res) => {
       }
     });
     if ("insufficient" in outcome) {
-      res.status(400).json({ error: `Insufficient balance. Available: ${outcome.insufficient.toFixed(2)} USDT` });
+      res.status(400).json({ error: `Insufficient balance. Available: ${(outcome.insufficient ?? 0).toFixed(2)} USDT` });
       return;
     }
     const txn = outcome.txn;
@@ -1059,7 +1059,7 @@ router.post("/p2p/create", authGuard, async (req: AuthRequest, res) => {
       }
     });
     if ("insufficient" in outcome) {
-      res.status(400).json({ error: `Insufficient balance. Available: ${outcome.insufficient.toFixed(2)} USDT` });
+      res.status(400).json({ error: `Insufficient balance. Available: ${(outcome.insufficient ?? 0).toFixed(2)} USDT` });
       return;
     }
     const offer = outcome.offer;
