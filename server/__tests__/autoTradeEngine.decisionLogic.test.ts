@@ -195,20 +195,23 @@ describe("overbought / oversold entry guard", () => {
     return baseInput({ aqeaDecision: { ...base.aqeaDecision, meta: { indicators: { close: 50000, rsi14: rsi } } } as any, ...overrides });
   };
 
-  test("BUY is skipped above the RSI cap (default 70)", () => {
+  test("BUY is skipped above the RSI cap (default 60)", () => {
     const r = evaluateLongEntry(withRsi(92));
     expect(r.ok).toBe(false);
-    if (!r.ok && !r.silent) expect(r.reason).toContain("Overbought: BUY skipped at RSI 92.0 > 70");
+    if (!r.ok && !r.silent) expect(r.reason).toContain("Overbought: BUY skipped at RSI 92.0 > 60");
+    // the 60-70 band is where the engine kept losing after the old >70 guard
+    expect(evaluateLongEntry(withRsi(64)).ok).toBe(false);
   });
 
   test("BUY is allowed at or below the cap, and when RSI is unknown", () => {
-    expect(evaluateLongEntry(withRsi(70)).ok).toBe(true);
+    expect(evaluateLongEntry(withRsi(60)).ok).toBe(true);
     expect(evaluateLongEntry(withRsi(55)).ok).toBe(true);
     expect(evaluateLongEntry(withRsi(undefined)).ok).toBe(true);
   });
 
   test("the BUY cap is configurable", () => {
     expect(evaluateLongEntry(withRsi(72, { maxLongEntryRsi: 75 })).ok).toBe(true);
+    expect(evaluateLongEntry(withRsi(66, { maxLongEntryRsi: 70 })).ok).toBe(true); // an explicit 70 still works
     expect(evaluateLongEntry(withRsi(72, { maxLongEntryRsi: 65 })).ok).toBe(false);
   });
 

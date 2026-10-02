@@ -72,7 +72,9 @@ export default function InvestmentSummary({ currency, invested, netPnl, inOpenTr
             </div>
           );
         })()}
-        {cell("Deposited", hidden ? mask : fmt(currency, invested), "#f8fafc", sub(invested), "Money you put into this account — most of it stays as cash until a trade uses it")}
+        {invested < 0
+          ? cell("Capital (net of transfers)", hidden ? mask : fmt(currency, invested), "#f8fafc", sub(invested), "Deposits minus capital you transferred out to another wallet. Negative means more was moved out than was ever deposited here (the rest was profit), so Net P/L is measured against this baseline.")
+          : cell("Deposited", hidden ? mask : fmt(currency, invested), "#f8fafc", sub(invested), "Money you put into this account (plus any transferred in) — most of it stays as cash until a trade uses it")}
         {cell("Current value", hidden ? mask : fmt(currency, current), "#f8fafc", sub(current), "Deposited + net P/L")}
         {cell(
           "Net P/L",

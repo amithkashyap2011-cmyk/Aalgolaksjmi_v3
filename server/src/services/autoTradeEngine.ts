@@ -1209,7 +1209,7 @@ export async function handleLong(
   const minConvictionThreshold = settings.autoTradeThreshold ? settings.autoTradeThreshold / 100 : 0.68;
   const evaluation = evaluateLongEntry({
     existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold,
-    maxLongEntryRsi: settings.riskConfig?.maxLongEntryRsi ?? 70,
+    maxLongEntryRsi: settings.riskConfig?.maxLongEntryRsi ?? 60,
     minShortEntryRsi: settings.riskConfig?.minShortEntryRsi ?? 30,
   });
   if (!evaluation.ok) {
@@ -1516,7 +1516,7 @@ export async function handleShort(
   const minConvictionThreshold = settings.shortScoreThreshold ? (100 - settings.shortScoreThreshold) / 100 : 0.68;
   const evaluation = evaluateShortEntry({
     existing, aqeaDecision, riskProfile, symbol, sameDirectionCount, maxConcurrent, maxSameDirection, minConvictionThreshold,
-    maxLongEntryRsi: settings.riskConfig?.maxLongEntryRsi ?? 70,
+    maxLongEntryRsi: settings.riskConfig?.maxLongEntryRsi ?? 60,
     minShortEntryRsi: settings.riskConfig?.minShortEntryRsi ?? 30,
   });
   if (!evaluation.ok) {

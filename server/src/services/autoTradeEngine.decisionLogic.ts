@@ -75,8 +75,12 @@ export function evaluateLongEntry(input: EntryEvaluationInput): EntryEvaluationR
   // Don't chase: engine LONGs entered at RSI >= 70 lost money (19 trades,
   // -$0.31) while RSI < 60 entries won 60% (+$18.18); after 2026-09-26 the
   // engine was buying at RSI 70–92 and went 3W/10L. Wait for a pullback.
+  // 2026-10-02, 123 engine trades since 20 Sep: RSI 50-60 won 38% (+$24.97) but RSI >= 60 won
+  // only 14-19% (-$9.97); consistent in both halves of the sample, and after the >70 guard went
+  // live the 60-70 band kept losing (12 trades, -$4.23) while RSI < 60 won 80% (+$17.48). The
+  // default ceiling is therefore 60 (was 70); an explicit setting still overrides it.
   const entryRsi = Number(aqeaDecision.meta?.indicators?.rsi14);
-  const maxLongRsi = input.maxLongEntryRsi ?? 70;
+  const maxLongRsi = input.maxLongEntryRsi ?? 60;
   if (Number.isFinite(entryRsi) && entryRsi > maxLongRsi) {
     return { ok: false, silent: false, reason: `Overbought: BUY skipped at RSI ${entryRsi.toFixed(1)} > ${maxLongRsi} — waiting for a pullback` };
   }

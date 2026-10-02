@@ -156,7 +156,7 @@ const SettingsSchema = new Schema<ISettings>({
         defaultLeverage: { type: Number, default: 1 },
         maxConcurrentPositions: { type: Number, default: 15 },
         maxSameDirectionPositions: { type: Number, default: 3 },
-        maxLongEntryRsi: { type: Number, default: 70 },
+        maxLongEntryRsi: { type: Number, default: 60 },
         minShortEntryRsi: { type: Number, default: 30 },
         maxPortfolioHeat: { type: Number, default: 40 },
         capitalPreservationMode: { type: Boolean, default: true },
