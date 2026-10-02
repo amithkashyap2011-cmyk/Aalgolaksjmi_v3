@@ -2,7 +2,7 @@ import CryptoControlCenter from "../components/dashboard/CryptoControlCenter";
 import InvestmentSummary from "../components/common/InvestmentSummary";
 import DailyCapitalTable from "../components/common/DailyCapitalTable";
 import TodayInvestedStrip from "../components/common/TodayInvestedStrip";
-import { useEffect, useState, lazy, Suspense } from 'react';
+import { useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { INITIAL_SUMMARY, useDashboardStore, type DomainMetrics, INITIAL_DOMAIN_METRICS } from '../store/useDashboardStore';
 import { useAppStore } from '../store/useAppStore';
@@ -134,13 +134,18 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
 
   }, [location.pathname, location.hash, defaultTerminal, accountType]);
 
+  // Request-sequence guard: only the most recently started refresh may write
+  // state, so a slow response for a previous symbol/tab can't overwrite newer data.
+  const refreshSeq = useRef(0);
   const refresh = async (silent = false) => {
     if (!userId) return;
+    const seq = ++refreshSeq.current;
+    const isStale = () => seq !== refreshSeq.current;
     if (!silent) setLoading(true);
     try {
       const activeAcct = terminalTab === 'spot' ? "SPOT" : terminalTab === 'futures' ? "FUTURES" : useAppStore.getState().accountType;
       // Capital actually put into trades for this tab (Spot / Futures / both).
-      api.getCapitalUsage(useAppStore.getState().mode || "PAPER", terminalTab === 'all' ? "BOTH" : activeAcct).then((u) => setCapitalUsage(u)).catch(() => {});
+      api.getCapitalUsage(useAppStore.getState().mode || "PAPER", terminalTab === 'all' ? "BOTH" : activeAcct).then((u) => { if (!isStale()) setCapitalUsage(u); }).catch(() => {});
       await fetchDashboard(userId, activeAcct);
       // LIVE/PAPER is owned by the app store. The dashboard store's own `mode`
       // is never synced to the toggle, so reading it here loaded PAPER positions
@@ -171,6 +176,7 @@ export default function HomePage({ defaultTerminal }: HomePageProps = {}) {
             ]).then(([s, f]) => ({ totalDeposited: ((s as any)?.totalDeposited ?? 0) + ((f as any)?.totalDeposited ?? 0) }))
           : api.getWalletBalance(activeMode, activeAcct as any).catch(() => null),
       ]);
+      if (isStale()) return; // a newer refresh (symbol/tab/mode change) superseded this one
       if (pos.status === "fulfilled" && Array.isArray(pos.value)) setPositions(pos.value);
       if (hist.status === "fulfilled") {
         const all = (hist.value as any)?.trades ?? [];

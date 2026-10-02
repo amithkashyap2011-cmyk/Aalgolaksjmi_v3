@@ -48,30 +48,36 @@ def record(state_vector, symbol=None) -> None:
         logger.warning(f"[PPOReplayBuffer] Failed to record state: {e}")
 
 
-def load_records() -> list:
+def load_records(upto: int = None) -> list:
     """Returns all parseable records, oldest first. Corrupt lines (e.g. a
     torn write from a crash) are skipped, not fatal."""
     if not BUFFER_PATH.exists():
         return []
     records = []
-    with BUFFER_PATH.open() as f:
-        for line in f:
-            try:
-                r = json.loads(line)
-                if isinstance(r.get("state"), list) and r.get("ts"):
-                    records.append(r)
-            except (json.JSONDecodeError, TypeError):
-                continue
+    with BUFFER_PATH.open("rb") as f:
+        data = f.read() if upto is None else f.read(upto)
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        try:
+            r = json.loads(line)
+            if isinstance(r.get("state"), list) and r.get("ts"):
+                records.append(r)
+        except (json.JSONDecodeError, TypeError):
+            continue
     records.sort(key=lambda r: r["ts"])
     return records
 
 
 def compact(max_records: int = MAX_RECORDS) -> None:
     """Rewrite the buffer keeping only the newest max_records entries.
-    Atomic replace so a concurrent record() append can at worst lose the
-    single line written between load and replace."""
+    Appends landing between our read and the replace are not lost: record()
+    holds _write_lock, and we re-read the tail written since the loaded byte
+    offset and carry it over while holding the same lock for the replace."""
     try:
-        records = load_records()
+        if not BUFFER_PATH.exists():
+            return
+        with _write_lock:
+            offset = BUFFER_PATH.stat().st_size
+        records = load_records(upto=offset)
         if len(records) <= max_records:
             return
         keep = records[-max_records:]
@@ -80,6 +86,12 @@ def compact(max_records: int = MAX_RECORDS) -> None:
             for r in keep:
                 f.write(json.dumps(r) + "\n")
         with _write_lock:
+            with BUFFER_PATH.open("rb") as src:
+                src.seek(offset)
+                tail = src.read()
+            if tail:
+                with tmp.open("ab") as f:
+                    f.write(tail)
             tmp.replace(BUFFER_PATH)
         logger.info(f"[PPOReplayBuffer] Compacted buffer to {len(keep)} records.")
     except Exception as e:

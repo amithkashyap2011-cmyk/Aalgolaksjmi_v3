@@ -41,7 +41,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from data_pipeline import (SYMBOLS, INTERVAL, add_cnn_features, build_cnn_windows,
                            fetch_klines_paginated)
-from cnn_predictor import CNN1D
+from cnn_predictor import CNN1D, unwrap_checkpoint
 import promotion_gate
 
 logger = logging.getLogger("TrainCNN")
@@ -219,7 +219,7 @@ def _build_windowed_dataset(tune_fraction: float = 0.0) -> dict:
     return out
 
 
-def _write_schema(means: np.ndarray, stds: np.ndarray) -> None:
+def _write_schema(means: np.ndarray, stds: np.ndarray, stamp=None) -> None:
     payload = {
         "FEATURE_NAMES": FEATURE_NAMES_SCHEMA_ORDER,
         "MEANS": [round(float(m), 6) for m in means],
@@ -229,9 +229,22 @@ def _write_schema(means: np.ndarray, stds: np.ndarray) -> None:
         # data_pipeline.stationarize_windows), not raw per-bar values.
         "INPUT_VERSION": INPUT_VERSION,
     }
-    tmp_path = SCHEMA_PATH.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2))
-    tmp_path.replace(SCHEMA_PATH)  # atomic on POSIX — inference never sees a half-written file
+    if stamp is not None:
+        payload["MODEL_STAMP"] = stamp
+    promotion_gate.atomic_save(SCHEMA_PATH, lambda t: Path(t).write_text(json.dumps(payload, indent=2)))
+
+
+def promote_pair(model_state, means: np.ndarray, stds: np.ndarray, stamp=None) -> str:
+    """Promote checkpoint + stats as a consistent pair. Both carry the same
+    stamp; the schema is replaced first and the checkpoint last, so a crash
+    between the two leaves a stamp mismatch that cnn_predictor refuses (it
+    keeps the old model + stats) instead of silently pairing them."""
+    stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _write_schema(means, stds, stamp)
+    wrapped = {"MODEL_STAMP": stamp, "state_dict": model_state}
+    promotion_gate.atomic_save(CHECKPOINT_PATH, lambda t: torch.save(wrapped, t))
+    return stamp
 
 
 def _normalize(X: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.ndarray:
@@ -294,7 +307,7 @@ def _score_incumbent(X_val_raw: np.ndarray, y_val: np.ndarray, r_val: np.ndarray
         means = np.array(schema["MEANS"], dtype=np.float32)
         stds = np.array(schema["STDS"], dtype=np.float32)
         incumbent = CNN1D(input_features=len(FEATURE_COLS))
-        incumbent.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
+        incumbent.load_state_dict(unwrap_checkpoint(torch.load(CHECKPOINT_PATH, map_location="cpu"))[0])
         preds = _predict(incumbent, _to_tensor(_normalize(X_val_raw, means, stds).astype(np.float32)))
         return _macro_f1(y_val, preds), promotion_gate.economic_edge(preds, r_val)
     except Exception as e:
@@ -307,10 +320,10 @@ def rollback_cnn() -> bool:
     with. Returns False if there is nothing to roll back to."""
     if not (BACKUP_PATH.exists() and SCHEMA_BACKUP_PATH.exists()):
         return False
-    CHECKPOINT_PATH.write_bytes(BACKUP_PATH.read_bytes())
-    tmp = SCHEMA_PATH.with_suffix(".json.tmp")
-    tmp.write_bytes(SCHEMA_BACKUP_PATH.read_bytes())
-    tmp.replace(SCHEMA_PATH)
+    # Same ordering as promotion: schema first, checkpoint last, both atomic.
+    schema_bytes, ckpt_bytes = SCHEMA_BACKUP_PATH.read_bytes(), BACKUP_PATH.read_bytes()
+    promotion_gate.atomic_save(SCHEMA_PATH, lambda t: Path(t).write_bytes(schema_bytes))
+    promotion_gate.atomic_save(CHECKPOINT_PATH, lambda t: Path(t).write_bytes(ckpt_bytes))
     state = _load_state()
     state["rolled_back_at"] = datetime.now(timezone.utc).isoformat()
     _save_state(state)
@@ -365,7 +378,7 @@ def train_cnn(warm_start: bool = False) -> dict:
         logger.info("[TrainCNN] warm_start ignored (would contaminate validation) — training from scratch.")
     if have_prior:
         try:
-            model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
+            model.load_state_dict(unwrap_checkpoint(torch.load(CHECKPOINT_PATH, map_location="cpu"))[0])
             logger.info("[TrainCNN] Warm-started from existing checkpoint (validation is contaminated).")
         except Exception as e:
             logger.warning(f"[TrainCNN] Could not warm-start ({e}) — training from scratch.")
@@ -433,9 +446,7 @@ def train_cnn(warm_start: bool = False) -> dict:
             BACKUP_PATH.write_bytes(CHECKPOINT_PATH.read_bytes())
         if SCHEMA_PATH.exists():
             SCHEMA_BACKUP_PATH.write_bytes(SCHEMA_PATH.read_bytes())
-        CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        promotion_gate.atomic_save(CHECKPOINT_PATH, lambda t: torch.save(model.state_dict(), t))
-        _write_schema(means, stds)
+        promote_pair(model.state_dict(), means, stds)
         state["last_promoted_f1"] = new_f1
         state["last_promoted_at"] = datetime.now(timezone.utc).isoformat()
         logger.info(f"[TrainCNN] Promoted new checkpoint (F1 {new_f1:.4f} vs prior {prior_f1}).")

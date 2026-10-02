@@ -50,6 +50,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from feature_schema import FeatureSchemaV8
 
+def unwrap_checkpoint(obj):
+    """Checkpoints are either a bare state_dict (legacy, no stamp) or
+    {"MODEL_STAMP": str, "state_dict": {...}}. Returns (state_dict, stamp)."""
+    if isinstance(obj, dict) and "state_dict" in obj and "MODEL_STAMP" in obj:
+        return obj["state_dict"], obj["MODEL_STAMP"]
+    return obj, None
+
+
 class CNNPredictor:
     # Reuse a fetched window for this long before hitting Binance again —
     # bars are 5m, the trade scheduler ticks every 60s, so one fetch per
@@ -86,7 +94,16 @@ class CNNPredictor:
             print(f"[CNN] Found checkpoint. Size: {size_mb:.2f} MB")
 
             new_model = CNN1D()
-            new_model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+            state_dict, ckpt_stamp = unwrap_checkpoint(torch.load(model_path, map_location=torch.device('cpu')))
+            # The checkpoint and the stats file are promoted in two steps
+            # (schema first, checkpoint last); a crash in between leaves a
+            # mismatched pair. Refuse it and keep serving the old pair.
+            schema_stamp = getattr(FeatureSchemaV8, "STAMP", None)
+            if ckpt_stamp != schema_stamp:
+                print(f"[CNN] STAMP MISMATCH: checkpoint={ckpt_stamp!r} schema={schema_stamp!r}. "
+                      f"Keeping previous model and normalization stats.")
+                return False
+            new_model.load_state_dict(state_dict)
             new_model.eval()
 
             # Architecture Verification
@@ -116,11 +133,11 @@ class CNNPredictor:
             # OLD model keeps serving, so the OLD stats must be restored too;
             # otherwise it silently runs on the new normalization.
             old = (FeatureSchemaV8.FEATURE_NAMES, FeatureSchemaV8.MEANS,
-                   FeatureSchemaV8.STDS, FeatureSchemaV8.DIMENSION)
+                   FeatureSchemaV8.STDS, FeatureSchemaV8.DIMENSION, FeatureSchemaV8.STAMP)
             FeatureSchemaV8.reload()
             if not self._load(self.model_path):
                 (FeatureSchemaV8.FEATURE_NAMES, FeatureSchemaV8.MEANS,
-                 FeatureSchemaV8.STDS, FeatureSchemaV8.DIMENSION) = old
+                 FeatureSchemaV8.STDS, FeatureSchemaV8.DIMENSION, FeatureSchemaV8.STAMP) = old
                 print("[CNN] Reload failed — restored previous normalization stats to match the still-serving model.")
             return self.checkpoint_loaded
 
@@ -170,8 +187,6 @@ class CNNPredictor:
                     "confidence": 0.0,
                     "error": f"WINDOW_FETCH_FAILED: {e}",
                 }
-            normalized = (window - self.schema.MEANS) / (self.schema.STDS + 1e-8)
-            input_tensor = torch.from_numpy(normalized).unsqueeze(0).permute(0, 2, 1)
         else:
             # No-symbol path. The CNN was trained on real 64-bar windows;
             # broadcasting a single bar across all 64 timesteps feeds it a
@@ -187,9 +202,16 @@ class CNNPredictor:
                 "error": "SYMBOL_REQUIRED_FOR_WINDOW",
             }
 
-        with torch.no_grad():
-            output = self.model(input_tensor)
-            probs = torch.softmax(output, dim=1).numpy()[0]
+        # Stats and model are swapped together under self._lock in reload();
+        # read both under the same lock so a request never pairs new stats
+        # with the old model. (Lock is not re-entrant: nothing called from
+        # here re-acquires it. The window fetch above is deliberately outside.)
+        with self._lock:
+            normalized = (window - FeatureSchemaV8.MEANS) / (FeatureSchemaV8.STDS + 1e-8)
+            input_tensor = torch.from_numpy(normalized).unsqueeze(0).permute(0, 2, 1)
+            with torch.no_grad():
+                output = self.model(input_tensor)
+                probs = torch.softmax(output, dim=1).numpy()[0]
 
         # Mapping: 0:LONG, 1:SHORT, 2:HOLD
         idx = np.argmax(probs)
@@ -222,15 +244,16 @@ class CNNPredictor:
         if len(raw_features) != self.schema.DIMENSION:
              return {"error": f"Dimension mismatch: Received {len(raw_features)}, expected {self.schema.DIMENSION}"}
         
-        norm_features = self.schema.normalize(raw_features)
-        input_tensor = torch.tensor(norm_features).repeat(1, 64, 1).permute(0, 2, 1)
-
+        with self._lock:
+            norm_features = self.schema.normalize(raw_features)
+            input_tensor = torch.tensor(norm_features).repeat(1, 64, 1).permute(0, 2, 1)
+            with torch.no_grad():
+                logits = self.model(input_tensor).numpy()[0]
         with torch.no_grad():
             # Use the real forward pass so the forensic logits match production
             # inference exactly. The previous manual path skipped every
             # BatchNorm layer AND the third conv block, so it computed a
             # different function than model.forward() and misreported logits.
-            logits = self.model(input_tensor).numpy()[0]
             probs = torch.softmax(torch.tensor(logits).unsqueeze(0), dim=1).numpy()[0]
             
         directions = ["LONG", "SHORT", "HOLD"]
