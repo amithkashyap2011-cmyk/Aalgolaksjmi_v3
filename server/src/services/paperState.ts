@@ -268,6 +268,13 @@ export async function debitWalletAndCreateTrade<T>(
     const current = w.get("USDT") ?? 0;
     const newBalance = current - debitAmount;
 
+    // Callers check funds BEFORE queueing on this lock; two entries queued
+    // behind each other both pass that check against the same balance. The
+    // authoritative check is here, under the lock, before any side effect.
+    if (!Number.isFinite(debitAmount) || debitAmount < 0 || newBalance < -1e-9) {
+      throw new Error(`INSUFFICIENT_FUNDS: need ${debitAmount} USDT, wallet has ${current}`);
+    }
+
     if (mongoose.connection.readyState !== 1) {
       // In-memory fallback for testing / disconnected mode
       const tradeDoc = await createTradeFn(undefined as any);
@@ -303,8 +310,13 @@ export async function debitWalletAndCreateTrade<T>(
     }
 
     // Only reached if the transaction committed or fallback completed successfully.
-    w.set("USDT", newBalance);
-    log(`Wallet ${userId}:${mode} debited ${debitAmount.toFixed(4)} -> ${newBalance.toFixed(4)} (atomic)`);
+    // Apply the delta to the balance as it is NOW: an unlocked mutator (deposit,
+    // transfer, adjust) may have landed during the awaits above, and writing the
+    // precomputed absolute `newBalance` would silently erase it.
+    const committed = (w.get("USDT") ?? 0) - debitAmount;
+    w.set("USDT", committed);
+    if (committed !== newBalance) await setWalletBalance(userId, mode, "USDT", committed, accountType);
+    log(`Wallet ${userId}:${mode} debited ${debitAmount.toFixed(4)} -> ${committed.toFixed(4)} (atomic)`);
     return trade;
   });
 }
@@ -369,8 +381,11 @@ export async function creditWalletAndCloseTrade(
     }
 
     if (claimed) {
-      w.set("USDT", newBalance);
-      log(`Wallet ${userId}:${mode} credited ${creditAmount.toFixed(4)} -> ${newBalance.toFixed(4)} (atomic)`);
+      // Delta on the live balance, not the pre-await absolute (see debit above).
+      const committed = (w.get("USDT") ?? 0) + creditAmount;
+      w.set("USDT", committed);
+      if (committed !== newBalance) await setWalletBalance(userId, mode, "USDT", committed, accountType);
+      log(`Wallet ${userId}:${mode} credited ${creditAmount.toFixed(4)} -> ${committed.toFixed(4)} (atomic)`);
     }
     return claimed;
   });
@@ -611,7 +626,12 @@ export async function hydrate(): Promise<void> {
 
   for (const t of openTrades) {
     if (!t.userId) continue;
-    if (!t.leverage || t.leverage < 1 || (t.quantity * t.entryPrice) > 100000) {
+    // The notional ceiling is a sanity bound for small PAPER crypto books only.
+    // LIVE trades mirror real exchange positions and Indian trades are INR-
+    // denominated (100 RELIANCE shares > 100,000), so deleting them here would
+    // silently erase a real/legit position (and strand its margin) on every boot.
+    const exemptFromNotionalCap = t.mode === "LIVE" || String(t.accountType || "").startsWith("INDIAN_");
+    if (!t.leverage || t.leverage < 1 || (!exemptFromNotionalCap && (t.quantity * t.entryPrice) > 100000)) {
       log(`[VAPORIZER] Deleting Ghost Trade: ${t.symbol} Notional:${(t.quantity * t.entryPrice).toFixed(2)}`);
       await Trade.deleteOne({ _id: t._id });
       continue;

@@ -389,7 +389,8 @@ export async function formatQuantity(symbol: string, desiredQuantity: number): P
   // 🛡️ SECURITY FIX: Avoid floating-point modulo inaccuracy
   // Ensure we safely truncate to the exact nearest stepSize
   const precision = stepSize.toString().split('.')[1]?.length || 0;
-  const steps = Math.floor((desiredQuantity + Number.EPSILON) / stepSize);
+  // 1e-9 relative slack: 0.3/0.1 === 2.9999999999999996 would otherwise floor to 2 steps
+  const steps = Math.floor((desiredQuantity / stepSize) * (1 + 1e-9));
   const validQty = steps * stepSize;
 
   if (stepSize >= 1) {
@@ -458,7 +459,7 @@ export async function formatFuturesQuantity(symbol: string, desiredQuantity: num
   
   const precision = stepSize.toString().split('.')[1]?.length || 0;
   const multiplier = Math.pow(10, precision);
-  const steps = Math.floor((qty + Number.EPSILON) / stepSize);
+  const steps = Math.floor((qty / stepSize) * (1 + 1e-9));
   const validQty = steps * stepSize;
 
   let formatted = stepSize >= 1 ? validQty.toFixed(0) : validQty.toFixed(precision);
@@ -537,6 +538,9 @@ export async function placeFuturesOrder(
       : genClientOrderId("aalgofut"),
   };
   if (params.reduceOnly) body.reduceOnly = "true";
+  // fapi defaults to ACK: a MARKET order answers status NEW with avgPrice "0.00000"
+  // / executedQty "0", which callers would book as a zero-price, zero-quantity fill.
+  body.newOrderRespType = "RESULT";
   return signedFuturesPost<any>("/fapi/v1/order", apiKey, apiSecret, body);
 }
 

@@ -1509,8 +1509,11 @@ router.post("/transfer", authGuard, async (req: AuthRequest, res) => {
       const toWallet = paper.getWallet(userId, mode, to);
       const toBalance = toWallet.get("USDT") ?? 0;
 
-      await paper.setWalletBalance(userId, mode, "USDT", fromBalance - amount, from);
-      await paper.setWalletBalance(userId, mode, "USDT", toBalance + amount, to);
+      // Both in-memory writes happen synchronously (before either persist
+      // awaits), so no other request can slip between debit and credit.
+      const persistFrom = paper.setWalletBalance(userId, mode, "USDT", fromBalance - amount, from);
+      const persistTo = paper.setWalletBalance(userId, mode, "USDT", toBalance + amount, to);
+      await Promise.all([persistFrom, persistTo]);
 
       if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(userId)) {
         // Awaited, not fire-and-forget: the wallet balances above are already
