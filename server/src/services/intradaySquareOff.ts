@@ -63,7 +63,25 @@ export class IntradaySquareOffService {
       this.executeGlobalSquareOff().catch((err) => {
         console.error("[INTRADAY_SQUARE_OFF] executeGlobalSquareOff failed:", err);
       });
+      return;
     }
+
+    // Catch-up: the window above is 15 minutes wide, so a process that was down,
+    // restarting or asleep (lid closed) through it left MIS positions open
+    // overnight with no later pass. Any MIS trade opened before the most recent
+    // 15:15 IST boundary is overdue, whatever the clock says now.
+    const boundary = IntradaySquareOffService.lastSquareOffBoundary(now);
+    this.executeGlobalSquareOff({ openedBefore: boundary, quiet: true }).catch((err) => {
+      console.error("[INTRADAY_SQUARE_OFF] catch-up square-off failed:", err);
+    });
+  }
+
+  /** The most recent 15:15 IST instant at or before `now`. */
+  public static lastSquareOffBoundary(now: Date = new Date()): Date {
+    const IST_MS = 5.5 * 3600_000;
+    const dayStartIst = Math.floor((now.getTime() + IST_MS) / 86_400_000) * 86_400_000 - IST_MS;
+    const today1515 = dayStartIst + (15 * 60 + 15) * 60_000;
+    return new Date(now.getTime() >= today1515 ? today1515 : today1515 - 86_400_000);
   }
 
   /**
@@ -77,10 +95,10 @@ export class IntradaySquareOffService {
    * book across every user, which is what a daemon enforcing an
    * exchange-wide deadline actually needs.
    */
-  public static async executeGlobalSquareOff(): Promise<number> {
-    console.log("[INTRADAY_SQUARE_OFF] ⏰ 3:15 PM IST REACHED — Executing Mandatory MIS Auto Square-off!");
+  public static async executeGlobalSquareOff(opts: { openedBefore?: Date; quiet?: boolean } = {}): Promise<number> {
+    if (!opts.quiet) console.log("[INTRADAY_SQUARE_OFF] ⏰ 3:15 PM IST REACHED — Executing Mandatory MIS Auto Square-off!");
     if (mongoose.connection.readyState !== 1) {
-      console.warn("[INTRADAY_SQUARE_OFF] MongoDB not connected — skipping square-off.");
+      if (!opts.quiet) console.warn("[INTRADAY_SQUARE_OFF] MongoDB not connected — skipping square-off.");
       return 0;
     }
     let count = 0;
@@ -94,6 +112,7 @@ export class IntradaySquareOffService {
       status: { $in: [...OPEN_INDIAN_TRADE_STATUSES] },
       accountType: { $in: [...INDIAN_ACCOUNT_TYPES] },
       productType: { $nin: ["CNC", "DELIVERY", "NRML"] },
+      ...(opts.openedBefore ? { openedAt: { $lt: opts.openedBefore } } : {}),
     });
 
     for (const trade of openTrades) {

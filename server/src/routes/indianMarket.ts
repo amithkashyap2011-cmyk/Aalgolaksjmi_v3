@@ -839,15 +839,24 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
     // Same rule as /execute-strategy: an empty index/BSE wallet falls back to the funded NSE wallet.
     // The trade is stored with the wallet that was actually debited so closing credits it back.
     const { wallet, accountType } = paper.getIndianWalletWithFallback(userId, mode, preferredAccountType);
-    const inrBal = wallet.get("INR") ?? 0;
+    let inrBal = wallet.get("INR") ?? 0;
 
-    if (inrBal < marginRequired) {
+    // Check-and-debit under the wallet lock and persist it (like the auto-trader):
+    // the bare in-memory set raced concurrent debits and was lost on restart.
+    let insufficientBal: number | null = null;
+    await paper.withWalletLock(userId, mode, accountType, async () => {
+      const w = paper.getWallet(userId, mode, accountType as any);
+      const bal = w.get("INR") ?? 0;
+      if (bal < marginRequired) { insufficientBal = bal; return; }
+      inrBal = bal;
+      w.set("INR", bal - marginRequired);
+      if (mode === "PAPER") await paper.setWalletBalance(userId, mode, "INR", bal - marginRequired, accountType as any);
+    });
+    if (insufficientBal !== null) {
       return res.status(400).json({
-        error: `INSUFFICIENT_INR_BALANCE: ${accountType} wallet has ₹${inrBal.toLocaleString("en-IN")}, required margin is ₹${marginRequired.toLocaleString("en-IN")}`,
+        error: `INSUFFICIENT_INR_BALANCE: ${accountType} wallet has ₹${(insufficientBal as number).toLocaleString("en-IN")}, required margin is ₹${marginRequired.toLocaleString("en-IN")}`,
       });
     }
-
-    wallet.set("INR", inrBal - marginRequired);
 
 
     const objId = mongoose.Types.ObjectId.isValid(userId)
@@ -881,7 +890,10 @@ router.post("/execute", requirePermission("CREATE_ORDER"), async (req: AuthReque
       accountType: accountType as any,
       strategy: "INDIAN_AI_MODEL",
       productType, // was never stored, so every order defaulted to MIS and CNC delivery was squared off at 15:15
-      meta: { period, positional: period === "POSITIONAL" },
+      // The exact margin debited, so every exit path (SL/TP monitor, 15:15 square-off)
+      // releases the same amount. Without it they fell back to full notional, minting
+      // notional*(1-1/leverage) of free cash on each leveraged MIS close.
+      meta: { period, positional: period === "POSITIONAL", marginDebitedINR: marginRequired },
       pnl: 0,
       openedAt: new Date(),
       autoCloseStatus: "ARMED",

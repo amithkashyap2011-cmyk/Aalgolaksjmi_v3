@@ -12,6 +12,7 @@
 
 import { ExpirySelectionConfig, UnderlyingSymbol } from "./strategyTypes.js";
 import { IndianMarketHours } from "../indianMarketHours.js";
+import { ExchangeCalendar } from "./exchangeCalendar.js";
 import { optionContracts, expiryCloseTime } from "./angelOne/optionContracts.js";
 
 export class ExpiryResolver {
@@ -46,20 +47,21 @@ export class ExpiryResolver {
   }
 
   /**
-   * Returns standard weekly expiry day of week for given underlying
-   * - NIFTY: Thursday (Day 4)
-   * - BANKNIFTY: Wednesday (Day 3) / Thursday
-   * - FINNIFTY: Tuesday (Day 2)
-   * - MIDCPNIFTY: Monday (Day 1)
-   * - SENSEX / BANKEX (BSE): Friday (Day 5)
+   * Expiry weekday for the rule-based fallback (used only when the real
+   * scrip-master contracts are not loaded). NSE moved index/stock derivative
+   * expiries to Tuesday in 2025; BSE (SENSEX/BANKEX) expires on Thursday.
    */
   public static getStandardExpiryDayOfWeek(underlying: UnderlyingSymbol): number {
     const sym = underlying.toUpperCase();
-    if (sym.includes("FINNIFTY")) return 2; // Tuesday
-    if (sym.includes("MIDCP")) return 1; // Monday
-    if (sym.includes("SENSEX") || sym.includes("BANKEX")) return 5; // Friday
-    // Standard NSE Index options (NIFTY / BANKNIFTY monthly/weekly)
-    return 4; // Thursday
+    if (sym.includes("SENSEX") || sym.includes("BANKEX")) return 4; // Thursday (BSE)
+    return 2; // Tuesday (NSE)
+  }
+
+  /** Only NIFTY and SENSEX list weekly expiries; everything else is monthly (last expiry weekday of the month). */
+  public static hasWeeklyExpiry(underlying: UnderlyingSymbol): boolean {
+    const sym = underlying.toUpperCase();
+    if (sym.includes("BANK") || sym.includes("FIN") || sym.includes("MIDCP")) return false;
+    return sym.includes("NIFTY") || sym.includes("SENSEX");
   }
 
   /**
@@ -72,34 +74,29 @@ export class ExpiryResolver {
   ): Array<{ expiry: string; date: Date; isMonthly: boolean; label: string }> {
     const expiries: Array<{ expiry: string; date: Date; isMonthly: boolean; label: string }> = [];
     const targetDay = this.getStandardExpiryDayOfWeek(underlying);
-    const cursor = new Date(referenceDate);
-    cursor.setHours(0, 0, 0, 0);
+    const weekly = this.hasWeeklyExpiry(underlying);
 
-    // Find next matching weekday
-    const daysUntilNext = (targetDay - cursor.getDay() + 7) % 7;
-    cursor.setDate(cursor.getDate() + (daysUntilNext === 0 ? 0 : daysUntilNext));
+    // "Today" and the clock are taken in IST from the reference date (not the
+    // server's local zone and not the wall clock), so results are stable on a
+    // UTC host and for back-dated reference dates.
+    const ist = ExchangeCalendar.toIST(referenceDate);
+    const today = new Date(ist.getFullYear(), ist.getMonth(), ist.getDate());
+    const afterClose = ist.getHours() * 60 + ist.getMinutes() >= 15 * 60 + 30;
+    const cursor = new Date(today);
+    cursor.setDate(cursor.getDate() + ((targetDay - cursor.getDay() + 7) % 7));
 
-    // If today is targetDay but past market close (15:30 IST), roll to next week
-    const nowUtc = new Date().getTime() + (new Date().getTimezoneOffset() * 60000);
-    const istHours = new Date(nowUtc + 5.5 * 3600000).getHours();
-    const istMinutes = new Date(nowUtc + 5.5 * 3600000).getMinutes();
-    if (
-      cursor.toDateString() === referenceDate.toDateString() &&
-      (istHours > 15 || (istHours === 15 && istMinutes >= 30))
-    ) {
-      cursor.setDate(cursor.getDate() + 7);
-    }
-
-    while (expiries.length < count) {
+    let guard = 0;
+    while (expiries.length < count && guard++ < 400) {
       const validDate = this.adjustForHolidays(new Date(cursor));
-      
-      // Determine if this is the last expiry of the month (monthly expiry)
       const nextWeek = new Date(cursor);
       nextWeek.setDate(nextWeek.getDate() + 7);
       const isMonthly = nextWeek.getMonth() !== cursor.getMonth();
 
+      // An expiry that has already settled (earlier day, or today after 15:30,
+      // including a holiday-shifted date that lands before today) is not live.
+      const settled = validDate.getTime() < today.getTime() || (validDate.getTime() === today.getTime() && afterClose);
       const expiryStr = this.formatDate(validDate);
-      if (!expiries.some((e) => e.expiry === expiryStr)) {
+      if (!settled && (weekly || isMonthly) && !expiries.some((e) => e.expiry === expiryStr)) {
         expiries.push({
           expiry: expiryStr,
           date: validDate,
