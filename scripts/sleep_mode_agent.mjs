@@ -316,3 +316,27 @@ async function checkMongo() {
   }
 }
 setInterval(checkMongo, POLL_INTERVAL_MS);
+
+/**
+ * Disk-space watchdog. On 2026-10-02 the data volume was 100% full (1.3 GB free): MongoDB had
+ * already crashed once on a full disk (2026-09-25), and macOS swap lives on the same volume, so
+ * with no free space the swap file cannot grow and memory pressure turns into killed processes.
+ * Log a loud, de-duplicated alert well before that point (mongod's volume is the one that matters).
+ */
+let lastDiskAlertLevel = null;
+let lastDiskAlertAt = 0;
+function checkDisk() {
+  const freeMB = freeDiskMB();
+  if (freeMB === null) return;
+  const level = freeMB < 2048 ? "CRITICAL" : freeMB < 5120 ? "LOW" : null;
+  if (!level) { lastDiskAlertLevel = null; return; }
+  // Re-alert when the level worsens, otherwise at most once an hour.
+  if (level === lastDiskAlertLevel && Date.now() - lastDiskAlertAt < 3_600_000) return;
+  lastDiskAlertLevel = level;
+  lastDiskAlertAt = Date.now();
+  writeLog(level === "CRITICAL" ? "error" : "warn",
+    `[DISK_ALERT] ${level}: only ${(freeMB / 1024).toFixed(1)} GB free on the MongoDB volume. ` +
+    `MongoDB crashes and macOS swap cannot grow when this reaches 0. Clear caches (npm/uv/brew/Chrome) or free space.`);
+}
+checkDisk();
+setInterval(checkDisk, 5 * 60_000);
