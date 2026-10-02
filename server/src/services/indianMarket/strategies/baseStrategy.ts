@@ -85,7 +85,8 @@ export abstract class BaseStrategy {
     if (lossPerUnit <= 0 || lotSize <= 0) return lotSize;
     const maxRiskAmount = accountCapital * (riskPercent / 100);
     const calculatedQty = Math.floor(maxRiskAmount / (lossPerUnit * lotSize)) * lotSize;
-    return Math.max(lotSize, calculatedQty);
+    // One lot already risks more than the cap: reject (0 lots) instead of forcing a lot.
+    return calculatedQty;
   }
 
   /**

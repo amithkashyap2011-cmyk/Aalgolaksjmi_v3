@@ -26,7 +26,7 @@ describe("widenStops", () => {
 describe("expiry rules", () => {
   test("exit 2 weekdays before expiry at 15:15 IST", () => {
     expect(exitDeadline("2026-10-27")).toBe("2026-10-23T09:45:00.000Z");   // Tue 27 → Fri 23 (skips the weekend), 15:15 IST
-    expect(exitDeadline("2026-10-06")).toBe("2026-10-02T09:45:00.000Z");   // Tue 6 → Fri 2 (Mon 5, Fri 2)
+    expect(exitDeadline("2026-10-06")).toBe("2026-10-01T09:45:00.000Z");   // Tue 6 → Thu 1 (Mon 5; Fri 2 is a holiday)
     expect(exitDeadline(null)).toBeNull();
   });
   test("far expiry is allowed, a near one is refused with a reason", () => {
