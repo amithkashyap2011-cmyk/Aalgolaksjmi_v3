@@ -541,17 +541,35 @@ export async function placeFuturesOrder(
   // fapi defaults to ACK: a MARKET order answers status NEW with avgPrice "0.00000"
   // / executedQty "0", which callers would book as a zero-price, zero-quantity fill.
   body.newOrderRespType = "RESULT";
-  return signedFuturesPost<any>("/fapi/v1/order", apiKey, apiSecret, body);
+  const raw = await signedFuturesPost<any>("/fapi/v1/order", apiKey, apiSecret, body);
+  return rescale1000xOrderResult(binanceSymbol, raw);
+}
+
+/** 1000x futures contracts report executedQty/origQty in contract units and
+ * avgPrice/price per 1000 coins; the DB stores base units and per-coin prices.
+ * Rescale a raw order result once, at the single place it is read back. */
+export function rescale1000xOrderResult<T extends Record<string, any>>(binanceSymbol: string, res: T): T {
+  if (!res || !is1000xContract(binanceSymbol)) return res;
+  const out: Record<string, any> = { ...res };
+  for (const k of ["executedQty", "origQty"]) {
+    if (out[k] != null && Number.isFinite(parseFloat(out[k]))) out[k] = (parseFloat(out[k]) * 1000).toString();
+  }
+  for (const k of ["avgPrice", "price"]) {
+    if (out[k] != null && Number.isFinite(parseFloat(out[k]))) out[k] = (parseFloat(out[k]) / 1000).toString();
+  }
+  return out as T;
 }
 
 /** Look up a previously-placed futures order by the clientOrderId it was
  * tagged with — the mechanism to confirm whether an order whose placement
  * response was lost actually executed on Binance. */
 export async function queryFuturesOrder(apiKey: string, apiSecret: string, symbol: string, clientOrderId: string): Promise<any> {
-  return signedFuturesGet<any>("/fapi/v1/order", apiKey, apiSecret, {
-    symbol: toBinanceSymbol(symbol, true),
+  const binanceSymbol = toBinanceSymbol(symbol, true);
+  const raw = await signedFuturesGet<any>("/fapi/v1/order", apiKey, apiSecret, {
+    symbol: binanceSymbol,
     origClientOrderId: clientOrderId,
   });
+  return rescale1000xOrderResult(binanceSymbol, raw);
 }
 
 export interface OrderBookEntry {
